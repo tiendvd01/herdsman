@@ -1,0 +1,168 @@
+pub mod agent;
+pub mod commands;
+pub mod error;
+pub mod git;
+pub mod claude_history;
+pub mod hc;
+pub mod state;
+pub mod store;
+
+use parking_lot::Mutex;
+use state::AppState;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use tauri::{Emitter, Manager};
+
+/// Đường dẫn sidecar: biến môi trường → mã nguồn trong repo (dev) → resource đóng gói.
+fn sidecar_entry(app: &tauri::AppHandle) -> PathBuf {
+    if let Ok(p) = std::env::var("HERDSMAN_SIDECAR") {
+        return PathBuf::from(p);
+    }
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sidecar/src/index.mjs");
+    if dev.exists() {
+        return dev.canonicalize().unwrap_or(dev);
+    }
+    app.path()
+        .resource_dir()
+        .map(|d| d.join("sidecar/src/index.mjs"))
+        .unwrap_or(dev)
+}
+
+fn find_node() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("HERDSMAN_NODE") {
+        return Some(PathBuf::from(p));
+    }
+    if let Some(p) = hc::which_in_login_shell("node") {
+        return Some(p);
+    }
+    ["/opt/homebrew/bin/node", "/usr/local/bin/node"].iter().map(PathBuf::from).find(|p| p.exists())
+}
+
+/// Spec 006: View → Zoom In / Zoom Out / Actual Size. The frontend owns the zoom state, so the menu only
+/// emits `ui-zoom` ("in" | "out" | "reset"). Built on the default menu so Edit (copy/paste) keeps working.
+fn install_zoom_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+    let handle = app.handle();
+    let menu = Menu::default(handle)?;
+    let items = [
+        MenuItem::with_id(handle, "zoom_in", "Zoom In", true, Some("CmdOrCtrl+="))?,
+        MenuItem::with_id(handle, "zoom_out", "Zoom Out", true, Some("CmdOrCtrl+-"))?,
+        MenuItem::with_id(handle, "zoom_reset", "Actual Size", true, Some("CmdOrCtrl+0"))?,
+    ];
+    let view = menu
+        .items()?
+        .into_iter()
+        .filter_map(|k| k.as_submenu().cloned())
+        .find(|m| m.text().map(|t| t == "View").unwrap_or(false));
+    match view {
+        Some(view) => {
+            view.append(&PredefinedMenuItem::separator(handle)?)?;
+            for it in &items {
+                view.append(it)?;
+            }
+        }
+        None => {
+            let view = Submenu::with_items(handle, "View", true, &[&items[0], &items[1], &items[2]])?;
+            menu.append(&view)?;
+        }
+    }
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, ev| {
+        let dir = match ev.id().as_ref() {
+            "zoom_in" => "in",
+            "zoom_out" => "out",
+            "zoom_reset" => "reset",
+            _ => return,
+        };
+        let _ = app.emit("ui-zoom", dir);
+    });
+    Ok(())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            let data_dir = std::env::var("HERDSMAN_DATA_DIR").map(PathBuf::from).unwrap_or(app.path().app_data_dir()?);
+            std::fs::create_dir_all(data_dir.join("sock"))?;
+            let db = store::open(&data_dir.join("herdsman.db")).map_err(|e| e.message)?;
+            let st = Arc::new(AppState {
+                emitter: {
+                    let h = handle.clone();
+                    Box::new(move |ev: &str, payload: serde_json::Value| {
+                        let _ = h.emit(ev, payload);
+                    })
+                },
+                db: Mutex::new(db),
+                hc: hc::find_hc().map(|bin| hc::Hc { bin }),
+                node: find_node(),
+                sidecar: sidecar_entry(&handle),
+                data_dir,
+                views: Mutex::new(HashMap::new()),
+                terminals: Mutex::new(HashMap::new()),
+                hc_connected: AtomicBool::new(false),
+                hc_version: Mutex::new(None),
+            });
+            install_zoom_menu(app)?;
+            app.manage(st.clone());
+            let st_watch = st.clone();
+            tauri::async_runtime::spawn(async move { agent::watch_hc(st_watch).await });
+            let st_index = st.clone();
+            tauri::async_runtime::spawn_blocking(move || agent::backfill_index(&st_index));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::app_info,
+            commands::font_families,
+            commands::theme_files,
+            commands::settings_get,
+            commands::settings_set,
+            commands::project_list,
+            commands::project_add,
+            commands::project_rename,
+            commands::project_delete_preview,
+            commands::project_delete,
+            commands::workspace_list,
+            commands::workspace_create,
+            commands::workspace_rename,
+            commands::workspace_dirty_check,
+            commands::workspace_archive,
+            commands::workspace_unarchive,
+            commands::workspace_delete,
+            commands::git_branches,
+            commands::session_history,
+            commands::session_create,
+            commands::session_open,
+            commands::session_close_view,
+            commands::session_prompt,
+            commands::session_interrupt,
+            commands::session_permission,
+            commands::session_set_permission_mode,
+            commands::session_list_models,
+            commands::session_list_commands,
+            commands::session_set_model,
+            commands::session_resume,
+            commands::session_kill,
+            commands::session_close,
+            commands::session_set_pinned,
+            commands::session_get,
+            commands::search,
+            commands::claude_search,
+            commands::claude_open,
+            commands::terminal_read,
+            commands::task_run,
+            commands::task_list,
+            commands::task_kill,
+            commands::task_remove,
+            commands::agent_tree,
+            commands::files_changed,
+            commands::file_diff,
+        ])
+        .run(tauri::generate_context!())
+        .expect("failed to start Herdsman");
+}

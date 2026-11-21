@@ -1,0 +1,31 @@
+[package]
+name = "herdsman"
+version = "0.1.0"
+description = "Herdsman — GUI quản lý agent theo Project → Workspace → Session"
+edition = "2021"
+
+[lib]
+name = "herdsman_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+ulid = "1"
+thiserror = "2"
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
+
+# spec 010: list installed font families for Settings → Appearance.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-text = "21"

@@ -1,0 +1,36 @@
+import * as React from 'react';
+import * as M from '@radix-ui/react-dropdown-menu';
+import { cn } from '@/lib/utils';
+
+export const DropdownMenu = M.Root;
+export const DropdownMenuTrigger = M.Trigger;
+
+export function DropdownMenuContent({ className, sideOffset = 4, align = 'start', ...props }: React.ComponentProps<typeof M.Content>) {
+  return (
+    <M.Portal>
+      <M.Content
+        sideOffset={sideOffset}
+        align={align}
+        className={cn('z-50 min-w-[180px] rounded-lg border border-border bg-background p-1 shadow-lg', className)}
+        {...props}
+      />
+    </M.Portal>
+  );
+}
+
+export function DropdownMenuItem({ className, destructive, ...props }: React.ComponentProps<typeof M.Item> & { destructive?: boolean }) {
+  return (
+    <M.Item
+      className={cn(
+        'flex min-h-8 cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-[12px] outline-none data-[highlighted]:bg-accent data-[disabled]:opacity-50 [&_svg]:size-4',
+        destructive && 'text-destructive',
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export function DropdownMenuSeparator() {
+  return <M.Separator className="my-1 h-px bg-border" />;
+}

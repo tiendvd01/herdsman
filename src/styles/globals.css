@@ -1,0 +1,244 @@
+@import 'tailwindcss';
+@import './fonts.css';
+@import 'katex/dist/katex.min.css';
+@import './theme-roles.css';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Colours live in theme files (spec 016): src/theme/builtin/*.json + <data_dir>/themes/*.json, declared once in src/theme/roles.ts and
+   written onto <html> at runtime. Only non-colour tokens stay here. */
+:root {
+  --radius: 5px;
+  /* Spec 006: content text-size offset, set from the store (−2…+4px). */
+  --content-step: 0px;
+}
+
+/* Spec 011: regions that stay dark in both themes (Log) use the dark scrollbar colors. */
+.bg-term-bg {
+  --scrollbar-thumb: var(--term-scrollbar-thumb);
+  --scrollbar-thumb-hover: var(--term-scrollbar-thumb-hover);
+}
+
+/* Spec 006: compact scale — spacing unit -10%, text one notch smaller (never below 11px). */
+@theme {
+  --spacing: 0.225rem;
+  --text-xs: 11px;
+  --text-xs--line-height: 1.45;
+  --text-sm: 12.5px;
+  --text-sm--line-height: 1.5;
+  --text-base: 14px;
+  --text-base--line-height: 1.5;
+  --text-lg: 16px;
+  --text-lg--line-height: 1.5;
+}
+
+@theme inline {
+  --font-sans: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button {
+    cursor: pointer;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--foreground) 15%, transparent);
+  }
+
+  /* Spec 011: thin scrollbar everywhere — 8px gutter, 4px visible thumb, no arrows. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    background-clip: content-box;
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    min-height: 24px;
+    min-width: 24px;
+  }
+  ::-webkit-scrollbar-thumb:hover,
+  ::-webkit-scrollbar-thumb:active {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+  /* Engines without ::-webkit-scrollbar (Firefox). Not set unconditionally: Chromium ignores
+     ::-webkit-scrollbar once scrollbar-width / scrollbar-color are present. */
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar-thumb) transparent;
+    }
+  }
+}
+
+@keyframes hs-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.hs-pulse {
+  animation: hs-pulse 1.6s ease-in-out infinite;
+}
+@keyframes hs-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.hs-caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: currentColor;
+  animation: hs-blink 1s steps(1) infinite;
+}
+
+/* Markdown content in the conversation */
+.prose-hs {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.prose-hs > * + * {
+  margin-top: 0.75em;
+}
+.prose-hs h1,
+.prose-hs h2,
+.prose-hs h3 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1.1em;
+}
+.prose-hs h1 {
+  font-size: 1.35em;
+}
+.prose-hs h2 {
+  font-size: 1.2em;
+}
+.prose-hs h3 {
+  font-size: 1.05em;
+}
+.prose-hs ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.prose-hs ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.prose-hs li + li {
+  margin-top: 0.25em;
+}
+.prose-hs a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-hs blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 0.9em;
+  color: var(--muted-foreground);
+}
+.prose-hs :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--muted);
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+.prose-hs .hs-table {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.prose-hs table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 1em;
+}
+.prose-hs th {
+  height: 2.6em;
+  padding: 0 0.85em;
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+}
+.prose-hs td {
+  padding: 0.55em 0.85em;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.prose-hs tbody tr:last-child td {
+  border-bottom: 0;
+}
+.prose-hs td:first-child {
+  font-weight: 500;
+}
+.prose-hs hr {
+  border-top: 1px solid var(--border);
+}
+.shiki,
+.shiki span {
+  background-color: transparent !important;
+}
+.dark .shiki,
+.dark .shiki span {
+  color: var(--shiki-dark) !important;
+}
+
+/* Spec 004: while a sidebar edge is being dragged, keep the resize cursor everywhere and block text selection. */
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+body.resizing * {
+  cursor: col-resize !important;
+}
+
+/* Spec 006: content text size (conversation, composer, code, Files, Log) follows --content-step; UI chrome does not. */
+.text-content {
+  font-size: calc(13px + var(--content-step));
+}
+.text-content-code {
+  font-size: calc(12px + var(--content-step));
+}
