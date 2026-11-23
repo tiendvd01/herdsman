@@ -54,6 +54,16 @@ describe('applyEvent', () => {
     expect(v.status).toBe('blocked');
   });
 
+  it('shows the fallback notice and uses Claude’s reported default model', () => {
+    const v = view();
+    applyEvent(v, ev({ seq: 1, type: 'session_started', engine: 'claude', model: 'unavailable', cwd: '/x', permission_mode: 'ask' }));
+    applyEvent(v, ev({ seq: 2, type: 'model_fallback', unavailable_model: 'unavailable', message: 'Using the default model.' }));
+    expect(v.model).toBeNull();
+    expect(v.items).toMatchObject([{ kind: 'notice', tone: 'info', text: 'Using the default model.' }]);
+    applyEvent(v, ev({ seq: 3, type: 'engine_session', engine_session_id: 'claude-id', model: 'claude-sonnet' }));
+    expect(v.model).toBe('claude-sonnet');
+  });
+
   it('model_changed đổi model và chèn notice một lần', () => {
     const v = view();
     applyEvent(v, ev({ seq: 1, type: 'session_started', engine: 'claude', model: 'claude-opus-5-5', cwd: '/x', permission_mode: 'ask', resumed: false }));

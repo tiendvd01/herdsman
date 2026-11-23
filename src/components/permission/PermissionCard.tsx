@@ -1,3 +1,4 @@
+import { TruncatedText } from '@/components/ui/truncated-text';
 // Allow/Deny card (FR-021): diff for Edit/Write, the full command for Bash. Never expires on its own (FR-023).
 import { useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
@@ -39,7 +40,7 @@ export function PermissionCard({ sessionId, req, agentName = 'Agent' }: { sessio
         <div className="flex flex-wrap items-center gap-2">
           <ShieldAlert className="size-4 shrink-0 text-warn-icon" />
           <span className="flex-1 text-[13px] font-medium">{askTitle(agentName, req.tool)}</span>
-          <span className="max-w-full truncate font-mono text-xs text-muted-foreground">{where}</span>
+          <TruncatedText className="max-w-full truncate font-mono text-xs text-muted-foreground">{where}</TruncatedText>
         </div>
         {diff ? (
           <div className="overflow-hidden rounded-md border border-border bg-background">

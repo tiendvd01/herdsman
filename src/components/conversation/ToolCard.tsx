@@ -1,3 +1,4 @@
+import { TruncatedText } from '@/components/ui/truncated-text';
 // A tool call as a collapsible card; Edit/Write show their diff (FR-013).
 import { useState } from 'react';
 import { Bot, ChevronDown, FileText, Globe, Pencil, Search, SquareTerminal, Wrench } from 'lucide-react';
@@ -65,7 +66,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
           {item.tool}
           {agentName ? ` · ${agentName}` : ''}
         </span>
-        <span className={cn('min-w-0 flex-1 truncate text-xs text-muted-foreground', MONO.has(item.tool) && 'font-mono')}>{summary}</span>
+        <TruncatedText className={cn('min-w-0 flex-1 truncate text-xs text-muted-foreground', MONO.has(item.tool) && 'font-mono')}>{summary}</TruncatedText>
         {diff ? <DiffStat {...diffStats(diff.lines)} /> : null}
         {item.steps ? <span className="shrink-0 font-mono text-xs text-muted-foreground">{item.steps} steps</span> : null}
         <span

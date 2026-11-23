@@ -87,30 +87,75 @@ fn snippet(text: &str, at: usize, len: usize) -> String {
     format!("{}{}{}", if start > 0 { "…" } else { "" }, body.trim(), if end < chars.len() { "…" } else { "" })
 }
 
+#[derive(Default)]
+struct TranscriptTitle {
+    custom: Option<String>,
+    generated: Option<String>,
+}
+
+impl TranscriptTitle {
+    fn record(&mut self, entry: &Value) {
+        let (slot, field) = match entry["type"].as_str() {
+            Some("custom-title") => (&mut self.custom, "customTitle"),
+            Some("ai-title") => (&mut self.generated, "aiTitle"),
+            _ => return,
+        };
+        *slot = entry[field].as_str().map(str::trim).filter(|title| !title.is_empty()).map(str::to_owned);
+    }
+
+    fn preferred(self) -> Option<String> {
+        self.custom.or(self.generated)
+    }
+}
+
+fn is_title_record(line: &str) -> bool {
+    line.contains("\"custom-title\"") || line.contains("\"ai-title\"")
+}
+
+pub fn session_path(projects: &Path, id: &str) -> Option<PathBuf> {
+    if id.len() != 36 || !id.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-') {
+        return None;
+    }
+    let filename = format!("{id}.jsonl");
+    std::fs::read_dir(projects).ok()?.flatten()
+        .map(|entry| entry.path().join(&filename))
+        .find(|path| path.is_file())
+}
+
+pub fn session_title(path: &Path) -> Option<String> {
+    let mut title = TranscriptTitle::default();
+    for line in BufReader::new(std::fs::File::open(path).ok()?).lines().map_while(Result::ok) {
+        if is_title_record(&line) {
+            if let Ok(entry) = serde_json::from_str::<Value>(&line) {
+                title.record(&entry);
+            }
+        }
+    }
+    title.preferred()
+}
+
 fn scan_file(path: &Path, terms: &[Vec<char>], mtime: i64) -> Option<ClaudeHit> {
     let id = path.file_stem()?.to_string_lossy().into_owned();
     let mut cwd = None;
-    let mut title = None;
-    let mut first_prompt = None;
+    let mut title = TranscriptTitle::default();
     let mut snip = None;
     for line in BufReader::new(std::fs::File::open(path).ok()?).lines().map_while(Result::ok) {
         let is_msg = line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"");
-        let is_title = line.starts_with("{\"type\":\"ai-title\"");
+        let is_title = is_title_record(&line);
         if !is_msg && !is_title {
             continue;
         }
         let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
         if is_title {
-            title = v.get("aiTitle").and_then(Value::as_str).map(str::to_string);
+            title.record(&v);
+        }
+        if !is_msg {
             continue;
         }
         if cwd.is_none() {
             cwd = v.get("cwd").and_then(Value::as_str).map(str::to_string);
         }
         let Some(text) = message_text(&v) else { continue };
-        if first_prompt.is_none() && v.get("type").and_then(Value::as_str) == Some("user") {
-            first_prompt = Some(text.lines().next().unwrap_or("").chars().take(60).collect::<String>());
-        }
         if snip.is_none() {
             let folded = fold(&text);
             let pos: Option<Vec<usize>> = terms.iter().map(|t| find_sub(&folded, t)).collect();
@@ -120,16 +165,23 @@ fn scan_file(path: &Path, terms: &[Vec<char>], mtime: i64) -> Option<ClaudeHit> 
             }
         }
     }
+    let title = title.preferred();
+    if snip.is_none() && !title.as_deref().is_some_and(|title| {
+        let folded = fold(title);
+        terms.iter().all(|term| find_sub(&folded, term).is_some())
+    }) {
+        return None;
+    }
     Some(ClaudeHit {
         claude_session_id: id,
         cwd,
-        title: title.or(first_prompt),
-        snippet: snip?,
+        title,
+        snippet: snip.unwrap_or_default(),
         updated_at: mtime,
     })
 }
 
-pub fn search(query: &str, limit: usize) -> Vec<ClaudeHit> {
+pub fn search(query: &str, limit: usize, include: impl Fn(&ClaudeHit) -> bool) -> Vec<ClaudeHit> {
     let terms: Vec<Vec<char>> = query.split_whitespace().map(fold).collect();
     let Some(root) = claude_dir().map(|d| d.join("projects")) else { return vec![] };
     if terms.is_empty() {
@@ -155,7 +207,7 @@ pub fn search(query: &str, limit: usize) -> Vec<ClaudeHit> {
     files.sort_by(|a, b| b.1.cmp(&a.1));
     let mut out = vec![];
     for (p, m) in files {
-        if let Some(h) = scan_file(&p, &terms, m) {
+        if let Some(h) = scan_file(&p, &terms, m).filter(&include) {
             out.push(h);
             if out.len() >= limit {
                 break;

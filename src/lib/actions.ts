@@ -6,14 +6,21 @@ import type { ClaudeHit, Engine, Session } from './types';
 import { useUiStore, type Theme } from '@/stores/useUiStore';
 import { toast } from '@/components/ui/toast';
 
+export async function createWorkspaceSession(qc: QueryClient, workspaceId: string, engine: Engine, title?: string) {
+  const session = await api.sessionCreate(workspaceId, engine, undefined, title);
+  // WorkspacePane needs the new ID in the cache before it can select it.
+  qc.setQueryData<Session[]>(qk.sessions(workspaceId), (old) => [
+    ...(old ?? []).filter((s) => s.id !== session.id),
+    session,
+  ]);
+  void qc.invalidateQueries({ queryKey: qk.sessions(workspaceId) });
+  return session;
+}
+
 export async function createSession(qc: QueryClient, workspaceId: string, engine: Engine = 'claude') {
   try {
-    const s = await api.sessionCreate(workspaceId, engine);
-    // Put the new session in the cache before selecting it: otherwise WorkspacePane sees an
-    // unknown `current` id until the refetch lands and falls back to the first tab.
-    qc.setQueryData<Session[]>(qk.sessions(workspaceId), (old) => (old ? [...old.filter((x) => x.id !== s.id), s] : [s]));
+    const s = await createWorkspaceSession(qc, workspaceId, engine);
     useUiStore.getState().selectSession(workspaceId, s.id);
-    qc.invalidateQueries({ queryKey: qk.sessions(workspaceId) });
   } catch (e) {
     toast(errMsg(e), 'error');
   }
@@ -26,7 +33,7 @@ export async function openClaudeConversation(qc: QueryClient, hit: ClaudeHit) {
     return;
   }
   try {
-    const s = await api.claudeOpen(hit.claude_session_id, hit.cwd);
+    const s = await api.claudeOpen(hit.claude_session_id, hit.cwd, hit.workspace_id);
     qc.setQueryData<Session[]>(qk.sessions(s.workspace_id), (old) => (old ? [...old.filter((x) => x.id !== s.id), s] : [s]));
     const ui = useUiStore.getState();
     ui.selectWorkspace(hit.project_id, s.workspace_id);

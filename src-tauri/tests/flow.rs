@@ -1,7 +1,7 @@
 //! Test tích hợp với hc thật + sidecar thật (engine echo, không gọi model).
 //! T018 (contract hc), T065 (tiêu chí BR #3: duyệt quyền Edit), T073 (tiêu chí BR #1: tắt app rồi mở lại).
 //! Bỏ qua khi không có hc/node (CI không có hc).
-use herdsman_lib::{agent, hc, state::AppState, store};
+use herdsman_lib::{agent, commands, hc, state::AppState, store};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -70,7 +70,7 @@ async fn session_survives_app_restart_and_permission_flow() {
         let db = st.db.lock();
         let p = store::project_add(&db, "demo", work.path().to_str().unwrap()).unwrap();
         let ws = store::workspace_insert(&db, &store::new_id(), &p.id, None, "project", &p.path, None, None).unwrap();
-        let s = store::session_insert(&db, &ws.id, "echo", "ask").unwrap();
+        let s = store::session_insert(&db, &ws.id, "echo", "ask", None).unwrap();
         (s, ws)
     };
     let term = agent::spawn_sidecar(&st, &s, &ws).await.expect("chạy sidecar qua hc");
@@ -83,7 +83,11 @@ async fn session_survives_app_restart_and_permission_flow() {
     assert_eq!(listed[0].label("herdsman.kind"), Some("session"));
 
     // T065: agent xin quyền Edit → có diff → Allow → chạy tiếp
-    agent::command(&st, &s.id, json!({"cmd": "prompt", "text": "hãy edit README"})).await.unwrap();
+    agent::command(&st, &s.id, json!({
+        "cmd": "prompt",
+        "text": "hãy edit README",
+        "images": [{"media_type": "image/png", "data_b64": "AQID"}],
+    })).await.unwrap();
     let req = wait_for(&data_dir, &s.id, |e| e["type"] == "permission_request", 10).await;
     assert_eq!(req["tool"], "Edit");
     assert!(req["input"]["old_string"].is_string(), "có dữ liệu để dựng diff");
@@ -100,6 +104,11 @@ async fn session_survives_app_restart_and_permission_flow() {
     }
     assert!(blocked, "hc phải thấy blocked");
 
+    let named = store::session_insert(&st.db.lock(), &ws.id, &s.engine, "ask", Some("Sửa bộ lọc")).unwrap();
+    let named_term = agent::spawn_sidecar(&st, &named, &ws).await.unwrap();
+    wait_for(&data_dir, &named.id, |e| e["type"] == "session_started", 10).await;
+    assert!(!read_log(&data_dir, &named.id).iter().any(|e| e["type"] == "user_message"));
+
     // T073: "tắt app" — bỏ toàn bộ state backend; sidecar trong hc vẫn sống, request vẫn chờ.
     let last_seq_before = read_log(&data_dir, &s.id).last().unwrap()["seq"].as_i64().unwrap();
     drop(st);
@@ -111,6 +120,10 @@ async fn session_survives_app_restart_and_permission_flow() {
     // "mở lại app": state mới từ cùng DB; khôi phục view phát lại đủ event, request còn treo
     let env2 = make_state(&data_dir, store::open(&db_path).unwrap()).unwrap();
     let st2 = env2.st.clone();
+    let sessions = store::session_list(&st2.db.lock(), &ws.id).unwrap();
+    assert!(sessions.iter().any(|row| row.id == named.id && row.title.as_deref() == Some("Sửa bộ lọc")));
+    assert!(sessions.iter().any(|row| row.id == s.id));
+    assert_eq!(hcc.get(&named_term.address).await.unwrap().state, "live");
     agent::open_view(st2.clone(), s.id.clone());
     let mut got: Vec<Value> = vec![];
     for _ in 0..50 {
@@ -130,6 +143,12 @@ async fn session_survives_app_restart_and_permission_flow() {
     assert_eq!(seqs.first(), Some(&1));
     assert!(seqs.windows(2).all(|w| w[1] == w[0] + 1), "không mất event: {seqs:?}");
     assert!(got.iter().any(|e| e["type"] == "permission_request"));
+    let image_id = got.iter().find(|e| e["type"] == "user_message").unwrap()
+        ["images"][0]["attachment_id"].as_str().unwrap();
+    assert_eq!(commands::read_session_image(&st2, &s.id, image_id).await.unwrap(), "AQID");
+    assert_eq!(commands::read_session_image(&st2, &named.id, image_id).await.unwrap_err().code, "image_unavailable");
+    assert_eq!(commands::read_session_image(&st2, &s.id, "../events.ndjson").await.unwrap_err().code, "invalid_attachment");
+
     assert!(!got.iter().any(|e| e["type"] == "permission_resolved"), "request không tự hết hạn");
 
     agent::command(&st2, &s.id, json!({"cmd": "permission_response", "id": req["id"], "decision": "allow"})).await.unwrap();
@@ -152,6 +171,30 @@ async fn session_survives_app_restart_and_permission_flow() {
     }
     hcc.rm(&term.address).await.unwrap();
     assert!(hcc.list(&[("herdsman.session", &s.id)], true).await.unwrap().is_empty());
+    store::session_set_status(&st2.db.lock(), &s.id, "done").unwrap();
+    env2.events.lock().clear();
+    agent::open_view(st2.clone(), s.id.clone());
+    for _ in 0..30 {
+        if env2.events.lock().iter().any(|(_, p)| p["error"]["code"] == "sidecar_unreachable") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let offline = env2.events.lock().iter()
+        .filter(|(name, p)| name == "session:events" && p["session_id"] == s.id.as_str())
+        .flat_map(|(_, p)| p["events"].as_array().cloned().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert!(offline.iter().any(|e| e["images"][0]["attachment_id"] == image_id));
+    assert!(!offline.iter().any(|e| e["type"] == "permission_request"));
+
+    hcc.kill(&named_term.address).await.unwrap();
+    for _ in 0..30 {
+        if hcc.get(&named_term.address).await.map(|t| t.state != "live").unwrap_or(true) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    hcc.rm(&named_term.address).await.unwrap();
     drop(env2);
     let _ = std::fs::remove_dir_all(&env_dir(&data_dir));
 }
@@ -175,7 +218,7 @@ async fn hc_send_and_agent_tree() {
         let db = st.db.lock();
         let p = store::project_add(&db, "demo", work.path().to_str().unwrap()).unwrap();
         let ws = store::workspace_insert(&db, &store::new_id(), &p.id, None, "project", &p.path, None, None).unwrap();
-        let s = store::session_insert(&db, &ws.id, "echo", "ask").unwrap();
+        let s = store::session_insert(&db, &ws.id, "echo", "ask", None).unwrap();
         (s, ws)
     };
     let term = agent::spawn_sidecar(&st, &s, &ws).await.unwrap();
@@ -225,7 +268,7 @@ async fn model_change_survives_app_restart() {
         let db = st.db.lock();
         let p = store::project_add(&db, "demo", work.path().to_str().unwrap()).unwrap();
         let ws = store::workspace_insert(&db, &store::new_id(), &p.id, None, "project", &p.path, None, None).unwrap();
-        let s = store::session_insert(&db, &ws.id, "echo", "ask").unwrap();
+        let s = store::session_insert(&db, &ws.id, "echo", "ask", None).unwrap();
         (s, ws)
     };
     let term = agent::spawn_sidecar(&st, &s, &ws).await.unwrap();
@@ -274,7 +317,7 @@ async fn close_session_kills_idle_terminal() {
         let db = st.db.lock();
         let p = store::project_add(&db, "demo", work.path().to_str().unwrap()).unwrap();
         let ws = store::workspace_insert(&db, &store::new_id(), &p.id, None, "project", &p.path, None, None).unwrap();
-        let s = store::session_insert(&db, &ws.id, "echo", "ask").unwrap();
+        let s = store::session_insert(&db, &ws.id, "echo", "ask", None).unwrap();
         (s, ws)
     };
     let term = agent::spawn_sidecar(&st, &s, &ws).await.expect("chạy sidecar qua hc");

@@ -1,16 +1,13 @@
 <!--
 Sync Impact Report
-- Version change: 1.0.0 → 1.1.0 (MINOR: mở rộng nguyên tắc VI)
-- Modified principles:
-  - VI. "Tổ chức theo Project, giữ đơn giản" → "Tổ chức theo Project → Workspace → Session,
-    giữ đơn giản": thêm Workspace (gom session cùng một việc, dùng thư mục project hoặc worktree)
-    cho khớp BR-001 F11; vẫn cấm space và khái niệm tổ chức song song khác.
+- Version change: 1.2.0 → 1.3.0 (MINOR, bổ sung chuẩn shadcn/ui cho toàn bộ giao diện)
+- Modified principles: không có
 - Added principles: không có
 - Added sections: không có
 - Removed sections: không có
+- Modified sections: Ràng buộc kỹ thuật, Quy trình phát triển & cổng chất lượng
 - Templates: không cần sửa (plan/spec/tasks templates đọc constitution lúc chạy)
 - Deferred TODOs: không có
-- Nguồn: specs/business-requirement/BR-001.md (F11, mục 3.1), specs/technical.md
 -->
 
 # Herdsman Constitution
@@ -104,6 +101,14 @@ thêm một bước giữa developer và agent.
 
 ## Ràng buộc kỹ thuật
 
+- **Phong cách giao diện**. Toàn bộ giao diện do Herdsman cung cấp MUST theo shadcn/ui với
+  style `new-york` đã cấu hình trong `components.json`. MUST dùng component tương ứng từ
+  `src/components/ui` khi đã có. Thành phần chuyên biệt như cây file, editor và terminal
+  MUST dùng token theme của app và theo cùng quy ước về bố cục, khoảng cách, typography,
+  bo góc và trạng thái tương tác trong cả theme sáng lẫn tối.
+- **Ngôn ngữ giao diện**: Mọi nội dung giao diện do Herdsman cung cấp MUST dùng tiếng Anh,
+  gồm nhãn, nút, menu, hộp thoại, tooltip, thông báo trạng thái và thông báo lỗi.
+  Nội dung do người dùng hoặc agent cung cấp được hiển thị bằng ngôn ngữ gốc.
 - **App:** Tauri 2. Backend Rust (tokio, serde, sqlx, SQLite). Frontend React + TypeScript,
   state bằng Zustand, server state bằng TanStack Query.
 - **Runtime:** `hc` (herdr-core) do người dùng cài; Herdsman gắn label `herdsman.*` cho mọi
@@ -127,6 +132,8 @@ thêm một bước giữa developer và agent.
     gì; Mermaid/chart render đúng; duyệt quyền `Edit` hiện diff và Allow cho agent chạy tiếp.
 - Thay đổi chạm tới persistence, permission hoặc giao thức MUST có test tái hiện kịch bản app tắt
   giữa chừng.
+- Plan và review cho mọi thay đổi giao diện MUST kiểm tra việc dùng component chung, token
+  theme và tính nhất quán với shadcn/ui trong cả theme sáng lẫn tối.
 - Review MUST kiểm tra: không có đường nào agent chạy tool cần quyền mà không qua người dùng;
   không có dữ liệu nhạy cảm trong log.
 
@@ -140,4 +147,4 @@ thêm một bước giữa developer và agent.
 - Mỗi lần `/speckit-plan` và review PR MUST kiểm tra tuân thủ; khi BR hoặc Technical Architecture
   đổi phạm vi, MUST rà lại constitution.
 
-**Version**: 1.1.0 | **Ratified**: 2026-11-21 | **Last Amended**: 2026-11-21
+**Version**: 1.3.0 | **Ratified**: 2026-11-21 | **Last Amended**: 2026-11-23

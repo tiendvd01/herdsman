@@ -1,3 +1,4 @@
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 // FR-004–008, US5/US7: create a workspace (project folder or new worktree) with one empty session.
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -55,18 +56,18 @@ export function CreateWorkspaceDialog({ project, open, onOpenChange }: { project
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100vh-140px)] overflow-y-auto">
+      <DialogContent>
         <DialogHeader title={`New workspace · ${project.name}`} description="The workspace comes with an empty session. Write your first prompt there." />
         <form onSubmit={submit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="ws-name">Name</Label>
             <Input id="ws-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Leave empty to name it after the first prompt" autoFocus />
           </div>
-          <div role="radiogroup" aria-label="Working directory" className="flex flex-col gap-2">
+          <RadioGroup orientation="vertical" value={kind} onValueChange={(value) => setKind(value as typeof kind)} aria-label="Working directory" className="flex flex-col gap-2">
             <span className="text-[13px] font-medium">Working directory</span>
             <DirOption
               active={kind === 'worktree'}
-              onClick={() => setKind('worktree')}
+              value="worktree"
               disabled={notRepo}
               title="New worktree"
               desc={
@@ -77,11 +78,11 @@ export function CreateWorkspaceDialog({ project, open, onOpenChange }: { project
             />
             <DirOption
               active={kind === 'project'}
-              onClick={() => setKind('project')}
+              value="project"
               title="Project folder"
               desc="Work directly in the project folder, on the currently checked-out branch."
             />
-          </div>
+          </RadioGroup>
           {kind === 'worktree' ? (
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-2">
@@ -125,14 +126,11 @@ export function CreateWorkspaceDialog({ project, open, onOpenChange }: { project
   );
 }
 
-function DirOption(props: { active: boolean; disabled?: boolean; onClick: () => void; title: string; desc: string }) {
+function DirOption(props: { active: boolean; disabled?: boolean; value: string; title: string; desc: string }) {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={props.active}
+    <RadioGroupItem
+      value={props.value}
       disabled={props.disabled}
-      onClick={props.onClick}
       className={cn(
         'flex items-start gap-3 rounded-lg border bg-background p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
         props.active ? 'border-foreground' : 'border-border hover:bg-accent',
@@ -148,6 +146,6 @@ function DirOption(props: { active: boolean; disabled?: boolean; onClick: () => 
         <span className="text-[13px] font-medium">{props.title}</span>
         <span className="text-[12px] text-muted-foreground">{props.desc}</span>
       </span>
-    </button>
+    </RadioGroupItem>
   );
 }

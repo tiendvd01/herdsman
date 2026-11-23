@@ -63,7 +63,7 @@ export function WorkspaceMenu({ ws, variant = 'header' }: { ws: Workspace; varia
             onClick={(e) => e.stopPropagation()}
             className={cn(
               variant === 'sidebar' &&
-                'absolute right-0 top-1/2 -translate-y-1/2 bg-accent opacity-0 hover:bg-background group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100',
+                'shrink-0 bg-accent opacity-0 hover:bg-background group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100',
             )}
           >
             <MoreHorizontal />

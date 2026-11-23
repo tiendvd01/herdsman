@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "extensions": {
+    "refine": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:f81d942a057a69e00d223e0c2154de0e1040b33f80f9acfc1a15a6e3762ae22b",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "claude": [
+          "speckit.refine.update",
+          "speckit.refine.propagate",
+          "speckit.refine.diff",
+          "speckit.refine.status"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-11-23T09:56:56.265806+00:00"
+    }
+  }
+}

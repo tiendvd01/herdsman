@@ -1,3 +1,4 @@
+import { TruncatedText } from '@/components/ui/truncated-text';
 // Per-session model picker next to the permission mode menu (specs/005-chat-model-switcher).
 // The list comes from the session's engine; the label only changes once the agent has acked.
 import { useEffect, useState } from 'react';
@@ -19,7 +20,8 @@ export function ModelSwitcher({ session, disabled }: { session: Session; disable
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [unsupported, setUnsupported] = useState<string | null>(null);
-  const model = useSessionStore((s) => s.sessions[session.id]?.model) ?? session.model;
+  const reportedModel = useSessionStore((s) => s.sessions[session.id]?.model);
+  const model = reportedModel === undefined ? session.model : reportedModel;
 
   const list = useQuery({
     queryKey: modelsKey(session.id),
@@ -78,7 +80,7 @@ export function ModelSwitcher({ session, disabled }: { session: Session; disable
       disabled={disabled || !!unsupported || change.isPending}
     >
       {change.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
-      <span className="truncate">{label}</span>
+      <TruncatedText className="truncate">{label}</TruncatedText>
       <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
     </Button>
   );

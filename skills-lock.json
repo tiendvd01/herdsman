@@ -1,0 +1,64 @@
+{
+  "version": 2,
+  "skills": {
+    "migrate-radix-to-base": {
+      "source": "shadcn-ui/ui",
+      "commit": "055aa6b7837b1808456a24beb4c97a677864aa82",
+      "sourceType": "github",
+      "skillPath": "skills/migrate-radix-to-base/SKILL.md",
+      "computedHash": "7644de21e9aa533904def58c30f809ae6574c3cabc6396ab8b03dee751e8ffbe"
+    },
+    "shadcn": {
+      "source": "shadcn-ui/ui",
+      "commit": "055aa6b7837b1808456a24beb4c97a677864aa82",
+      "sourceType": "github",
+      "skillPath": "skills/shadcn/SKILL.md",
+      "computedHash": "388962d16c7a4f13aaeee0d8f128e50a87df8553d42ef7988c39c0e1c74a40e8"
+    },
+    "speckit-analyze": {
+      "source": "./.claude/skills",
+      "sourceType": "local",
+      "computedHash": "e9b692c4a1eae7713d0a0be79a5ef2a0f3c0de414548e992bc10be489006550f"
+    },
+    "speckit-checklist": {
+      "source": "./.claude/skills",
+      "sourceType": "local",
+      "computedHash": "7986d42c829d488f30ab0304e34241e304ce5d946c13a87738a3c6509137cf7c"
+    },
+    "speckit-clarify": {
+      "source": "./.claude/skills",
+      "sourceType": "local",
+      "computedHash": "1636a939011f22cfa40ca8ca83387d98d504a5d3cc1344f936dbe6b453406367"
+    },
+    "speckit-constitution": {
+      "source": "./.claude/skills",
+      "sourceType": "local",
+      "computedHash": "eb0cb8dfdfeb0a50e96ea28f036d90ffef11aa8e7c3ec487196919d7ff0f6e3e"
+    },
+    "speckit-converge": {
+      "source": "./.claude/skills",
+      "sourceType": "local",
+      "computedHash": "5aa42d8e11292239b2b054f987f6b55e8f11d3c4b04d91b1e84360ed3b702f71"
+    },
+    "speckit-implement": {
+      "source": "./.claude/skills",
+      "sourceType": "local",
+      "computedHash": "a9b58c9e60d923671c339043168c61980ee69dc4dbadac00255d580c0cc6655f"
+    },
+    "speckit-plan": {
+      "source": "./.claude/skills",
+      "sourceType": "local",
+      "computedHash": "9cf79904f8ae77070bdce42de8b11ba186f1c762b1419003918c779c385882ff"
+    },
+    "speckit-specify": {
+      "source": "./.claude/skills",
+      "sourceType": "local",
+      "computedHash": "8887872b2855a64c666d9069a8a00ca4d21e2a9fb08adb8deca6d4ac6d124e93"
+    },
+    "speckit-tasks": {
+      "source": "./.claude/skills",
+      "sourceType": "local",
+      "computedHash": "602fb243d8f917ae89ac07ce99d2e3d5b348e592219e7ed5a8a5e65ec872a7ec"
+    }
+  }
+}

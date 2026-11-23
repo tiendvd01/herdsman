@@ -2,11 +2,11 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { subscribeWithSelector } from 'zustand/middleware';
-import type { AgentEvent, LimitWindow, PermissionMode, SessionStatus } from '@/lib/types';
+import type { AgentEvent, ChatAttachment, LimitWindow, PermissionMode, SessionStatus } from '@/lib/types';
 import { modelLabel } from '@/lib/model';
 
 export type Item =
-  | { kind: 'user'; key: string; text: string; images: number; source: string; ts: number }
+  | { kind: 'user'; key: string; text: string; images: ChatAttachment[]; source: string; ts: number }
   | { kind: 'assistant'; key: string; blocks: { kind: 'text' | 'thinking'; text: string }[]; ts: number }
   | {
       kind: 'tool';
@@ -38,7 +38,7 @@ export interface SessionView {
   status: SessionStatus | null;
   lastSeq: number;
   ctxPct: number | null;
-  model: string | null;
+  model: string | null | undefined;
   loaded: boolean;
   closed: boolean;
   error: string | null;
@@ -53,7 +53,7 @@ const empty = (): SessionView => ({
   status: null,
   lastSeq: 0,
   ctxPct: null,
-  model: null,
+  model: undefined,
   loaded: false,
   closed: false,
   error: null,
@@ -84,12 +84,16 @@ export function applyEvent(v: SessionView, ev: AgentEvent) {
     case 'engine_session':
       if (ev.model) v.model = ev.model;
       break;
+    case 'model_fallback':
+      v.model = null;
+      v.items.push({ kind: 'notice', key, tone: 'info', text: ev.message, ts: ev.ts });
+      break;
     case 'model_changed':
       v.model = ev.model;
       v.items.push({ kind: 'notice', key, tone: 'info', text: `Switched model to ${modelLabel(ev.model)}`, ts: ev.ts });
       break;
     case 'user_message':
-      v.items.push({ kind: 'user', key, text: ev.text, images: ev.images?.length ?? 0, source: ev.source, ts: ev.ts });
+      v.items.push({ kind: 'user', key, text: ev.text, images: ev.images ?? [], source: ev.source, ts: ev.ts });
       break;
     case 'delta':
       if (ev.parent_tool_use_id) break;

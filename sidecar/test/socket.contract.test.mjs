@@ -1,6 +1,8 @@
 // contracts/sidecar-socket.md — test 1, 2, 5
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Client, startSidecar, tmpDataDir } from './helpers.mjs';
 
 const logged = (e) => typeof e.seq === 'number';
@@ -67,5 +69,42 @@ test('proto khác bị từ chối và đóng kết nối', async () => {
     await c.closed;
   } finally {
     await sc.stop();
+  }
+});
+
+test('image references and payloads survive a chat disconnect and replay', async () => {
+  const dataDir = tmpDataDir();
+  const sc = await startSidecar({ dataDir });
+  const images = [
+    { media_type: 'image/png', data_b64: 'AQID' },
+    { media_type: 'image/jpeg', data_b64: 'BAUG' },
+  ];
+  let first, reopened;
+  try {
+    first = await Client.connect(sc.sock);
+    await first.hello();
+    await first.subscribe();
+    first.send({ cmd: 'prompt', text: 'slow attached images', images });
+    const message = await first.waitFor((event) => event.type === 'user_message');
+    first.sock.destroy();
+    await first.closed;
+    reopened = await Client.connect(sc.sock);
+    await reopened.hello();
+    await reopened.subscribe();
+    const replay = await reopened.waitFor((event) => event.type === 'user_message');
+    assert.deepEqual(replay, message);
+    assert.equal(new Set(replay.images.map((image) => image.attachment_id)).size, 2);
+    for (const [index, image] of replay.images.entries()) {
+      assert.equal(image.media_type, images[index].media_type);
+      assert.equal(image.data_b64, undefined);
+      const file = path.join(dataDir, 'sessions', 's1', 'images', image.attachment_id);
+      assert.equal(fs.readFileSync(file, 'utf8'), images[index].data_b64);
+    }
+    await reopened.waitFor((event) => event.type === 'turn_end', 15000);
+  } finally {
+    first?.sock.destroy();
+    reopened?.sock.destroy();
+    await sc.stop();
+    fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });

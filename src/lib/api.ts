@@ -36,7 +36,25 @@ export function errCode(e: unknown): string | undefined {
 
 export type DirChoice = { kind: 'project' } | { kind: 'worktree'; base_branch: string; branch?: string };
 
+export interface ProjectFileEntry {
+  name: string;
+  path: string;
+  directory: boolean;
+}
+
+export interface ProjectFileDocument {
+  text: string;
+  writable: boolean;
+}
+
 export const api = {
+  projectFiles: (projectId: string, path: string) =>
+    invoke<ProjectFileEntry[]>('project_files_list', { projectId, path }),
+  projectFileRead: (projectId: string, path: string) =>
+    invoke<ProjectFileDocument>('project_file_read', { projectId, path }),
+  projectFileSave: (projectId: string, path: string, baseline: string, text: string) =>
+    invoke<void>('project_file_save', { projectId, path, baseline, text }),
+
   appInfo: () => invoke<AppInfo>('app_info'),
   fontFamilies: () => invoke<string[]>('font_families'),
   themeFiles: () => invoke<ThemeFile[]>('theme_files'),
@@ -69,12 +87,14 @@ export const api = {
 
   sessionHistory: (workspaceId: string) => invoke<Session[]>('session_history', { workspaceId }),
   sessionGet: (id: string) => invoke<Session>('session_get', { id }),
-  sessionCreate: (workspaceId: string, engine: Engine, permissionMode?: PermissionMode) =>
-    invoke<Session>('session_create', { workspaceId, engine, permissionMode }),
+  sessionCreate: (workspaceId: string, engine: Engine, permissionMode?: PermissionMode, title?: string) =>
+    invoke<Session>('session_create', { workspaceId, engine, permissionMode, title }),
   sessionOpen: (id: string) => invoke<void>('session_open', { id }),
   sessionCloseView: (id: string) => invoke<void>('session_close_view', { id }),
   sessionPrompt: (id: string, text: string, images?: { media_type: string; data_b64: string }[]) =>
     invoke<void>('session_prompt', { id, text, images }),
+  sessionImage: (id: string, attachmentId: string) =>
+    invoke<string>('session_image', { id, attachmentId }),
   sessionInterrupt: (id: string) => invoke<void>('session_interrupt', { id }),
   sessionPermission: (id: string, requestId: string, decision: 'allow' | 'deny') =>
     invoke<void>('session_permission', { id, requestId, decision }),
@@ -87,9 +107,11 @@ export const api = {
   sessionClose: (id: string) => invoke<void>('session_close', { id }),
   sessionKill: (id: string) => invoke<void>('session_kill', { id }),
   sessionSetPinned: (id: string, pinned: boolean) => invoke<void>('session_set_pinned', { id, pinned }),
-  search: (query: string, workspaceId?: string) => invoke<SearchHit[]>('search', { query, workspaceId }),
-  claudeSearch: (query: string) => invoke<ClaudeHit[]>('claude_search', { query }),
-  claudeOpen: (claudeSessionId: string, cwd: string) => invoke<Session>('claude_open', { claudeSessionId, cwd }),
+  search: (query: string, workspaceId?: string, projectId?: string) => invoke<SearchHit[]>('search', { query, workspaceId, projectId }),
+  claudeSearch: (query: string, scope?: { workspaceId?: string; projectId?: string }) =>
+    invoke<ClaudeHit[]>('claude_search', { query, ...scope, palette: !!scope }),
+  claudeOpen: (claudeSessionId: string, cwd: string, workspaceId?: string) =>
+    invoke<Session>('claude_open', { claudeSessionId, cwd, workspaceId }),
 
   terminalRead: (terminal: string, lines = 2000) => invoke<string>('terminal_read', { terminal, lines }),
   taskRun: (projectId: string, command: string) => invoke<TaskRef>('task_run', { projectId, command }),

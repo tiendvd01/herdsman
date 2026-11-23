@@ -20,9 +20,9 @@ describe('usageFormat', () => {
 
   it('formatReset: còn lại bao lâu, đã qua → null', () => {
     const now = Date.parse('2026-11-22T00:00:00Z');
-    expect(formatReset('2026-11-22T02:10:00Z', now)).toBe('2 giờ 10 phút');
-    expect(formatReset('2026-11-22T00:35:00Z', now)).toBe('35 phút');
-    expect(formatReset('2026-11-25T04:00:00Z', now)).toBe('3 ngày 4 giờ');
+    expect(formatReset('2026-11-22T02:10:00Z', now)).toBe('2h 10m');
+    expect(formatReset('2026-11-22T00:35:00Z', now)).toBe('35m');
+    expect(formatReset('2026-11-25T04:00:00Z', now)).toBe('3d 4h');
     expect(formatReset('2026-11-21T00:00:00Z', now)).toBeNull();
     expect(formatReset(null, now)).toBeNull();
   });

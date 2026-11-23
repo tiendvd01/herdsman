@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod commands;
+mod project_files;
 pub mod error;
 pub mod git;
 pub mod claude_history;
@@ -94,6 +95,11 @@ fn set_dock_icon() {
     }
 }
 
+#[tauri::command]
+fn exit_after_file_review(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -128,6 +134,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move { agent::watch_hc(st_watch).await });
             let st_index = st.clone();
             tauri::async_runtime::spawn_blocking(move || agent::backfill_index(&st_index));
+            tauri::async_runtime::spawn(agent::watch_claude_titles(st));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -154,6 +161,7 @@ pub fn run() {
             commands::session_open,
             commands::session_close_view,
             commands::session_prompt,
+            commands::session_image,
             commands::session_interrupt,
             commands::session_permission,
             commands::session_set_permission_mode,
@@ -176,7 +184,20 @@ pub fn run() {
             commands::agent_tree,
             commands::files_changed,
             commands::file_diff,
+            commands::project_files_list,
+            commands::project_file_read,
+            commands::project_file_save,
+            exit_after_file_review,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start Herdsman");
+        .build(tauri::generate_context!())
+        .expect("failed to start Herdsman")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
+                if let Some(window) = app.get_webview_window("main") {
+                    if window.emit("review-files-before-quit", ()).is_ok() {
+                        api.prevent_exit();
+                    }
+                }
+            }
+        });
 }

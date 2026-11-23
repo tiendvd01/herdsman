@@ -7,6 +7,7 @@ use crate::state::AppState;
 use crate::store::{self, Project, SearchHit, Session, Workspace};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -283,7 +284,7 @@ pub async fn workspace_create(
         let db = st.db.lock();
         let ws = store::workspace_insert(&db, &ws_id, &project_id, name.as_deref(), dir_kind, &work_dir, branch.as_deref(), base.as_deref());
         match ws {
-            Ok(ws) => store::session_insert(&db, &ws.id, &engine, &mode).map(|s| (ws, s)),
+            Ok(ws) => store::new_conversation_insert(&db, &ws.id, &engine, &mode, None).map(|s| (ws, s)),
             Err(e) => Err(e),
         }
     };
@@ -425,14 +426,24 @@ pub fn session_history(st: St<'_>, workspace_id: String) -> AppResult<Vec<Sessio
 }
 
 #[tauri::command]
-pub async fn session_create(st: St<'_>, workspace_id: String, engine: Option<String>, permission_mode: Option<String>) -> AppResult<Session> {
+pub async fn session_create(
+    st: St<'_>,
+    workspace_id: String,
+    engine: Option<String>,
+    permission_mode: Option<String>,
+    title: Option<String>,
+) -> AppResult<Session> {
     let engine = engine.unwrap_or_else(|| "claude".into());
     check_engine(&engine)?;
     let mode = permission_mode.unwrap_or_else(|| DEFAULT_MODE.into());
+    let title = title.as_deref().map(str::trim).filter(|title| !title.is_empty());
+    if title.is_some_and(|title| title.contains(['\r', '\n'])) {
+        return Err(AppError::new("bad_title", "Session title must fit on one line"));
+    }
     let (ws, s) = {
         let db = st.db.lock();
         let ws = store::workspace_get(&db, &workspace_id)?;
-        let s = store::session_insert(&db, &workspace_id, &engine, &mode)?;
+        let s = store::new_conversation_insert(&db, &workspace_id, &engine, &mode, title)?;
         (ws, s)
     };
     if let Err(e) = agent::spawn_sidecar(&st, &s, &ws).await {
@@ -460,15 +471,6 @@ pub struct ImageInput {
     data_b64: String,
 }
 
-fn first_line_title(text: &str) -> String {
-    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("Session");
-    let mut out: String = line.chars().take(40).collect();
-    if line.chars().count() > 40 {
-        out = out.trim_end().to_string() + "…";
-    }
-    out
-}
-
 #[tauri::command]
 pub async fn session_prompt(st: St<'_>, id: String, text: String, images: Option<Vec<ImageInput>>) -> AppResult<()> {
     let images: Vec<Value> = images
@@ -477,20 +479,29 @@ pub async fn session_prompt(st: St<'_>, id: String, text: String, images: Option
         .map(|i| json!({"media_type": i.media_type, "data_b64": i.data_b64}))
         .collect();
     agent::command(&st, &id, json!({"cmd": "prompt", "text": text, "images": images})).await?;
-    // FR-006: workspace chưa có tên → lấy prompt đầu tiên; session cũng lấy làm tiêu đề.
     let db = st.db.lock();
     let s = store::session_get(&db, &id)?;
     store::session_touch(&db, &id)?;
     store::session_set_pinned(&db, &id, true)?;
-    if s.title.is_none() {
-        store::session_set_field(&db, &id, "title", Some(&first_line_title(&text)))?;
-    }
     let ws = store::workspace_get(&db, &s.workspace_id)?;
-    if ws.name.is_none() {
-        store::workspace_rename(&db, &ws.id, &first_line_title(&text))?;
-    }
     st.emit("workspace:changed", json!({"project_id": ws.project_id, "workspace_id": ws.id}));
     Ok(())
+}
+
+#[tauri::command]
+pub async fn session_image(st: St<'_>, id: String, attachment_id: String) -> AppResult<String> {
+    read_session_image(&st, &id, &attachment_id).await
+}
+
+pub async fn read_session_image(st: &AppState, id: &str, attachment_id: &str) -> AppResult<String> {
+    if attachment_id.len() != 32 || !attachment_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(AppError::new("invalid_attachment", "Invalid image attachment ID"));
+    }
+    let session = store::session_get(&st.db.lock(), id)?;
+    let file = st.session_dir(&session.id).join("images").join(attachment_id);
+    tokio::fs::read_to_string(file)
+        .await
+        .map_err(|_| AppError::new("image_unavailable", "Image unavailable"))
 }
 
 #[tauri::command]
@@ -553,8 +564,7 @@ pub async fn session_set_model(st: St<'_>, id: String, model: String) -> AppResu
         return Err(AppError::new("bad_model", "Model must not be empty"));
     }
     agent::command(&st, &id, json!({"cmd": "set_model", "model": model})).await?;
-    store::session_set_field(&st.db.lock(), &id, "model", Some(&model))?;
-    Ok(())
+    store::session_confirm_model(&st.db.lock(), &id, &model)
 }
 
 /// Resume: terminal đã kết thúc/mất → chạy lại sidecar, engine nạp lại transcript gốc; seq nối tiếp.
@@ -644,6 +654,7 @@ pub fn session_get(st: St<'_>, id: String) -> AppResult<Session> {
 pub struct ClaudeHitView {
     #[serde(flatten)]
     hit: crate::claude_history::ClaudeHit,
+    session_id: Option<String>,
     /// Workspace của Herdsman có work_dir trùng cwd của conversation (None → chưa thêm vào app).
     workspace_id: Option<String>,
     workspace_name: Option<String>,
@@ -657,33 +668,85 @@ fn workspace_for_cwd(db: &rusqlite::Connection, cwd: &str) -> Option<store::Work
 
 /// Tìm trong transcript Claude Code (~/.claude/projects), không phải session hc của app.
 #[tauri::command]
-pub async fn claude_search(st: St<'_>, query: String) -> AppResult<Vec<ClaudeHitView>> {
-    let hits = tokio::task::spawn_blocking(move || crate::claude_history::search(&query, 50))
-        .await
-        .map_err(|e| AppError::new("search_failed", e.to_string()))?;
-    let db = st.db.lock();
-    Ok(hits
-        .into_iter()
-        .map(|hit| {
-            let ws = hit.cwd.as_deref().and_then(|c| workspace_for_cwd(&db, c));
-            let project = ws.as_ref().and_then(|w| store::project_get(&db, &w.project_id).ok());
+pub async fn claude_search(
+    st: St<'_>, query: String, project_id: Option<String>, workspace_id: Option<String>, palette: Option<bool>,
+) -> AppResult<Vec<ClaudeHitView>> {
+    let palette = palette.unwrap_or(false);
+    let (workspaces, projects, sessions) = {
+        let db = st.db.lock();
+        (store::workspace_list(&db, None, palette)?, store::project_list(&db)?, store::session_all(&db)?)
+    };
+    let hits = tokio::task::spawn_blocking(move || {
+        let workspaces_by_id: HashMap<_, _> = workspaces.iter().map(|w| (w.id.as_str(), w)).collect();
+        let mut workspaces_by_dir: HashMap<&str, Vec<&Workspace>> = HashMap::new();
+        for ws in &workspaces {
+            workspaces_by_dir.entry(&ws.work_dir).or_default().push(ws);
+        }
+        let mut sessions_by_engine_id: HashMap<&str, Vec<&Session>> = HashMap::new();
+        for session in sessions.iter().filter(|s| s.engine == "claude") {
+            if let Some(id) = session.engine_session_id.as_deref() {
+                sessions_by_engine_id.entry(id).or_default().push(session);
+            }
+        }
+        let locate = |hit: &crate::claude_history::ClaudeHit| {
+            if let Some(sessions) = palette.then(|| sessions_by_engine_id.get(hit.claude_session_id.as_str())).flatten() {
+                // A known conversation belongs to its managed locations, even if its old cwd matches another workspace.
+                let mut candidates = sessions.iter().filter_map(|&session| {
+                    let &ws = workspaces_by_id.get(session.workspace_id.as_str())?;
+                    (project_id.as_ref().is_none_or(|id| id == &ws.project_id)
+                        && workspace_id.as_ref().is_none_or(|id| id == &ws.id))
+                        .then_some((session, ws))
+                });
+                let Some((session, ws)) = candidates.next() else { return (None, None, None) };
+                if let Some((_, other)) = candidates.next() {
+                    let same_project = other.project_id == ws.project_id
+                        && candidates.all(|(_, candidate)| candidate.project_id == ws.project_id);
+                    return (None, None, same_project.then_some(ws.project_id.as_str()));
+                }
+                return (Some(session), Some(ws), Some(ws.project_id.as_str()));
+            }
+            let matches = hit.cwd.as_deref().and_then(|cwd| workspaces_by_dir.get(cwd));
+            let ws = matches.and_then(|matches| match matches.as_slice() {
+                [ws] => Some(*ws),
+                [ws, ..] if !palette => Some(*ws),
+                _ => None,
+            });
+            let project = ws.map(|w| w.project_id.as_str()).or_else(|| {
+                let matches = matches?;
+                let first = matches.first()?;
+                matches.iter().all(|w| w.project_id == first.project_id).then_some(first.project_id.as_str())
+            });
+            (None, ws, project)
+        };
+        let hits = crate::claude_history::search(&query, 50, |hit| {
+            let (_, ws, project) = locate(hit);
+            project_id.as_deref().is_none_or(|id| project == Some(id))
+                && workspace_id.as_deref().is_none_or(|id| ws.is_some_and(|w| w.id == id))
+        });
+        hits.into_iter().map(|hit| {
+            let (session, ws, project) = locate(&hit);
             ClaudeHitView {
-                workspace_id: ws.as_ref().map(|w| w.id.clone()),
-                workspace_name: ws.as_ref().and_then(|w| w.name.clone()),
-                project_id: project.as_ref().map(|p| p.id.clone()),
-                project_name: project.map(|p| p.name),
+                session_id: session.map(|s| s.id.clone()),
+                workspace_id: ws.map(|w| w.id.clone()),
+                workspace_name: ws.and_then(|w| w.name.clone()),
+                project_id: project.map(str::to_owned),
+                project_name: projects.iter().find(|p| Some(p.id.as_str()) == project).map(|p| p.name.clone()),
                 hit,
             }
-        })
-        .collect())
+        }).collect()
+    }).await.map_err(|e| AppError::new("search_failed", e.to_string()))?;
+    Ok(hits)
 }
 
 /// Mở một conversation Claude trong Herdsman: dùng lại session đã có, hoặc tạo session mới resume từ transcript.
 #[tauri::command]
-pub async fn claude_open(st: St<'_>, claude_session_id: String, cwd: String) -> AppResult<Session> {
+pub async fn claude_open(st: St<'_>, claude_session_id: String, cwd: String, workspace_id: Option<String>) -> AppResult<Session> {
     let (ws, existing) = {
         let db = st.db.lock();
-        let ws = workspace_for_cwd(&db, &cwd)
+        let ws = match workspace_id {
+            Some(id) => Some(store::workspace_get(&db, &id)?).filter(|w| w.work_dir == cwd),
+            None => workspace_for_cwd(&db, &cwd),
+        }
             .ok_or_else(|| AppError::new("no_workspace", "This conversation's folder is not a workspace in Herdsman"))?;
         let existing = store::session_list(&db, &ws.id)?
             .into_iter()
@@ -695,7 +758,7 @@ pub async fn claude_open(st: St<'_>, claude_session_id: String, cwd: String) -> 
     }
     let s = {
         let db = st.db.lock();
-        let s = store::session_insert(&db, &ws.id, "claude", DEFAULT_MODE)?;
+        let s = store::session_insert(&db, &ws.id, "claude", DEFAULT_MODE, None)?;
         store::session_set_field(&db, &s.id, "engine_session_id", Some(&claude_session_id))?;
         s
     };
@@ -710,8 +773,10 @@ pub async fn claude_open(st: St<'_>, claude_session_id: String, cwd: String) -> 
 }
 
 #[tauri::command]
-pub fn search(st: St<'_>, query: String, workspace_id: Option<String>) -> AppResult<Vec<SearchHit>> {
-    store::search(&st.db.lock(), &query, workspace_id.as_deref(), 50)
+pub fn search(
+    st: St<'_>, query: String, workspace_id: Option<String>, project_id: Option<String>,
+) -> AppResult<Vec<SearchHit>> {
+    store::search_sessions(&st.db.lock(), &query, project_id.as_deref(), workspace_id.as_deref(), 50)
 }
 
 // ───────────────────────────── Log, tasks, agents (F7, F8, F9) ─────────────────────────────
@@ -835,16 +900,25 @@ pub async fn file_diff(st: St<'_>, workspace_id: String, path: String) -> AppRes
     git::file_diff(Path::new(&ws.work_dir), &path).await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[tauri::command]
+pub async fn project_files_list(st: St<'_>, project_id: String, path: String) -> AppResult<Vec<crate::project_files::Entry>> {
+    let project = store::project_get(&st.db.lock(), &project_id)?;
+    tokio::task::spawn_blocking(move || crate::project_files::list(Path::new(&project.path), &path))
+        .await.map_err(|error| AppError::new("file_task", error.to_string()))?
+}
 
-    #[test]
-    fn title_from_prompt() {
-        assert_eq!(first_line_title("\n  Sửa lỗi login\nchi tiết"), "Sửa lỗi login");
-        let long = "a".repeat(60);
-        assert_eq!(first_line_title(&long).chars().count(), 41);
-    }
+#[tauri::command]
+pub async fn project_file_read(st: St<'_>, project_id: String, path: String) -> AppResult<crate::project_files::Document> {
+    let project = store::project_get(&st.db.lock(), &project_id)?;
+    tokio::task::spawn_blocking(move || crate::project_files::read(Path::new(&project.path), &path))
+        .await.map_err(|error| AppError::new("file_task", error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn project_file_save(st: St<'_>, project_id: String, path: String, baseline: String, text: String) -> AppResult<()> {
+    let project = store::project_get(&st.db.lock(), &project_id)?;
+    tokio::task::spawn_blocking(move || crate::project_files::save(Path::new(&project.path), &path, &baseline, &text))
+        .await.map_err(|error| AppError::new("file_task", error.to_string()))?
 }
 
 #[cfg(test)]

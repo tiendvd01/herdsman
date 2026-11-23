@@ -7,6 +7,7 @@ import type { Session, SessionStatus } from '@/lib/types';
 
 vi.mock('@/lib/api', () => ({
   api: {
+    sessionCreate: vi.fn(),
     sessionPrompt: vi.fn(async () => undefined),
     sessionInterrupt: vi.fn(async () => undefined),
     sessionListCommands: vi.fn(async () => ({ commands: [] })),
@@ -19,6 +20,7 @@ vi.mock('@/components/composer/ModeSwitcher', () => ({ ModeSwitcher: () => null 
 vi.mock('@/components/composer/ModelSwitcher', () => ({ ModelSwitcher: () => null }));
 
 import { api } from '@/lib/api';
+import { useUiStore } from '@/stores/useUiStore';
 import { Composer } from '@/components/composer/Composer';
 
 beforeAll(() => {
@@ -62,6 +64,8 @@ const expandBtn = () => screen.getByRole('button', { name: 'Expand editor' });
 const collapseBtn = () => screen.getByRole('button', { name: 'Collapse editor' });
 
 beforeEach(() => {
+  vi.mocked(api.sessionCreate).mockReset();
+  useUiStore.getState().selectSession(session.workspace_id, session.id);
   vi.mocked(api.sessionPrompt).mockReset().mockResolvedValue(undefined as never);
   vi.mocked(api.sessionInterrupt).mockClear();
   vi.mocked(api.sessionListCommands).mockReset().mockResolvedValue({ commands: [] });
@@ -152,4 +156,77 @@ describe('Composer expand', () => {
     renderComposer('idle', true);
     expect((expandBtn() as HTMLButtonElement).disabled).toBe(true);
   });
+});
+
+describe('/clear', () => {
+  it('offers the app command and opens a named session without resuming or prompting the old agent', async () => {
+    vi.mocked(api.sessionListCommands).mockResolvedValue({
+      commands: [{ name: 'clear', description: 'Engine command', argument_hint: '', builtin: true }],
+    });
+    vi.mocked(api.sessionCreate).mockResolvedValue({ ...session, id: 'named', title: 'Sửa bộ lọc' });
+    const qc = new QueryClient();
+    const resume = vi.fn();
+    render(
+      <QueryClientProvider client={qc}>
+        <TooltipProvider>
+          <Composer session={session} status="blocked" mode="ask" onNeedResume={resume} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.change(box(), { target: { value: '/cl' } });
+    fireEvent.click(screen.getByRole('option', { name: /\/clear.*\[name\]/ }));
+    expect(box().value).toBe('/clear ');
+    fireEvent.change(box(), { target: { value: '/clear   Sửa bộ lọc   ' } });
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    await waitFor(() => expect(useUiStore.getState().sessionByWorkspace.w1).toBe('named'));
+    expect(api.sessionCreate).toHaveBeenCalledWith('w1', 'claude', undefined, 'Sửa bộ lọc');
+    expect(api.sessionPrompt).not.toHaveBeenCalled();
+    expect(api.sessionInterrupt).not.toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
+  });
+
+  it.each(['/clear', '/clear   '])('uses default naming for %j', async (command) => {
+    vi.mocked(api.sessionCreate).mockResolvedValue({ ...session, id: 'unnamed' });
+    renderComposer();
+    fireEvent.change(box(), { target: { value: command } });
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    await waitFor(() => expect(box().value).toBe(''));
+    expect(api.sessionCreate).toHaveBeenCalledWith('w1', 'claude', undefined, undefined);
+  });
+
+  it('retains the command on failure and still sends similar prefixes as prompts', async () => {
+    vi.mocked(api.sessionCreate).mockRejectedValue(new Error('startup failed'));
+    renderComposer();
+    fireEvent.change(box(), { target: { value: '/clear Test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(api.sessionCreate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(box().value).toBe('/clear Test');
+    expect(useUiStore.getState().sessionByWorkspace.w1).toBe('s1');
+
+    fireEvent.change(box(), { target: { value: '/clearance' } });
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    await waitFor(() => expect(api.sessionPrompt).toHaveBeenCalledWith('s1', '/clearance', []));
+  });
+});
+
+it('opens a draft image and closes it without changing the draft', async () => {
+  const { container } = renderComposer();
+  const original = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+  Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: () => 'blob:draft-image' });
+  try {
+    fireEvent.change(box(), { target: { value: 'Look at this' } });
+    const file = new File(['image'], 'example.png', { type: 'image/png' });
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    fireEvent.click(await screen.findByText('example.png'));
+    expect(screen.getByRole('img', { name: 'example.png' }).getAttribute('src')).toBe('blob:draft-image');
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(box().value).toBe('Look at this');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove example.png' }));
+    expect(screen.queryByRole('button', { name: 'View example.png' })).toBeNull();
+  } finally {
+    if (original) Object.defineProperty(URL, 'createObjectURL', original);
+    else Reflect.deleteProperty(URL, 'createObjectURL');
+  }
 });

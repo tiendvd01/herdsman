@@ -96,6 +96,7 @@ query({ prompt: <AsyncIterable input>, options: {
 |---|---|
 | Hội thoại nhiều lượt | Input dạng async iterable; message mới từ socket được đẩy vào hàng đợi |
 | Event log | Mọi message của SDK được gán `seq` tăng dần, append vào `<app data>/sessions/<sid>/events.ndjson`. `stream_event` (delta chữ) **chỉ gửi trực tiếp, không ghi log** cho nhẹ; message hoàn chỉnh mới được ghi |
+| Ảnh đính kèm | Sidecar lưu ảnh trong thư mục `<app data>/sessions/<sid>/images/` trước khi append tin nhắn. Log chứa loại ảnh và mã tham chiếu, còn app đọc ảnh theo session khi hiển thị hàng tương ứng. |
 | Socket | `<app data>/sock/<sid>.sock`. Lệnh: `subscribe{from_seq}`, `prompt{text, images}`, `interrupt`, `permission_response{id, decision, updatedInput?}`, `set_model`, `set_permission_mode`, `shutdown` |
 | Chế độ quyền | `permissionMode` theo session: `default` (hỏi mọi lần, mặc định), `acceptEdits` (tự cho phép sửa file trong `cwd`; lệnh shell vẫn hỏi), `bypassPermissions` (không hỏi; UI bắt xác nhận và hiện badge cảnh báo). Đổi lúc chạy bằng `set_permission_mode` |
 | Duyệt quyền | `canUseTool` tạo request `{id, tool, input}`, ghi vào log và gửi cho app nếu app đang nối. Promise **chờ không giới hạn** đến khi có quyết định (app mở lại vẫn trả lời được) |
@@ -116,7 +117,7 @@ Transcript của Claude Code (`~/.claude/projects/…/<sid>.jsonl`) vẫn còn. 
 
 ### 4.2 `agent_client`
 - Mỗi session đang hiển thị giữ một kết nối socket tới sidecar: `subscribe{from_seq = last_seen}`, nhận phần phát lại rồi tới stream trực tiếp. Sự kiện được đẩy lên UI theo batch khoảng 16–50 ms.
-- Socket không nối được trong khi `hc` báo terminal vẫn live: retry với backoff. Terminal đã `finished`: hiện nút Resume.
+- Socket không nối được trong khi `hc` báo terminal vẫn live: retry với backoff. Terminal đã `finished`: có thể đọc lịch sử từ log trên đĩa và hiện nút Resume.
 - Không mở session nào thì app không nối socket, chỉ theo dõi status qua `hc` events (cho badge và notification).
 
 ### 4.3 `project_store` (SQLite)
@@ -144,7 +145,7 @@ Không có bảng spaces. Đơn vị tổ chức là Project (thư mục local) 
 - Xoá project: liệt kê terminal `hc` có label `herdsman.project=<pid>` còn live → hộp xác nhận → `terminal.kill` → `terminal.rm`.
 
 ### 4.6 Tìm kiếm
-SQLite FTS5 (`message_fts`), index mỗi message hoàn chỉnh khi ghi vào event log. Mặc định tìm trong workspace đang mở, mở rộng được ra mọi project, gồm cả workspace đã archive.
+SQLite FTS5 (`message_fts`) lập chỉ mục cho mỗi message hoàn chỉnh. Menu ⌘K tìm theo tiêu đề hoặc nội dung, cho phép chọn workspace hiện tại, project hiện tại hoặc toàn bộ session, gồm cả workspace đã archive. Phạm vi được áp dụng trước giới hạn kết quả. Với lịch sử Claude đã liên kết, ID hội thoại xác định vị trí thông qua session Herdsman. Với hội thoại ngoài Herdsman, vị trí được xác định theo thư mục khi có thể. Menu có các tab All, Workspaces, Projects, Actions và Settings, giữ từ khóa khi đổi tab hoặc phạm vi và hiển thị riêng trạng thái tải, lỗi và không có kết quả.
 
 ## 5. Frontend
 
@@ -153,14 +154,15 @@ SQLite FTS5 (`message_fts`), index mỗi message hoàn chỉnh khi ghi vào even
 ┌ Sidebar ──────┐┌ project › workspace · ⎇ branch · status · model · ctx ┐┌ Panel phải ─┐
 │ + Project mới ││ [s1 ●] [s2 ◐] [+]                        [lịch sử]   ││ Agents      │
 │ ▾ app-a    +  ││                                                       ││ Background  │
-│   ⎇ fix-123 ● ││  conversation (virtual list, stream delta)            ││ Files       │
+│   ⎇ fix-123 ● ││  conversation (virtual list, stream delta)            ││ Git         │
 │   ▢ refactor  ││  ...                                                  ││ Log         │
 │ ▸ app-b    +  ││ ┌ input: text / ảnh / slash · chế độ quyền ─────────┐ ││             │
 │ hc ● · ⚙      ││ └───────────────────────────────────────────────────┘ ││             │
 └───────────────┘└───────────────────────────────────────────────────────┘└─────────────┘
 ```
 - Sidebar: project → workspace (⎇ = worktree, ▢ = thư mục project, chấm vàng = có session chờ).
-- Hàng tab: chỉ session chưa xong và session đang xem; session đã xong mở lại từ lịch sử thành tab tạm.
+- **Files** nằm cạnh **Git** ở panel phải và tải cây từ thư mục gốc của project đang chọn. **Git** hiển thị thay đổi của workspace. Tab file dùng CodeMirror 6 để xem và sửa văn bản.
+- Hàng tab gồm các file đang mở, session chưa xong và session đang xem. Session đã xong mở lại từ lịch sử thành tab tạm.
 - **Log** hiển thị màn hình terminal của sidecar (xterm.js qua `terminal.attach`), dùng để debug. Không còn TUI của Claude Code.
 
 ### 5.1b Giao diện (shadcn/ui minimal)

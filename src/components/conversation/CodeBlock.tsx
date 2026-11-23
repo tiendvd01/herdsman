@@ -1,6 +1,9 @@
 // Code highlighting with Shiki (languages loaded lazily); Shiki builds the HTML from escaped text.
 import { useEffect, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
+import { toast } from '@/components/ui/toast';
 import type { HighlighterCore } from 'shiki';
 
 let hl: Promise<HighlighterCore> | null = null;
@@ -25,7 +28,24 @@ async function render(code: string, lang: string) {
 
 export function CodeBlock({ code, lang, plain }: { code: string; lang?: string; plain?: boolean }) {
   const [html, setHtml] = useState<string | null>(() => cache.get(`${lang ?? 'text'}\0${code}`) ?? null);
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'pending' | 'copied'>('idle');
+  useEffect(() => {
+    if (copyState !== 'copied') return;
+    const timer = window.setTimeout(() => setCopyState('idle'), 1200);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
+  async function copyCode() {
+    if (copyState === 'pending') return;
+    setCopyState('pending');
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopyState('copied');
+    } catch {
+      setCopyState('idle');
+      toast('Could not copy code. Try again.', 'error');
+    }
+  }
   useEffect(() => {
     if (plain) return;
     let alive = true;
@@ -40,18 +60,12 @@ export function CodeBlock({ code, lang, plain }: { code: string; lang?: string; 
     <div className="group relative my-2 overflow-hidden rounded-lg border border-border bg-code">
       <div className="flex h-8 items-center justify-between border-b border-border bg-surface px-3 text-xs text-muted-foreground">
         <span className="font-mono">{lang ?? 'text'}</span>
-        <button
-          className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100"
-          onClick={() => {
-            navigator.clipboard.writeText(code);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          }}
-          aria-label="Copy code"
-        >
-          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-          {copied ? 'Copied' : 'Copy'}
-        </button>
+        <Button variant="ghost" size="xs"
+          className="opacity-0 group-hover:opacity-100 focus:opacity-100"
+          onClick={() => void copyCode()} aria-disabled={copyState === 'pending'} aria-label="Copy code">
+          {copyState === 'pending' ? <Spinner label="Copying" /> : copyState === 'copied' ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
+          <span aria-live="polite">{copyState === 'pending' ? 'Copying…' : copyState === 'copied' ? 'Copied' : 'Copy'}</span>
+        </Button>
       </div>
       {html && !plain ? (
         <div className="overflow-x-auto p-3 font-mono text-content-code leading-[1.7] [&_pre]:m-0" dangerouslySetInnerHTML={{ __html: html }} />

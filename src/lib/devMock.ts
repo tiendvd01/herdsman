@@ -19,9 +19,10 @@ const S = (id: string, ws: string, title: string, status: string, mode = 'ask') 
 const SESSIONS = [S('s1', 'w1', 'Draw the login flow', 'blocked'), S('s2', 'w1', 'Write e2e tests', 'working', 'accept_edits'), S('s3', 'w2', 'Split the store', 'idle', 'bypass'), S('s4', 'w3', 'Rate limit', 'error')];
 
 const t = (seq: number, e: Record<string, unknown>) => ({ seq, ts: now, ...e });
+const LOGIN_PROMPT = 'Draw the OAuth login flow, with a comparison table and a chart of failed logins per day, then update the README.';
 const EVENTS = [
   t(1, { type: 'session_started', engine: 'claude', model: 'claude-opus-5-5', cwd: WS[0].work_dir, permission_mode: 'ask', resumed: false }),
-  t(2, { type: 'user_message', text: 'Draw the OAuth login flow, with a comparison table and a chart of failed logins per day, then update the README.', source: 'app' }),
+  t(2, { type: 'user_message', text: LOGIN_PROMPT, source: 'app' }),
   t(3, { type: 'assistant_message', message_id: 'm1', blocks: [{ kind: 'text', text: 'Here is the current **OAuth login flow**:\n\n```mermaid\nsequenceDiagram\n  participant U as User\n  participant A as App\n  participant G as Google\n  U->>A: Click "Sign in"\n  A->>G: Redirect /authorize\n  G-->>A: code\n  A->>G: Exchange code for token\n  G-->>A: access_token\n  A-->>U: Home page\n```\n\n| Step | Current | After fix |\n|---|---|---|\n| Token storage | localStorage | httpOnly cookie |\n| Refresh | None | Automatic |\n| PKCE | No | Yes |\n\nExpiry time: $t_{exp} = t_0 + 3600$\n\n```chart\n{"data":{"values":[{"day":"Mon","fails":12},{"day":"Tue","fails":7},{"day":"Wed","fails":15},{"day":"Thu","fails":4},{"day":"Fri","fails":2}]},"mark":{"type":"bar","cornerRadiusEnd":3},"encoding":{"x":{"field":"day","type":"nominal","title":"Day","sort":null},"y":{"field":"fails","type":"quantitative","title":"Failed logins"}},"height":160}\n```' }] }),
   t(4, { type: 'tool_use', tool_use_id: 'u1', tool: 'Bash', input: { command: 'pnpm test auth', description: 'Run auth tests' } }),
   t(5, { type: 'tool_result', tool_use_id: 'u1', is_error: false, content: '✓ auth/login.test.ts (6 tests)\n✓ auth/token.test.ts (4 tests)\n\nTest Files  2 passed' }),
@@ -49,6 +50,8 @@ const extraEvents: Record<string, Record<string, unknown>[]> = {};
 let mockSeq = 1000;
 
 export function installDevMock() {
+  const fileContents = new Map<string, string>();
+  const sampleFile = (path: string) => path === 'README.md' ? '# Herdsman\n\nA workspace for coding agents.\n' : 'export const workspace = "Herdsman";\n';
   mockWindows('main');
   mockIPC(
     (cmd, args) => {
@@ -68,7 +71,7 @@ export function installDevMock() {
           return pr ? { ...pr } : null;
         }
         case 'workspace_list':
-          return WS.filter((w) => (!a.projectId || w.project_id === a.projectId) && !w.archived_at).map((w) => ({ ...w }));
+          return WS.filter((w) => (!a.projectId || w.project_id === a.projectId) && (a.includeArchived || !w.archived_at)).map((w) => ({ ...w }));
         case 'workspace_rename': {
           const w = WS.find((x) => x.id === a.id);
           if (w) w.name = a.name;
@@ -93,6 +96,8 @@ export function installDevMock() {
         }
         case 'session_history':
           return SESSIONS.filter((s) => s.workspace_id === a.workspaceId);
+        case 'session_get':
+          return SESSIONS.find((s) => s.id === a.id);
         case 'session_open':
           setTimeout(() => emit('session:events', { session_id: a.id, events: [...(a.id === 's1' ? EVENTS : EVENTS.slice(0, 2)), ...(extraEvents[a.id] ?? [])] }), 50);
           return null;
@@ -125,20 +130,60 @@ export function installDevMock() {
           return [{ terminal: 't3', command: 'pnpm dev', state: 'live', exit_code: null, created_ms: now - 3e5 }, { terminal: 't4', command: 'cargo test', state: 'finished', exit_code: 0, created_ms: now - 9e5 }];
         case 'terminal_read':
           return '── herdsman-agent · claude · ~/herdsman\n› Draw the login flow…\n⏺ Bash pnpm test auth\n⏺ Edit README.md\n? Awaiting approval: Edit';
-        case 'files_changed':
-          return [{ status: 'M', path: 'README.md' }, { status: '??', path: 'src/auth/pkce.ts' }];
-        case 'git_branches':
-          return { is_repo: true, branches: ['main', 'develop'], current: 'main' };
-        case 'plugin:webview|set_webview_zoom': {
-          // Spec 006: no native webview here — preview the zoom with CSS zoom (see currentZoomFactor).
-          const z = Number((args as Record<string, unknown>)?.value) || 1;
-          document.documentElement.style.zoom = z === 1 ? '' : String(z);
+        case 'project_files_list':
+          if (a.path === '') return [
+            { name: 'src', path: 'src', directory: true },
+            { name: 'README.md', path: 'README.md', directory: false },
+          ];
+          if (a.path === 'src') return [{ name: 'workspace.ts', path: 'src/workspace.ts', directory: false }];
+          return [];
+        case 'project_file_read':
+          return { text: fileContents.get(JSON.stringify([a.projectId, a.path])) ?? sampleFile(a.path), writable: true };
+        case 'project_file_save': {
+          const key = JSON.stringify([a.projectId, a.path]);
+          if ((fileContents.get(key) ?? sampleFile(a.path)) !== a.baseline) {
+            throw new Error('This file changed on disk.');
+          }
+          fileContents.set(key, a.text);
           return null;
         }
-        case 'search':
-          return [{ session_id: 's1', seq: 2, snippet: 'Draw the OAuth [[login]] flow', workspace_id: 'w1', workspace_name: 'Fix login OAuth', workspace_archived: false, project_id: 'p1', project_name: 'herdsman', session_title: 'Draw the login flow' }];
-        case 'claude_search':
-          return [{ claude_session_id: 'c1', cwd: '/tmp/herdsman', title: 'Fix login OAuth', snippet: '…draw the OAuth login flow…', updated_at: Date.now() - 3600_000, workspace_id: 'w1', workspace_name: 'Fix login OAuth', project_id: 'p1', project_name: 'herdsman' }];
+        case 'files_changed':
+          return [{ status: 'M', path: 'README.md' }, { status: '??', path: 'src/auth/pkce.ts' }];
+        case 'file_diff':
+          return '@@ -1 +1 @@\n-# Agent workspace\n+# Herdsman';
+        case 'git_branches':
+          return { is_repo: true, branches: ['main', 'develop'], current: 'main' };
+        case 'plugin:webview|set_webview_zoom':
+          throw new Error('Native webview zoom is unavailable in the browser preview');
+        case 'search': {
+          const query = a.query.toLowerCase().trim();
+          return SESSIONS.flatMap((session) => {
+            const workspace = WS.find((w) => w.id === session.workspace_id)!;
+            const project = [P, P2].find((p) => p.id === workspace.project_id)!;
+            const excerpt = session.id === 's1' ? LOGIN_PROMPT : '';
+            const snippet = excerpt.toLowerCase().includes(query) ? excerpt : '';
+            if ((a.workspaceId && a.workspaceId !== workspace.id) || (a.projectId && a.projectId !== project.id)
+              || (!session.title.toLowerCase().includes(query) && !snippet)) return [];
+            return [{
+              session_id: session.id, seq: snippet ? 2 : 0, snippet, workspace_id: workspace.id,
+              workspace_name: workspace.name, workspace_archived: !!workspace.archived_at, project_id: project.id,
+              project_name: project.name, session_title: session.title, engine_session_id: null,
+            }];
+          });
+        }
+        case 'claude_search': {
+          const text = 'Draw the OAuth login flow';
+          const workspace = WS[0];
+          if (!text.toLowerCase().includes(a.query.trim().toLowerCase())
+            || (a.workspaceId && a.workspaceId !== workspace.id) || (a.projectId && a.projectId !== P.id)) return [];
+          return [{
+            claude_session_id: 'c1', session_id: 's1', cwd: workspace.work_dir, title: 'Fix login OAuth',
+            snippet: text, updated_at: now, workspace_id: workspace.id, workspace_name: workspace.name,
+            project_id: P.id, project_name: P.name,
+          }];
+        }
+        case 'claude_open':
+          return SESSIONS[0];
         default:
           return null;
       }

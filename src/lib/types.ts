@@ -53,11 +53,13 @@ export interface SearchHit {
   project_id: string;
   project_name: string;
   session_title: string | null;
+  engine_session_id: string | null;
 }
 
 /** Hit in a Claude Code transcript (~/.claude/projects), not a Herdsman/hc session. */
 export interface ClaudeHit {
   claude_session_id: string;
+  session_id?: string | null;
   cwd: string | null;
   title: string | null;
   snippet: string;
@@ -156,11 +158,16 @@ export interface UsageLimits {
   seven_day?: LimitWindow | null;
 }
 
+export interface ChatAttachment {
+  media_type: string;
+  attachment_id?: string;
+}
+
 export type AgentEvent = Base &
   (
     | { type: 'session_started'; engine: string; model: string | null; cwd: string; permission_mode: PermissionMode; resumed: boolean }
     | { type: 'engine_session'; engine_session_id: string; model: string | null }
-    | { type: 'user_message'; text: string; images?: { media_type: string }[]; source: 'app' | 'hc_send' }
+    | { type: 'user_message'; text: string; images?: ChatAttachment[]; source: 'app' | 'hc_send' }
     | { type: 'delta'; message_id: string | null; text: string; parent_tool_use_id?: string | null }
     | { type: 'assistant_message'; message_id: string | null; blocks: { kind: 'text' | 'thinking'; text: string }[]; parent_tool_use_id?: string | null }
     | { type: 'tool_use'; tool_use_id: string; tool: string; input: Record<string, unknown>; parent_tool_use_id?: string | null }
@@ -168,6 +175,7 @@ export type AgentEvent = Base &
     | { type: 'permission_request'; id: string; tool: string; input: Record<string, unknown>; cwd: string; tool_use_id?: string }
     | { type: 'permission_resolved'; id: string; decision: 'allow' | 'deny' | 'cancelled'; by: string }
     | { type: 'permission_mode_changed'; mode: PermissionMode }
+    | { type: 'model_fallback'; unavailable_model: string; message: string }
     | { type: 'model_changed'; model: string; previous: string | null }
     | { type: 'status'; state: SessionStatus; kind: string | null }
     | { type: 'usage_snapshot'; context_pct: number | null; limits: UsageLimits | null }

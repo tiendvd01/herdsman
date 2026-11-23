@@ -19,5 +19,7 @@ export const useAppInfo = () => useQuery({ queryKey: qk.appInfo, queryFn: api.ap
 export const useProjects = () => useQuery({ queryKey: qk.projects, queryFn: api.projectList });
 export const useWorkspaces = (projectId: string | null, archived = false) =>
   useQuery({ queryKey: qk.workspaces(projectId ?? '', archived), queryFn: () => api.workspaceList(projectId!, archived), enabled: !!projectId });
+export const usePaletteWorkspaces = () =>
+  useQuery({ queryKey: [...qk.allWorkspaces, 'palette'], queryFn: () => api.workspaceList(undefined, true) });
 export const useSessions = (workspaceId: string | null) =>
   useQuery({ queryKey: qk.sessions(workspaceId ?? ''), queryFn: () => api.sessionHistory(workspaceId!), enabled: !!workspaceId });

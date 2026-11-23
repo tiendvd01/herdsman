@@ -13,7 +13,7 @@ export function DialogContent({ className, children, hideClose, ...props }: Reac
       <D.Overlay className="fixed inset-0 z-50 bg-scrim" />
       <D.Content
         className={cn(
-          'fixed left-1/2 top-[120px] z-50 flex w-[min(480px,calc(100vw-32px))] -translate-x-1/2 flex-col gap-4 rounded-xl border border-border bg-background p-6 shadow-lg focus:outline-none',
+          'fixed left-1/2 top-[min(120px,20%)] z-50 flex max-h-[75%] w-[min(480px,calc(100%-32px))] overflow-y-auto -translate-x-1/2 flex-col gap-4 rounded-xl border border-border bg-background p-6 shadow-lg focus:outline-none',
           className,
         )}
         {...props}

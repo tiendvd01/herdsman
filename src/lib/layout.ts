@@ -13,7 +13,7 @@ export const COMPOSER = { min: 120, max: 1200, def: 300 } as const satisfies Wid
 /** The expanded editor never takes more than this share of the window height. */
 export const COMPOSER_VIEWPORT_SHARE = 0.8;
 /** The conversation column never gets narrower than this. */
-export const MAIN_MIN = 400;
+export const MAIN_MIN = 396;
 /** Arrow-key step on a resize handle. */
 export const KEY_STEP = 16;
 

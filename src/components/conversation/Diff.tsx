@@ -1,3 +1,4 @@
+import { TruncatedText } from '@/components/ui/truncated-text';
 import { cn } from '@/lib/utils';
 import type { DiffLine } from './lineDiff';
 
@@ -20,7 +21,7 @@ export function Diff({ file, lines, maxHeight = 360, bare }: { file?: string; li
     <div className={cn('overflow-hidden', !bare && 'rounded-md border border-border')} data-testid="diff">
       {file && !bare ? (
         <div className="flex items-center justify-between gap-2 border-b border-border bg-surface px-3 py-1.5 font-mono text-xs text-muted-foreground">
-          <span className="truncate">{file}</span>
+          <TruncatedText className="truncate">{file}</TruncatedText>
           <DiffStat add={add} del={del} />
         </div>
       ) : null}

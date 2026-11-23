@@ -1,8 +1,10 @@
 // Spec 006: whole-UI zoom steps and the content text-size step, plus applying them to the page.
 
-/** Fixed zoom steps; 1 is the default (the compact UI at 100%). */
+/** Fixed zoom steps relative to the app's default display scale. */
 export const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.2, 1.35, 1.5] as const;
 export const ZOOM_DEFAULT = 1;
+/** Spec 024: 100% now renders at the previous 110% scale. */
+const BASE_UI_SCALE = 1.1;
 /** Content text-size offset in px from the default (13px body / 12px code). */
 export const CONTENT_STEP = { min: -2, max: 4, def: 0 } as const;
 export const CONTENT_BASE_PX = 13;
@@ -37,20 +39,23 @@ const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in 
  * Browser preview (?mock): CSS `zoom` on <html>, see currentZoomFactor() for the coordinate fix-up.
  */
 export async function applyZoom(z: number): Promise<void> {
-  const zoom = clampZoom(z);
+  const scale = BASE_UI_SCALE * clampZoom(z);
   if (isTauri()) {
     try {
       const { getCurrentWebview } = await import('@tauri-apps/api/webview');
-      await getCurrentWebview().setZoom(zoom);
+      await getCurrentWebview().setZoom(scale);
+      document.documentElement.style.zoom = '';
       return;
     } catch {
       // fall through to CSS zoom
     }
   }
-  document.documentElement.style.zoom = zoom === 1 ? '' : String(zoom);
+  document.documentElement.style.zoom = String(scale);
+  // CSS zoom does not emit a viewport resize on its own.
+  window.dispatchEvent(new Event('resize'));
 }
 
-/** CSS zoom factor on <html> (browser preview only); 1 when native zoom is used. */
+/** CSS zoom factor on <html> for the preview or fallback; 1 when native zoom is used. */
 export function currentZoomFactor(): number {
   if (typeof document === 'undefined') return 1;
   const z = parseFloat(document.documentElement.style.zoom);

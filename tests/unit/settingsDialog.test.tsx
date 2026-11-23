@@ -1,3 +1,4 @@
+import { TooltipProvider } from '@/components/ui/tooltip';
 // Spec 010: Settings dialog — opens from the store, theme radio group, font picker + reset.
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render as rtlRender, screen } from '@testing-library/react';
@@ -24,7 +25,7 @@ beforeEach(() => {
   useUiStore.setState({ settingsOpen: false, theme: 'system', lightTheme: 'light', darkTheme: 'dark', uiFont: 'geist', codeFont: 'geist-mono' });
 });
 
-const render = (ui: React.ReactElement) => rtlRender(<QueryClientProvider client={new QueryClient()}>{ui}</QueryClientProvider>);
+const render = (ui: React.ReactElement) => rtlRender(<QueryClientProvider client={new QueryClient()}><TooltipProvider>{ui}</TooltipProvider></QueryClientProvider>);
 const open = () => act(() => useUiStore.getState().setSettingsOpen(true));
 
 describe('SettingsDialog', () => {

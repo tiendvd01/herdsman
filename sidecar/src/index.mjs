@@ -3,6 +3,8 @@
 // Usage: node src/index.mjs --session <sid> --cwd <dir> --engine claude|echo
 //          [--permission-mode ask|accept_edits|auto|bypass] [--model <m>] [--data-dir <dir>]
 import path from 'node:path';
+import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import { parseArgs } from 'node:util';
 import { EventLog, readMeta, writeMeta } from './eventlog.mjs';
@@ -20,6 +22,7 @@ const { values: args } = parseArgs({
     engine: { type: 'string', default: 'claude' },
     'permission-mode': { type: 'string', default: 'ask' },
     model: { type: 'string' },
+    'inherited-model': { type: 'boolean', default: false },
     'data-dir': { type: 'string' },
     resume: { type: 'boolean', default: false },
   },
@@ -83,13 +86,14 @@ function requestPermission(tool, input, extra = {}) {
 }
 
 const resumeId = meta.engine_session_id;
-// Model đã chọn (meta.model, lưu khi set_model) thắng --model: app không truyền --model khi resume,
-// nên agent chạy lại vẫn dùng model người dùng chọn gần nhất (specs/005 FR-007).
-let currentModel = meta.model || args.model || null;
+// A stored null means the session has already fallen back to Claude's default.
+let currentModel = Object.hasOwn(meta, 'model') ? meta.model : (args.model ?? null);
+const inheritedModel = !!currentModel && (meta.inherited_model ?? (!meta.engine && args['inherited-model']));
 const ctx = {
   cwd: args.cwd,
   mode,
   model: currentModel ?? undefined,
+  inheritedModel,
   resumeId,
   emit,
   requestPermission,
@@ -99,6 +103,17 @@ const ctx = {
     if (model) currentModel = model;
     emit('engine_session', { engine_session_id: id, model: model ?? null });
   },
+  onModelFallback(unavailable) {
+    currentModel = null;
+    saveMeta({ model: null, inherited_model: false });
+    emit('model_fallback', {
+      unavailable_model: unavailable,
+      message: `Claude model "${unavailable}" is unavailable. Retrying with Claude’s default model.`,
+    });
+  },
+  onInitialModelSettled() {
+    if (meta.inherited_model) saveMeta({ inherited_model: false });
+  },
   onTurnState(state) {
     if (pending.size === 0) setStatus(state);
   },
@@ -106,7 +121,29 @@ const ctx = {
 const engine = args.engine === 'echo' ? createEchoEngine(ctx) : createClaudeEngine(ctx);
 
 function submitPrompt(text, images = [], source = 'app') {
-  emit('user_message', { text, images: images.map((i) => ({ media_type: i.media_type })), source });
+  const stored = [];
+  try {
+    const dir = path.join(sessionDir, 'images');
+    if (images.length) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const attachments = images.map(({ media_type, data_b64 }) => {
+      const attachment_id = randomUUID().replaceAll('-', '');
+      const file = path.join(dir, attachment_id);
+      const fd = fs.openSync(file, 'wx', 0o600);
+      stored.push(file);
+      try {
+        fs.writeFileSync(fd, data_b64);
+      } finally {
+        fs.closeSync(fd);
+      }
+      return { media_type, attachment_id };
+    });
+    emit('user_message', { text, images: attachments, source });
+  } catch {
+    for (const file of stored) {
+      try { fs.unlinkSync(file); } catch { /* The session directory may already be gone. */ }
+    }
+    throw Object.assign(new Error('Could not save the message and its images'), { code: 'message_storage' });
+  }
   setStatus('working');
   engine.prompt(text, images);
 }
@@ -172,7 +209,7 @@ async function onCommand(cmd) {
       }
       const previous = currentModel;
       currentModel = model;
-      saveMeta({ model });
+      saveMeta({ model, inherited_model: false });
       emit('model_changed', { model, previous });
       return;
     }
@@ -189,8 +226,8 @@ server = new SocketServer(sockPath, {
   info: () => ({ session_id: sid, engine: args.engine, status, permission_mode: mode, engine_session_id: meta.engine_session_id ?? null }),
   onCommand,
 });
+saveMeta({ engine: args.engine, cwd: args.cwd, permission_mode: mode, model: currentModel, inherited_model: inheritedModel });
 await server.listen();
-saveMeta({ engine: args.engine, cwd: args.cwd, permission_mode: mode });
 
 emit('session_started', { engine: args.engine, model: ctx.model ?? null, cwd: args.cwd, permission_mode: mode, resumed: !!resumeId });
 reportStatus('idle');

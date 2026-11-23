@@ -11,6 +11,7 @@ export function ConfirmDialog({
   destructive,
   busy,
   onConfirm,
+  onCloseAutoFocus,
   children,
 }: {
   open: boolean;
@@ -21,13 +22,14 @@ export function ConfirmDialog({
   destructive?: boolean;
   busy?: boolean;
   onConfirm: () => void;
+  onCloseAutoFocus?: React.ComponentProps<typeof A.Content>['onCloseAutoFocus'];
   children?: React.ReactNode;
 }) {
   return (
     <A.Root open={open} onOpenChange={onOpenChange}>
       <A.Portal>
         <A.Overlay className="fixed inset-0 z-50 bg-scrim" />
-        <A.Content className="fixed left-1/2 top-[140px] z-50 flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 flex-col gap-4 rounded-xl border border-border bg-background p-6 shadow-lg">
+        <A.Content onCloseAutoFocus={onCloseAutoFocus} className="fixed left-1/2 top-[min(140px,20%)] z-50 flex max-h-[75%] w-[min(460px,calc(100%-32px))] overflow-y-auto -translate-x-1/2 flex-col gap-4 rounded-xl border border-border bg-background p-6 shadow-lg">
           <div className="flex flex-col gap-1.5">
             <A.Title className="text-[16px] font-semibold leading-tight">{title}</A.Title>
             {description ? <A.Description className="text-[13px] text-muted-foreground">{description}</A.Description> : <A.Description />}

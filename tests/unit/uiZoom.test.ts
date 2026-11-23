@@ -1,8 +1,44 @@
 // Spec 006: zoom steps, content text size, shortcut matching and the v1 → v2 migration.
-import { describe, expect, it } from 'vitest';
-import { clampContentStep, clampZoom, nextZoom, zoomAtLimit, ZOOM_STEPS } from '@/lib/uiZoom';
+import { describe, expect, it, vi } from 'vitest';
+import { applyZoom, clampContentStep, clampZoom, currentZoomFactor, formatZoom, nextZoom, zoomAtLimit, ZOOM_STEPS } from '@/lib/uiZoom';
 import { matchZoomShortcut } from '@/lib/zoomShortcuts';
 import { migrateUi, useUiStore } from '@/stores/useUiStore';
+
+const { setZoom } = vi.hoisted(() => ({ setZoom: vi.fn() }));
+vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ setZoom }) }));
+
+describe('rendered UI zoom', () => {
+  it('renders the reset level at the previous 110% scale in the browser', async () => {
+    try {
+      const store = useUiStore.getState();
+      store.zoomIn();
+      store.zoomReset();
+      const { zoom } = useUiStore.getState();
+      await applyZoom(zoom);
+      expect(formatZoom(zoom)).toBe('100%');
+      expect(currentZoomFactor()).toBe(1.1);
+      await applyZoom(nextZoom(zoom, 1));
+      expect(currentZoomFactor()).toBeCloseTo(1.21);
+    } finally {
+      document.documentElement.style.zoom = '';
+    }
+  });
+
+  it('passes the scaled value to Tauri and uses the same scale if native zoom fails', async () => {
+    vi.stubGlobal('__TAURI_INTERNALS__', {});
+    try {
+      await applyZoom(1);
+      expect(setZoom).toHaveBeenLastCalledWith(1.1);
+      expect(currentZoomFactor()).toBe(1);
+      setZoom.mockRejectedValueOnce(new Error('Zoom unavailable'));
+      await applyZoom(1.5);
+      expect(currentZoomFactor()).toBeCloseTo(1.65);
+    } finally {
+      vi.unstubAllGlobals();
+      document.documentElement.style.zoom = '';
+    }
+  });
+});
 
 const key = (code: string, mods: Partial<KeyboardEventInit> = {}) => ({
   key: '',

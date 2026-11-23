@@ -40,13 +40,15 @@ function toolResultText(content) {
 }
 
 /**
- * @param {{cwd: string, mode: string, model?: string, resumeId?: string,
+ * @param {{cwd: string, mode: string, model?: string, inheritedModel?: boolean, resumeId?: string,
  *   emit: (type: string, fields?: object, opts?: {live?: boolean}) => void,
  *   requestPermission: (tool: string, input: object, extra: object) => Promise<{decision: string, updated_input?: object}>,
  *   onEngineSession: (id: string, model?: string) => void,
+ *   onModelFallback: (unavailable: string) => void,
+ *   onInitialModelSettled: () => void,
  *   onTurnState: (state: 'working'|'idle'|'error') => void}} ctx
  */
-export function createClaudeEngine(ctx) {
+export function createClaudeEngine(ctx, runQuery = query) {
   let input = null;
   let q = null;
   let running = false;
@@ -57,6 +59,38 @@ export function createClaudeEngine(ctx) {
   let models = null; // cache supportedModels()
   let commands = null; // cache supportedCommands(), thay khi engine báo commands_changed
   let lastTurnModel = null;
+  let fallbackChange;
+  let initial = ctx.inheritedModel && model
+    ? { requested: model, prompt: null, queued: [], rejected: false, hasOutput: false, retrying: false, overridden: false }
+    : null;
+
+  function finishInitialTurn() {
+    const first = initial;
+    initial = null;
+    ctx.onInitialModelSettled();
+    for (const prompt of first.queued) input.push(prompt);
+  }
+
+  async function retryInitialTurn(stream) {
+    const first = initial;
+    if (!first?.rejected || first.hasOutput || first.retrying || first.overridden || interrupted) return false;
+    try {
+      fallbackChange = stream.setModel();
+      await fallbackChange;
+    } catch (err) {
+      ctx.emit('error', { code: 'engine', message: String(err?.message || err), recoverable: true });
+      return false;
+    } finally {
+      fallbackChange = undefined;
+    }
+    model = undefined;
+    lastTurnModel = null;
+    ctx.onModelFallback(first.requested);
+    if (interrupted) return false;
+    first.retrying = true;
+    input.push(first.prompt);
+    return true;
+  }
 
   function start() {
     input = new InputQueue();
@@ -67,6 +101,7 @@ export function createClaudeEngine(ctx) {
       allowDangerouslySkipPermissions: true,
       settingSources: ['user', 'project', 'local'],
       canUseTool: async (toolName, toolInput, opts) => {
+        if (initial?.prompt) initial.hasOutput = true;
         const res = await ctx.requestPermission(toolName, toolInput, { tool_use_id: opts?.toolUseID, blocked_path: opts?.blockedPath });
         if (res.decision === 'allow') return { behavior: 'allow', updatedInput: res.updated_input ?? toolInput };
         return { behavior: 'deny', message: 'The user denied this request.' };
@@ -75,12 +110,20 @@ export function createClaudeEngine(ctx) {
     if (resumeId) options.resume = resumeId;
     if (model) options.model = model;
     if (process.env.HERDSMAN_CLAUDE_PATH) options.pathToClaudeCodeExecutable = process.env.HERDSMAN_CLAUDE_PATH;
-    q = query({ prompt: input, options });
+    q = runQuery({ prompt: input, options });
     running = true;
     pump(q).catch((err) => {
       ctx.emit('error', { code: 'engine', message: String(err?.message || err), recoverable: true });
       ctx.onTurnState('error');
     }).finally(() => {
+      if (initial?.prompt) {
+        // A dead stream cannot receive prompts waiting for the first result.
+        if (initial.queued.length) {
+          ctx.emit('error', { code: 'engine', message: 'Claude stopped before processing the queued messages. Send them again to continue.', recoverable: true });
+        }
+        initial = null;
+        ctx.onInitialModelSettled();
+      }
       running = false;
       q = null;
     });
@@ -128,13 +171,27 @@ export function createClaudeEngine(ctx) {
         case 'stream_event': {
           const ev = msg.event;
           if (ev?.type === 'message_start') currentMessageId = ev.message?.id ?? null;
+          if (ev?.type === 'content_block_start' && ev.content_block?.type === 'tool_use' && initial?.prompt) initial.hasOutput = true;
           if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+            if (initial?.prompt && ev.delta.text) initial.hasOutput = true;
             ctx.emit('delta', { message_id: currentMessageId, text: ev.delta.text, parent_tool_use_id: msg.parent_tool_use_id ?? null }, { live: true });
           }
           break;
         }
         case 'assistant': {
-          if (!msg.parent_tool_use_id && msg.message?.model) lastTurnModel = msg.message.model;
+          if (initial?.prompt && !initial.hasOutput && !initial.retrying && !initial.overridden
+              && !msg.parent_tool_use_id && msg.error === 'model_not_found') {
+            initial.rejected = true;
+            break;
+          }
+          if (!msg.parent_tool_use_id && msg.message?.model && !msg.error) {
+            lastTurnModel = msg.message.model;
+            if (initial?.prompt && !initial.overridden && msg.message.model !== model) {
+              model = msg.message.model;
+              ctx.onEngineSession(resumeId, model);
+            }
+          }
+          if (initial?.prompt && msg.message?.content?.length) initial.hasOutput = true;
           const blocks = [];
           for (const b of msg.message?.content ?? []) {
             if (b.type === 'text' && b.text) blocks.push({ kind: 'text', text: b.text });
@@ -173,6 +230,8 @@ export function createClaudeEngine(ctx) {
           break;
         }
         case 'result': {
+          if (initial?.prompt && msg.is_error && await retryInitialTurn(stream)) break;
+          if (initial?.prompt) finishInitialTurn();
           const u = msg.usage || {};
           ctx.emit('turn_end', {
             interrupted,
@@ -206,7 +265,13 @@ export function createClaudeEngine(ctx) {
         content.push({ type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data_b64 } });
       }
       content.push({ type: 'text', text });
-      input.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: resumeId || '' });
+      const message = { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: resumeId || '' };
+      if (initial?.prompt) {
+        initial.queued.push(message);
+        return;
+      }
+      if (initial) initial.prompt = message;
+      input.push(message);
     },
     async interrupt() {
       if (q) {
@@ -219,8 +284,19 @@ export function createClaudeEngine(ctx) {
       if (q) await q.setPermissionMode(MODE_MAP[m] || 'default');
     },
     async setModel(m) {
-      if (q) await q.setModel(m);
+      if (fallbackChange) {
+        try { await fallbackChange; } catch { /* The previous turn reports the fallback error. */ }
+      }
+      if (initial) initial.overridden = true;
+      try {
+        if (!running) start();
+        await q.setModel(m);
+      } catch (err) {
+        if (initial) initial.overridden = false;
+        throw err;
+      }
       model = m;
+      if (initial && !initial.prompt) finishInitialTurn();
     },
     /** Danh sách model của Claude Code. Chưa có query thì khởi động query rỗng (chưa gửi tin nào, không tốn token). */
     async listModels() {

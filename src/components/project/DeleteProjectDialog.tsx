@@ -1,3 +1,4 @@
+import { TruncatedText } from '@/components/ui/truncated-text';
 // FR-002a: confirmation lists running sessions/tasks; on confirm, stops them all and removes the project from the app.
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -51,7 +52,7 @@ export function DeleteProjectDialog({ project, open, onOpenChange }: { project: 
               <li key={r.terminal} className="flex gap-2">
                 <span className="font-mono opacity-70">{r.terminal}</span>
                 <span>{r.kind === 'session' ? 'Session' : 'Task'}:</span>
-                <span className="truncate">{r.title}</span>
+                <TruncatedText className="truncate">{r.title}</TruncatedText>
               </li>
             ))}
           </ul>

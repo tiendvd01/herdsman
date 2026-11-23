@@ -1,7 +1,11 @@
+import { FileEditor } from '@/components/files/FileEditor';
+import { useFileClose } from '@/components/files/FileCloseDialog';
+import { isDirty, useFileStore } from '@/stores/useFileStore';
+import { TruncatedText } from '@/components/ui/truncated-text';
 // Center column: workspace header, session tab row, conversation (BR 3.1; FR-009, FR-018, FR-027, FR-029).
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, PanelLeft, PanelRight, Plus, X } from 'lucide-react';
+import { ChevronRight, FileText, PanelLeft, PanelRight, Plus, X } from 'lucide-react';
 import { Button, Kbd } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/alert-dialog';
@@ -10,10 +14,11 @@ import { StatusDot } from '@/components/ui/status-dot';
 import { EngineIcon } from '@/components/ui/engine-icon';
 import { HistoryPopover } from '@/components/history/HistoryPopover';
 import { SessionView } from '@/components/conversation/SessionView';
-import { api } from '@/lib/api';
+import { api, errMsg } from '@/lib/api';
+import { toast } from '@/components/ui/toast';
 import { createSession } from '@/lib/actions';
 import { qk, useProjects, useSessions, useWorkspaces } from '@/lib/queries';
-import type { Session, SessionStatus, Workspace } from '@/lib/types';
+import type { Project, Session, SessionStatus, Workspace } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { IS_MAC, TRAFFIC_LIGHTS_PAD } from '@/lib/platform';
 import { SHORTCUT_ARIA, SHORTCUT_LABEL } from '@/lib/sidebarShortcuts';
@@ -28,11 +33,11 @@ export function WorkspaceView() {
   const projectId = useUiStore((s) => s.projectId);
   const workspaceId = useUiStore((s) => s.workspaceId);
   const { data: projects = [] } = useProjects();
-  const { data: workspaces = [] } = useWorkspaces(projectId);
+  const { data: workspaces = [] } = useWorkspaces(projectId, true);
   const project = projects.find((p) => p.id === projectId);
   const ws = workspaces.find((w) => w.id === workspaceId);
 
-  if (!project || !ws) {
+  if (!project) {
     return (
       <>
         <TopBar />
@@ -40,7 +45,7 @@ export function WorkspaceView() {
       </>
     );
   }
-  return <WorkspacePane key={ws.id} projectName={project.name} ws={ws} />;
+  return <WorkspacePane key={ws?.id ?? project.id} project={project} ws={ws} />;
 }
 
 function SidebarToggle() {
@@ -59,7 +64,7 @@ function SidebarToggle() {
   );
 }
 
-function RightPanelToggle() {
+function RightPanelToggle({ buttonRef }: { buttonRef?: React.Ref<HTMLButtonElement> } = {}) {
   const rightOpen = useUiStore((s) => s.rightOpen);
   return (
     <Tooltip content={<ShortcutHint label={rightOpen ? 'Hide side panel' : 'Show side panel'} kbd={SHORTCUT_LABEL.right} />}>
@@ -67,6 +72,8 @@ function RightPanelToggle() {
         variant="ghost"
         size="icon"
         onClick={() => useUiStore.getState().setRightOpen(!rightOpen)}
+        ref={buttonRef}
+        data-right-panel-toggle=""
         aria-label={rightOpen ? 'Hide side panel' : 'Show side panel'}
         aria-keyshortcuts={SHORTCUT_ARIA.right}
       >
@@ -105,12 +112,55 @@ function TopBar() {
   );
 }
 
-function WorkspacePane({ projectName, ws }: { projectName: string; ws: Workspace }) {
+const tabFrame = 'flex shrink-0 items-center rounded-md border border-transparent pr-0.5';
+const selectedTabFrame = 'border-border bg-muted';
+const tabTrigger = 'max-w-[240px] justify-start gap-1.5 px-2';
+const tabClose = 'size-6';
+
+function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
+  const workspaceId = ws?.id ?? null;
   const qc = useQueryClient();
-  const { data: sessions = [] } = useSessions(ws.id);
+  const fileTabs = useFileStore((state) => state.tabs);
+  const fileId = useFileStore((state) => state.active[project.id]);
+  const selectedFile = fileTabs.find((file) => file.id === fileId);
+  const activeFileTab = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    activeFileTab.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [fileId]);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const newSessionRef = useRef<HTMLButtonElement>(null);
+  const rightPanelRef = useRef<HTMLButtonElement>(null);
+  const closeTrigger = useRef<HTMLButtonElement | null>(null);
+  const closedFocus = useRef<string>();
+  const tabPrefix = useId();
+  const domId = (key: string, part: 'tab' | 'panel') => `${tabPrefix}-${part}-${encodeURIComponent(key)}`;
+  const inContext = () => {
+    const ui = useUiStore.getState();
+    return ui.projectId === project.id && ui.workspaceId === workspaceId;
+  };
+  function focusAfterClose(key: string) {
+    requestAnimationFrame(() => {
+      if (!inContext() || !rowRef.current) return;
+      const target = document.getElementById(domId(key, 'tab'))
+        ?? rowRef.current.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')
+        ?? newSessionRef.current ?? rightPanelRef.current;
+      target?.focus();
+    });
+  }
+  function restoreCloseFocus(event: Event) {
+    event.preventDefault();
+    const key = closedFocus.current;
+    const trigger = closeTrigger.current;
+    closedFocus.current = undefined;
+    closeTrigger.current = null;
+    if (key !== undefined) focusAfterClose(key);
+    else if (inContext()) trigger?.focus();
+  }
+  const fileClose = useFileClose(restoreCloseFocus);
+  const { data: sessions = [] } = useSessions(workspaceId);
   const statuses = useUiStore((s) => s.statuses);
-  const current = useUiStore((s) => s.sessionByWorkspace[ws.id]);
-  const temp = useUiStore((s) => s.tempTabs[ws.id]) ?? [];
+  const current = useUiStore((s) => workspaceId ? s.sessionByWorkspace[workspaceId] : undefined);
+  const temp = useUiStore((s) => workspaceId ? s.tempTabs[workspaceId] : undefined) ?? [];
 
   const statusOf = (s: Session) => statuses[s.id]?.state ?? s.status;
   // FR-029: the tab row only shows unfinished sessions + the one being viewed + temporary tabs.
@@ -123,127 +173,300 @@ function WorkspacePane({ projectName, ws }: { projectName: string; ws: Workspace
     [sessions, current, temp, statuses],
   );
   const active = sessions.find((s) => s.id === current) ?? tabs[0];
+  const projectFiles = fileTabs.filter((file) => file.projectId === project.id);
+  const sessionKey = (id: string) => `session:${id}`;
+  const fileKey = (id: string) => `file:${id}`;
+  const order = [...tabs.map((session) => sessionKey(session.id)), ...projectFiles.map((file) => fileKey(file.id))];
+
+  function navigateTabs(event: KeyboardEvent<HTMLDivElement>) {
+    if (!(event.target instanceof HTMLElement) || event.target.getAttribute('role') !== 'tab') return;
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    const index = items.indexOf(event.target as HTMLButtonElement);
+    let next: number;
+    switch (event.key) {
+      case 'ArrowLeft': next = (index + items.length - 1) % items.length; break;
+      case 'ArrowRight': next = (index + 1) % items.length; break;
+      case 'Home': next = 0; break;
+      case 'End': next = items.length - 1; break;
+      default: return;
+    }
+    event.preventDefault();
+    items[next]?.focus();
+  }
+
+  function nextTab(key: string, prior: string[]) {
+    const index = prior.indexOf(key);
+    return [...prior.slice(index + 1), ...prior.slice(0, index).reverse()]
+      .find((candidate) => {
+        if (candidate.startsWith('file:')) return useFileStore.getState().tabs.some((file) => fileKey(file.id) === candidate);
+        const ui = useUiStore.getState();
+        return !!workspaceId && (qc.getQueryData<Session[]>(qk.sessions(workspaceId)) ?? []).some((session) =>
+          sessionKey(session.id) === candidate &&
+          (ui.tempTabs[workspaceId]?.includes(session.id) || (session.pinned_tab && (ui.statuses[session.id]?.state ?? session.status) !== 'done') || ui.sessionByWorkspace[workspaceId] === session.id));
+      });
+  }
+
+  function selectNeighbor(key: string | undefined) {
+    if (key?.startsWith('file:')) {
+      useFileStore.getState().activate(project.id, key.slice(5));
+    } else if (key?.startsWith('session:') && workspaceId) {
+      useFileStore.getState().activate(project.id);
+      useUiStore.getState().selectSession(workspaceId, key.slice(8));
+    }
+  }
+
+  function requestFileClose(file: typeof projectFiles[number], trigger: HTMLButtonElement) {
+    const key = fileKey(file.id);
+    closeTrigger.current = trigger;
+    const dirty = isDirty(file);
+    fileClose.close(file, () => {
+      if (!inContext()) return;
+      const target = file.id === fileId ? nextTab(key, order) : undefined;
+      if (file.id === fileId) selectNeighbor(target);
+      if (dirty) closedFocus.current = target ?? '';
+      else {
+        closeTrigger.current = null;
+        focusAfterClose(target ?? '');
+      }
+    });
+  }
+
+  const previousSession = useRef(current);
+  useEffect(() => {
+    if (current && previousSession.current !== current) {
+      useFileStore.getState().activate(project.id);
+    }
+    previousSession.current = current;
+  }, [current, project.id]);
 
   useEffect(() => {
-    if (active && active.id !== current) useUiStore.getState().selectSession(ws.id, active.id);
-  }, [active, current, ws.id]);
+    if (workspaceId && !selectedFile && active && active.id !== current) useUiStore.getState().selectSession(workspaceId, active.id);
+  }, [active, current, selectedFile, workspaceId]);
 
   const pad = useHeaderPad();
 
   const [closing, setClosing] = useState<Session | null>(null);
+  const [closeWorkspace, setCloseWorkspace] = useState(false);
+  const [closePending, setClosePending] = useState(false);
+  const lastTab = !!closing && tabs.length === 1 && tabs[0]?.id === closing.id;
+  const running = !!closing && ['working', 'blocked'].includes(statusOf(closing));
 
-  function requestClose(s: Session) {
+  function requestClose(s: Session, trigger: HTMLButtonElement) {
+    closeTrigger.current = trigger;
     const st = statusOf(s);
-    if (st === 'working' || st === 'blocked') setClosing(s);
-    else closeTab(s);
+    if (tabs.length === 1 || st === 'working' || st === 'blocked') {
+      setCloseWorkspace(false);
+      setClosing(s);
+    } else {
+      void closeTab(s);
+    }
   }
 
-  async function closeTab(s: Session) {
-    useUiStore.getState().removeTempTab(ws.id, s.id);
-    await api.sessionSetPinned(s.id, false).catch(() => {});
-    await api.sessionClose(s.id).catch(() => {});
-    qc.invalidateQueries({ queryKey: qk.sessions(ws.id) });
-    if (s.id === current) {
-      const next = tabs.find((t) => t.id !== s.id);
-      if (next) useUiStore.getState().selectSession(ws.id, next.id);
+  async function closeTab(s: Session, leaveWorkspace = false) {
+    if (!ws) return;
+    const wasSelected = !selectedFile && active?.id === s.id;
+    let unpinned = false;
+    const hadDialog = !!closing;
+    setClosePending(true);
+    const key = qk.sessions(ws.id);
+    try {
+      await api.sessionSetPinned(s.id, false);
+      unpinned = true;
+      await api.sessionClose(s.id);
+      qc.setQueryData<Session[]>(key, (items) =>
+        items?.map((item) => item.id === s.id ? { ...item, pinned_tab: false } : item),
+      );
+      const ui = useUiStore.getState();
+      const stillSelected = wasSelected && !useFileStore.getState().active[project.id]
+        && (ui.sessionByWorkspace[ws.id] ?? s.id) === s.id;
+      ui.removeTempTab(ws.id, s.id);
+      if (ui.sessionByWorkspace[ws.id] === s.id) ui.selectSession(ws.id, null);
+      if (inContext()) {
+        const target = stillSelected ? nextTab(sessionKey(s.id), order) : undefined;
+        if (stillSelected) selectNeighbor(target);
+        if (leaveWorkspace && !target) {
+          ui.selectWorkspace(ws.project_id, null);
+          requestAnimationFrame(() => {
+            const state = useUiStore.getState();
+            if (state.projectId === project.id && state.workspaceId === null)
+              document.querySelector<HTMLButtonElement>('main [data-right-panel-toggle]')?.focus();
+          });
+        } else if (hadDialog) closedFocus.current = target ?? '';
+        else {
+          closeTrigger.current = null;
+          focusAfterClose(target ?? '');
+        }
+      }
+      setClosing(null);
+    } catch (error) {
+      if (unpinned && s.pinned_tab) {
+        await api.sessionSetPinned(s.id, true).catch((rollbackError) => toast(errMsg(rollbackError), 'error'));
+      }
+      toast(errMsg(error), 'error');
+      if (!hadDialog) {
+        const trigger = closeTrigger.current;
+        requestAnimationFrame(() => { if (inContext()) trigger?.focus(); });
+      }
+    } finally {
+      void qc.invalidateQueries({ queryKey: key });
+      setClosePending(false);
     }
   }
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {fileClose.dialog}
       <ConfirmDialog
         open={!!closing}
-        onOpenChange={(o) => !o && setClosing(null)}
-        destructive
-        title="Close a session that is still running?"
-        description="The agent has not finished. Closing the tab stops it. You can resume it later from the history."
-        confirmLabel="Stop and close"
+        onOpenChange={(o) => !o && !closePending && setClosing(null)}
+        busy={closePending}
+        onCloseAutoFocus={restoreCloseFocus}
+        destructive={running}
+        title={lastTab ? 'Close the last session?' : 'Close a session that is still running?'}
+        description={running
+          ? 'Closing the tab stops the agent. You can resume it later from history.'
+          : 'Choose whether to keep the workspace open after closing this session.'}
+        confirmLabel={running ? 'Stop and close' : 'Close session'}
         onConfirm={() => {
-          const s = closing;
-          setClosing(null);
-          if (s) void closeTab(s);
+          if (closing) void closeTab(closing, lastTab && closeWorkspace);
         }}
-      />
+      >
+        {lastTab ? (
+          <label className="flex items-center gap-2 text-[13px]">
+            <input
+              type="checkbox"
+              checked={closeWorkspace}
+              disabled={closePending}
+              onChange={(e) => setCloseWorkspace(e.target.checked)}
+            />
+            Also close the workspace view
+          </label>
+        ) : null}
+      </ConfirmDialog>
       {/* Workspace header */}
       <header data-tauri-drag-region className={cn('flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-border py-2 pr-4', pad)}>
         <SidebarToggle />
         <Sep />
         <nav data-tauri-drag-region aria-label="Breadcrumb" className="flex flex-1 items-center self-stretch">
           <ol data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-muted-foreground">
-            <li className="shrink-0 whitespace-nowrap">{projectName}</li>
+            <li className="shrink-0 whitespace-nowrap">{project.name}</li>
+            {ws ? <>
             <li aria-hidden="true" className="flex">
               <ChevronRight className="size-3.5" />
             </li>
-            <li data-tauri-drag-region aria-current="page" className="w-24 min-w-0 grow truncate font-medium text-foreground" title={ws.name ?? undefined}>
+            <TruncatedText as="li" data-tauri-drag-region aria-current="page" className="w-24 min-w-0 grow truncate font-medium text-foreground">
               {ws.name ?? 'New workspace'}
-            </li>
+            </TruncatedText>
+            </> : null}
           </ol>
         </nav>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <RightPanelToggle />
+          <RightPanelToggle buttonRef={rightPanelRef} />
         </div>
       </header>
 
       {/* Session tab row */}
       <div className="flex min-h-11 shrink-0 items-end gap-1 border-b border-border px-3">
-        <div className="flex min-w-0 items-end gap-0.5 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label="Sessions in workspace">
+        <div ref={rowRef} onKeyDown={navigateTabs} className="flex min-w-0 items-center gap-1 overflow-x-auto pb-1.5 overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label={ws ? "Workspace tabs" : "Project tabs"}>
           {tabs.map((s) => {
             const st = statusOf(s);
-            const selected = s.id === active?.id;
+            const selected = !selectedFile && s.id === active?.id;
             return (
               <div
                 key={s.id}
-                className={cn(
-                  'group flex h-[39px] shrink-0 items-center gap-1 border-b-2 pl-3 pr-1',
-                  selected ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
-                )}
+                className={cn(tabFrame, selected && selectedTabFrame)}
               >
-                <button
-                  type="button"
+                <Button
+                  variant={selected ? 'ghost' : 'muted'}
+                  size="xs"
                   role="tab"
+                  id={domId(sessionKey(s.id), 'tab')}
+                  aria-controls={domId(sessionKey(s.id), 'panel')}
+                  tabIndex={selected ? 0 : -1}
                   aria-selected={selected}
-                  className={cn('flex max-w-[240px] items-center gap-2 whitespace-nowrap text-[12px]', selected && 'font-medium')}
-                  onClick={() => useUiStore.getState().selectSession(ws.id, s.id)}
+                  className={tabTrigger}
+                  onClick={() => {
+                    useFileStore.getState().activate(project.id);
+                    if (workspaceId) useUiStore.getState().selectSession(workspaceId, s.id);
+                  }}
                 >
                   <span className="flex size-3 shrink-0 items-center justify-center">
                     <StatusDot status={st} spin />
                   </span>
-                  <span className="truncate">{s.title ?? 'New session'}</span>
+                  <TruncatedText className="truncate">{s.title ?? 'New session'}</TruncatedText>
                   <EngineIcon engine={s.engine} />
                   {s.permission_mode === 'bypass' ? (
                     <Badge variant="warn" className="h-[18px] px-1.5 text-[11px]">
                       bypass
                     </Badge>
                   ) : null}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => requestClose(s)}
-                  className="flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                </Button>
+                <Button
+                  variant="muted"
+                  size="icon-sm"
+                  onClick={(event) => requestClose(s, event.currentTarget)}
+                  tabIndex={selected ? 0 : -1}
+                  disabled={closePending}
+                  className={tabClose}
                   aria-label={`Hide tab ${s.title ?? 'session'}`}
                 >
-                  <X className="size-3" />
-                </button>
+                  <X />
+                </Button>
               </div>
             );
           })}
+          {projectFiles.map((file) => (
+            <div key={file.id} className={cn(tabFrame, file.id === fileId && selectedTabFrame)}>
+              <Button variant={file.id === fileId ? 'ghost' : 'muted'} size="xs" ref={file.id === fileId ? activeFileTab : undefined} role="tab" aria-selected={file.id === fileId} title={file.path}
+                id={domId(fileKey(file.id), 'tab')} aria-controls={domId(fileKey(file.id), 'panel')}
+                tabIndex={file.id === fileId ? 0 : -1}
+                className={tabTrigger}
+                onClick={() => useFileStore.getState().activate(project.id, file.id)}>
+                <FileText data-icon="inline-start" />
+                <TruncatedText className="truncate">{file.name}</TruncatedText>
+                {isDirty(file) ? <Badge variant="outline" aria-label="Unsaved changes">Unsaved</Badge> : null}
+              </Button>
+              <Button variant="muted" size="icon-sm" aria-label={`Close ${file.path}`} onClick={(event) => requestFileClose(file, event.currentTarget)} disabled={file.saving} tabIndex={file.id === fileId ? 0 : -1}
+                className={tabClose}>
+                <X />
+              </Button>
+            </div>
+          ))}
         </div>
-        <Tooltip content="New session in workspace">
+        {ws ? <Tooltip content="New session in workspace">
           <Button
             variant="muted"
             size="icon-sm"
+            ref={newSessionRef}
             className="mb-2 shrink-0"
             onClick={() => createSession(qc, ws.id, active?.engine === 'echo' ? 'echo' : 'claude')}
             aria-label="New session in workspace"
           >
             <Plus />
           </Button>
-        </Tooltip>
+        </Tooltip> : null}
         <span className="flex-1" />
-        <HistoryPopover ws={ws} sessions={sessions} />
+        {ws ? <HistoryPopover ws={ws} sessions={sessions} /> : null}
       </div>
 
-      {active ? <SessionView key={active.id} session={active} ws={ws} /> : <div className="flex-1" />}
+      {active && ws ? (
+        <div role="tabpanel" id={domId(sessionKey(active.id), 'panel')} aria-labelledby={domId(sessionKey(active.id), 'tab')} hidden={!!selectedFile} className={cn('min-h-0 flex-1 flex-col', !selectedFile && 'flex')}>
+          <SessionView key={active.id} session={active} ws={ws} />
+        </div>
+      ) : null}
+      {selectedFile ? (
+        <div role="tabpanel" id={domId(fileKey(selectedFile.id), 'panel')} aria-labelledby={domId(fileKey(selectedFile.id), 'tab')} className="flex min-h-0 flex-1 flex-col">
+          <FileEditor key={selectedFile.id} file={selectedFile} />
+        </div>
+      ) : null}
+      {order.filter((key) => key !== (active && sessionKey(active.id)) && key !== (selectedFile && fileKey(selectedFile.id))).map((key) => (
+        <div key={key} role="tabpanel" id={domId(key, 'panel')} aria-labelledby={domId(key, 'tab')} hidden />
+      ))}
+      {!active && !selectedFile ? (ws ? <div className="flex-1" /> : (
+        <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">
+          Pick a workspace or open a file from the Files panel.
+        </div>
+      )) : null}
     </div>
   );
 }

@@ -1,8 +1,12 @@
 // Long conversations use a virtual list; each row subscribes on its own so deltas only re-render the live part.
-import { memo, useEffect, useRef } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { skipToken, useQuery } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AlertCircle, ImageIcon, Info, Terminal } from 'lucide-react';
+import { AlertCircle, Info, Terminal } from 'lucide-react';
 import { useSessionStore, type Item } from '@/stores/useSessionStore';
+import { api } from '@/lib/api';
+import type { ChatAttachment } from '@/lib/types';
+import { ImagePreview, ImageThumbnail, UnavailableImage, type ImageSelection } from './ImagePreview';
 import { Markdown } from './Markdown';
 import { ToolCard } from './ToolCard';
 
@@ -13,6 +17,22 @@ export function MessageList({ sessionId, working, agentName }: { sessionId: stri
   const hasStream = useSessionStore((s) => !!s.sessions[sessionId]?.streaming);
   const parentRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const [selection, setSelection] = useState<ImageSelection | null>(null);
+  const previewScrollTop = useRef<number | null>(null);
+  const selectImage = useCallback((image: ImageSelection) => {
+    previewScrollTop.current = parentRef.current?.scrollTop ?? 0;
+    stick.current = false;
+    setSelection(image);
+  }, []);
+  function closeImage() {
+    const el = parentRef.current;
+    if (el && previewScrollTop.current !== null) {
+      el.scrollTop = previewScrollTop.current;
+      stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    }
+    previewScrollTop.current = null;
+    setSelection(null);
+  }
   const total = count + 1; // +1: streaming row / running indicator
 
   const v = useVirtualizer({
@@ -46,6 +66,7 @@ export function MessageList({ sessionId, working, agentName }: { sessionId: stri
       className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]"
       onScroll={(e) => {
         const el = e.currentTarget;
+        if (previewScrollTop.current !== null) return;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
       }}
     >
@@ -59,7 +80,7 @@ export function MessageList({ sessionId, working, agentName }: { sessionId: stri
           >
             <div className={COLUMN}>
               {row.index < count ? (
-                <Row sessionId={sessionId} index={row.index} />
+                <Row sessionId={sessionId} index={row.index} onSelect={selectImage} />
               ) : (
                 <StreamRow sessionId={sessionId} show={hasStream || working} agentName={agentName} />
               )}
@@ -67,11 +88,16 @@ export function MessageList({ sessionId, working, agentName }: { sessionId: stri
           </div>
         ))}
       </div>
+      <ImagePreview image={selection} onClose={closeImage} />
     </div>
   );
 }
 
-const Row = memo(function Row({ sessionId, index }: { sessionId: string; index: number }) {
+const Row = memo(function Row({ sessionId, index, onSelect }: {
+  sessionId: string;
+  index: number;
+  onSelect: (image: ImageSelection) => void;
+}) {
   const item = useSessionStore((s) => s.sessions[sessionId]?.items[index]);
   const prevKind = useSessionStore((s) => (index > 0 ? s.sessions[sessionId]?.items[index - 1]?.kind : undefined));
   if (!item) return null;
@@ -80,26 +106,33 @@ const Row = memo(function Row({ sessionId, index }: { sessionId: string; index: 
   return (
     <>
       {startsReply ? <div className="pt-2" /> : null}
-      <ItemView item={item} />
+      <ItemView item={item} sessionId={sessionId} onSelect={onSelect} />
     </>
   );
 });
 
-function ItemView({ item }: { item: Item }) {
+function ItemView({ item, sessionId, onSelect }: {
+  item: Item;
+  sessionId: string;
+  onSelect: (image: ImageSelection) => void;
+}) {
   switch (item.kind) {
     case 'user':
       return (
         <div className="ml-auto flex max-w-[80%] flex-col items-end gap-2 pt-6">
-          {item.images ? (
-            <div className="inline-flex h-9 items-center gap-2 rounded-lg border border-border pl-2 pr-3 text-xs">
-              <span aria-hidden="true" className="flex size-5 items-center justify-center rounded bg-muted text-muted-foreground">
-                <ImageIcon className="size-[13px]" />
-              </span>
-              <span>
-                {item.images} {item.images === 1 ? 'image' : 'images'}
-              </span>
+          {item.images.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-2">
+              {item.images.map((image, index) => (
+                <HistoryImage
+                  key={image.attachment_id ?? index}
+                  sessionId={sessionId}
+                  image={image}
+                  label={`Image ${index + 1}`}
+                  onSelect={onSelect}
+                />
+              ))}
             </div>
-          ) : null}
+          )}
           <div className="rounded-xl bg-muted px-3 py-2 text-content whitespace-pre-wrap break-words">
             {item.source === 'hc_send' ? (
               <div className="mb-1 flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -174,4 +207,25 @@ function StreamRow({ sessionId, show, agentName }: { sessionId: string; show: bo
       </div>
     </div>
   );
+}
+
+export function HistoryImage({ sessionId, image, label, onSelect }: {
+  sessionId: string;
+  image: ChatAttachment;
+  label: string;
+  onSelect: (image: ImageSelection) => void;
+}) {
+  const { attachment_id: id, media_type: mediaType } = image;
+  const supported = /^image\/[a-z0-9][a-z0-9.+-]*$/i.test(mediaType);
+  const query = useQuery({
+    queryKey: ['session-image', sessionId, id],
+    queryFn: id && supported ? () => api.sessionImage(sessionId, id) : skipToken,
+    retry: false,
+    staleTime: Infinity,
+    gcTime: 0,
+  });
+  if (!id || !supported || query.isError) return <UnavailableImage label={label} />;
+  if (query.isPending) return <span role="status" className="text-xs text-muted-foreground">Loading {label}…</span>;
+  if (!query.data) return <UnavailableImage label={label} />;
+  return <ImageThumbnail src={`data:${mediaType};base64,${query.data}`} label={label} className="size-16 hover:outline-foreground" onSelect={onSelect} />;
 }

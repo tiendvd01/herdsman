@@ -60,7 +60,7 @@ export function AddProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(440px,calc(100vw-32px))]">
+      <DialogContent className="w-[min(440px,calc(100%-32px))]">
         <DialogHeader title="Add project" description="A project is a folder on this machine. Each workspace in the project uses this folder or a worktree of it." />
         <form onSubmit={submit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">

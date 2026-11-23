@@ -14,7 +14,7 @@ beforeEach(() => useSessionStore.setState({ sessions: {}, limits: null }));
 describe('UsageIndicators', () => {
   it('session mới: Context — và không có hạn mức', () => {
     show();
-    expect(screen.getByRole('status', { name: /ctx chưa có dữ liệu/ }).textContent).toBe('ctx —');
+    expect(screen.getByRole('status', { name: /Context usage unavailable/ }).contains(screen.getByText('—'))).toBe(true);
     expect(screen.queryByText(/5h/)).toBeNull();
     expect(screen.queryByRole('progressbar')).toBeNull();
   });
@@ -22,9 +22,9 @@ describe('UsageIndicators', () => {
   it('hiện context, 5h, tuần và màu theo ngưỡng', () => {
     useSessionStore.getState().applyEvents('s1', [snap(Date.now(), 42.3, { five_hour: { pct: 83, resets_at: future(2) }, seven_day: { pct: 96, resets_at: future(72) } })]);
     show();
-    expect(screen.getByText('ctx 42%').getAttribute('data-level')).toBe('normal');
-    expect(screen.getByText('5h 83%').getAttribute('data-level')).toBe('warn');
-    expect(screen.getByText('7d 96%').getAttribute('data-level')).toBe('danger');
+    expect(screen.getByRole('status', { name: 'Context used 42%' }).getAttribute('data-level')).toBe('normal');
+    expect(screen.getByRole('status', { name: '5-hour limit used 83%' }).getAttribute('data-level')).toBe('warn');
+    expect(screen.getByRole('status', { name: '7-day limit used 96%' }).getAttribute('data-level')).toBe('danger');
   });
 
   it('limits=null: chỉ còn Context; hạn mức dùng chung giữa các session', () => {
@@ -33,7 +33,7 @@ describe('UsageIndicators', () => {
     expect(screen.queryByText(/7d/)).toBeNull();
     useSessionStore.getState().applyEvents('s2', [snap(Date.now(), 55, { five_hour: { pct: 30, resets_at: future(1) } })]);
     show('s1');
-    expect(screen.getAllByText('5h 30%').length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('status', { name: '5-hour limit used 30%' }).length).toBeGreaterThan(0);
   });
 
   it('limits lấy snapshot mới nhất, không bị event cũ ghi đè', () => {

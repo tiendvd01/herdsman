@@ -39,14 +39,22 @@ describe('layoutWidths', () => {
   it('counts closed sidebars as 0px and gives the open one more room', () => {
     const w = layoutWidths({ left: 300, right: 700, leftOpen: false, rightOpen: true, viewport: 1000 });
     expect(w.left).toBe(0);
-    expect(w.right).toBe(600);
-    expect(w.rightMax).toBe(600);
+    expect(w.right).toBe(1000 - MAIN_MIN);
+    expect(w.rightMax).toBe(1000 - MAIN_MIN);
   });
 
   it('never reports a max below the minimum', () => {
     const w = layoutWidths({ left: 480, right: 720, leftOpen: true, rightOpen: true, viewport: 700 });
     expect(w.leftMax).toBeGreaterThanOrEqual(LEFT.min);
     expect(w.rightMax).toBeGreaterThanOrEqual(RIGHT.min);
+  });
+
+  it('keeps the workspace sidebar available at maximum zoom in the smallest window', () => {
+    const viewport = 960 / 1.65;
+    const w = layoutWidths({ left: LEFT.def, right: RIGHT.def, leftOpen: true, rightOpen: true, viewport });
+    expect(w.left).toBeGreaterThanOrEqual(LEFT.min);
+    expect(w.right).toBe(0);
+    expect(viewport - w.left).toBeGreaterThanOrEqual(MAIN_MIN);
   });
 
   it('hides the right panel, then the left sidebar, when even the minimums do not fit (spec 006, high zoom)', () => {

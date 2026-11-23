@@ -1,3 +1,4 @@
+import { TruncatedText } from '@/components/ui/truncated-text';
 // Left sidebar: app header, ⌘K search, projects → workspaces, hc status (BR 3.1, FR-001–003, FR-019).
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -52,7 +53,7 @@ export function Sidebar() {
             className="mx-2 flex h-9 items-center gap-2 rounded-lg border border-input bg-background px-2 text-left text-muted-foreground shadow-xs hover:bg-accent dark:shadow-none"
           >
             <Search className="size-4 shrink-0" />
-            <span className="flex-1 truncate text-[12px]">Search conversations, commands…</span>
+            <TruncatedText className="flex-1 truncate text-[12px]">Search conversations, commands…</TruncatedText>
             <Kbd>⌘K</Kbd>
           </button>
 
@@ -95,6 +96,7 @@ export function Sidebar() {
 function ProjectNode({ project }: { project: Project }) {
   const collapsed = useUiStore((s) => !!s.collapsed[project.id]);
   const toggle = useUiStore((s) => s.toggleCollapsed);
+  const selectedProject = useUiStore((s) => s.projectId === project.id);
   const selectedWs = useUiStore((s) => s.workspaceId);
   const statuses = useUiStore((s) => s.statuses);
   const { data: workspaces = [] } = useWorkspaces(project.id);
@@ -107,12 +109,21 @@ function ProjectNode({ project }: { project: Project }) {
       <div className="group flex items-center gap-0.5">
         <button
           type="button"
-          className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left hover:bg-accent"
-          onClick={() => toggle(project.id)}
+          className={cn('flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left hover:bg-accent',
+            selectedProject && 'bg-accent')}
+          aria-current={selectedProject ? 'true' : undefined}
+          onClick={() => {
+            if (!selectedProject) {
+              useUiStore.getState().selectWorkspace(project.id, null);
+              if (collapsed) toggle(project.id);
+            } else {
+              toggle(project.id);
+            }
+          }}
           aria-expanded={!collapsed}
         >
           <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-150', !collapsed && 'rotate-90')} />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{project.name}</span>
+          <TruncatedText className="min-w-0 flex-1 truncate text-[13px] font-medium">{project.name}</TruncatedText>
           {project.missing ? (
             <Tooltip content="The project folder no longer exists">
               <AlertTriangle className="size-3.5 shrink-0 text-st-blocked" />
@@ -154,29 +165,28 @@ function ProjectNode({ project }: { project: Project }) {
           {workspaces.map((w) => {
             const mine = Object.values(statuses).filter((s) => s.workspace_id === w.id);
             const needs = mine.some((s) => s.state === 'blocked' || s.state === 'error');
-            const live = mine.filter((s) => s.state !== 'done').length;
             const running = mine.some((s) => s.state === 'working');
             const on = selectedWs === w.id;
             const isWt = w.dir_kind === 'worktree';
             return (
-              <li key={w.id} className={cn('group relative flex min-h-8 items-center gap-1 rounded-md pr-2 hover:bg-accent has-[[data-state=open]]:bg-accent', on && 'bg-accent')}>
+              <li key={w.id} className={cn('group flex min-h-8 items-center gap-1 rounded-md hover:bg-accent has-[[data-state=open]]:bg-accent', on && 'bg-accent')}>
                 <button
                   type="button"
                   aria-current={on ? 'page' : undefined}
                   title={isWt ? `Worktree · ${w.branch ?? w.work_dir}` : 'Project folder'}
-                  className="flex min-w-0 flex-1 items-center gap-2 self-stretch rounded-md pl-2 text-left group-hover:pr-8 group-has-[[data-state=open]]:pr-8"
+                  className="flex min-w-0 flex-1 items-center gap-2 self-stretch rounded-md pl-2 text-left"
                   onClick={() => useUiStore.getState().selectWorkspace(project.id, w.id)}
                 >
-                  {isWt ? (
+                  {running ? (
+                    <Spinner className="size-3.5" label="Agent running" />
+                  ) : isWt ? (
                     <GitBranch className="size-3.5 shrink-0 text-muted-foreground" aria-label="Worktree" />
                   ) : (
                     <Square className="size-3.5 shrink-0 text-muted-foreground" aria-label="Project folder" />
                   )}
-                  <span className={cn('min-w-0 flex-1 truncate text-[12px]', on && 'font-medium')}>{w.name ?? 'New workspace'}</span>
-                  {running ? <Spinner label="Agent running" /> : null}
+                  <TruncatedText className={cn('min-w-0 flex-1 truncate text-[12px]', on && 'font-medium')}>{w.name ?? 'New workspace'}</TruncatedText>
                   {needs ? <span className="size-1.5 shrink-0 rounded-full bg-st-blocked" role="img" aria-label="Session awaiting approval" /> : null}
                 </button>
-                {live > 0 ? <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{live}</span> : null}
                 <WorkspaceMenu ws={w} variant="sidebar" />
               </li>
             );
@@ -214,7 +224,7 @@ function HcStatus() {
     <div className="flex flex-col gap-0.5 border-t border-border pt-2">
       <div className="flex h-8 items-center gap-2 px-2 text-xs text-muted-foreground">
         <span className={cn('size-1.5 shrink-0 rounded-full', ok ? 'bg-st-done' : 'bg-st-error')} aria-hidden="true" />
-        <span className="flex-1 truncate">{label}</span>
+        <TruncatedText className="flex-1 truncate">{label}</TruncatedText>
         {data && !data.node_path ? (
           <Tooltip content="Node.js not found — agents cannot run">
             <AlertTriangle className="size-3.5 text-st-blocked" aria-label="Node.js not found" />

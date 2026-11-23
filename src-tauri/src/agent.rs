@@ -1,10 +1,16 @@
 //! Quản lý session: chạy sidecar qua hc, kết nối socket, đẩy event lên UI, đồng bộ trạng thái.
+use crate::claude_history;
 use crate::error::{AppError, AppResult};
 use crate::hc::Terminal;
 use crate::state::AppState;
 use crate::store::{self, IndexItem, Session, Workspace};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::time::SystemTime;
+use std::fs::File;
+use std::io::{BufRead, BufReader as FileReader};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,7 +26,7 @@ pub async fn spawn_sidecar(st: &AppState, s: &Session, ws: &Workspace) -> AppRes
         .node
         .as_ref()
         .ok_or_else(|| AppError::new("node_missing", "Node.js not found; cannot run herdsman-agent"))?;
-    let argv: Vec<String> = vec![
+    let mut argv: Vec<String> = vec![
         node.to_string_lossy().into(),
         st.sidecar.to_string_lossy().into(),
         "--session".into(),
@@ -34,6 +40,12 @@ pub async fn spawn_sidecar(st: &AppState, s: &Session, ws: &Workspace) -> AppRes
         "--data-dir".into(),
         st.data_dir.to_string_lossy().into(),
     ];
+    if let ("claude", Some(model)) = (s.engine.as_str(), &s.model) {
+        argv.extend(["--model".into(), model.clone()]);
+        if s.engine_session_id.is_none() {
+            argv.push("--inherited-model".into());
+        }
+    }
     let labels = [
         ("herdsman.app", "1".to_string()),
         ("herdsman.kind", "session".to_string()),
@@ -99,6 +111,9 @@ pub fn open_view(st: Arc<AppState>, sid: String) {
     let sid2 = sid.clone();
     let task = tokio::spawn(async move {
         if let Err(e) = run_view(st2.clone(), &sid2).await {
+            if e.code == "sidecar_unreachable" {
+                emit_saved_history(&st2, &sid2).await;
+            }
             st2.emit("session:events", json!({"session_id": sid2, "events": [], "error": e}));
         }
         st2.views.lock().remove(&sid2);
@@ -112,8 +127,31 @@ pub fn close_view(st: &AppState, sid: &str) {
     }
 }
 
+// A stopped agent has no socket. The transcript is still available on disk.
+async fn emit_saved_history(st: &AppState, sid: &str) {
+    let path = st.session_dir(sid).join("events.ndjson");
+    let Ok(file) = tokio::fs::File::open(path).await else { return };
+    let mut lines = BufReader::new(file).lines();
+    let mut events = Vec::new();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
+        if event["type"] == "permission_request" {
+            continue;
+        }
+        events.push(event);
+        if events.len() == 100 {
+            st.emit("session:events", json!({"session_id": sid, "events": std::mem::take(&mut events)}));
+        }
+    }
+    if !events.is_empty() {
+        st.emit("session:events", json!({"session_id": sid, "events": events}));
+    }
+}
+
 async fn run_view(st: Arc<AppState>, sid: &str) -> AppResult<()> {
-    let stream = connect(&st, sid, 50).await?;
+    let stopped = store::session_get(&st.db.lock(), sid)
+        .is_ok_and(|s| matches!(s.status.as_str(), "done" | "error"));
+    let stream = connect(&st, sid, if stopped { 1 } else { 50 }).await?;
     let (r, mut w) = stream.into_split();
     w.write_all(format!("{}\n", json!({"cmd": "hello", "proto": PROTO})).as_bytes()).await?;
     w.write_all(format!("{}\n", json!({"cmd": "subscribe", "from_seq": 0})).as_bytes()).await?;
@@ -189,6 +227,9 @@ fn persist_events(st: &AppState, sid: &str, events: &[Value]) {
                     let _ = store::session_set_field(&db, sid, "model", Some(m));
                 }
             }
+            "model_fallback" => {
+                let _ = store::session_set_field(&db, sid, "model", None);
+            }
             "model_changed" => {
                 if let Some(m) = ev.get("model").and_then(|s| s.as_str()) {
                     let _ = store::session_set_field(&db, sid, "model", Some(m));
@@ -244,6 +285,116 @@ pub fn index_text(ev: &Value) -> Option<(String, String)> {
             Some(("tool".into(), format!("{tool} {detail}")))
         }
         _ => None,
+    }
+}
+
+fn matches_legacy_prompt_title(path: &Path, saved: &str) -> bool {
+    let Ok(file) = File::open(path) else { return false };
+    for line in FileReader::new(file).lines().map_while(Result::ok) {
+        let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
+        if event["type"] == "user_message" && event["source"] == "app" {
+            let Some(text) = event["text"].as_str() else { return false };
+            let title = text.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("Session");
+            return saved == title || title.char_indices().nth(40).is_some_and(|(cut, _)| {
+                format!("{}…", title[..cut].trim_end()) == saved
+            });
+        }
+    }
+    false
+}
+
+/// Remove older prompt-derived names only when the recorded prompt matches.
+fn clear_legacy_prompt_titles(st: &AppState) -> AppResult<()> {
+    const KEY: &str = "legacy_prompt_titles_cleared";
+    let sessions = {
+        let db = st.db.lock();
+        if store::setting_get(&db, KEY)?.is_some() {
+            return Ok(());
+        }
+        store::session_all(&db)?
+    };
+    let mut repairs = Vec::new();
+    let mut workspace_names = HashSet::new();
+    for session in &sessions {
+        let Some(saved) = session.title.as_deref() else { continue };
+        let path = st.session_dir(&session.id).join("events.ndjson");
+        if matches_legacy_prompt_title(&path, saved) {
+            repairs.push((&session.id, saved));
+            workspace_names.insert((&session.workspace_id, saved));
+        }
+    }
+    let mut db = st.db.lock();
+    let tx = db.transaction()?;
+    let mut changed = 0;
+    for (id, saved) in repairs {
+        changed += tx.execute("UPDATE sessions SET title = NULL WHERE id = ?1 AND title = ?2", rusqlite::params![id, saved])?;
+    }
+    for (id, saved) in workspace_names {
+        changed += tx.execute("UPDATE workspaces SET name = NULL WHERE id = ?1 AND name = ?2", rusqlite::params![id, saved])?;
+    }
+    store::setting_set(&tx, KEY, "true")?;
+    tx.commit()?;
+    drop(db);
+    if changed > 0 {
+        st.emit("workspace:changed", json!({}));
+    }
+    Ok(())
+}
+
+fn refresh_claude_titles(st: &AppState, projects: &Path, untitled: &mut HashMap<PathBuf, SystemTime>) -> AppResult<()> {
+    let sessions = store::session_all(&st.db.lock())?;
+    let mut checked = HashSet::new();
+    let mut changed = false;
+
+    for session in sessions.into_iter().filter(|s| s.engine == "claude" && s.title.is_none()) {
+        // Sessions can finish while their views are closed. In that case, the sidecar
+        // has recorded the engine ID on disk even if the database has not seen the event.
+        let id = session.engine_session_id.or_else(|| {
+            let meta = std::fs::read(st.session_dir(&session.id).join("meta.json")).ok()?;
+            serde_json::from_slice::<Value>(&meta).ok()?["engine_session_id"].as_str().map(str::to_owned)
+        });
+        let Some(path) = id.and_then(|id| claude_history::session_path(projects, &id)) else { continue };
+        checked.insert(path.clone());
+        let Ok(modified) = path.metadata().and_then(|file| file.modified()) else { continue };
+        if untitled.get(&path) == Some(&modified) {
+            continue;
+        }
+        let Some(title) = claude_history::session_title(&path) else {
+            untitled.insert(path, modified);
+            continue;
+        };
+        changed |= store::fill_conversation_title(&mut st.db.lock(), &session.id, &session.workspace_id, &title)?;
+    }
+
+    untitled.retain(|path, _| checked.contains(path));
+    if changed {
+        st.emit("workspace:changed", json!({}));
+    }
+    Ok(())
+}
+
+pub async fn watch_claude_titles(st: Arc<AppState>) {
+    let cleanup_state = st.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Err(error) = clear_legacy_prompt_titles(&cleanup_state) {
+            eprintln!("Could not clear legacy conversation titles: {}", error.message);
+        }
+    }).await;
+
+    let Some(projects) = claude_history::claude_dir().map(|dir| dir.join("projects")) else { return };
+    let mut untitled = HashMap::new();
+    loop {
+        let st = st.clone();
+        let projects = projects.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            if let Err(error) = refresh_claude_titles(&st, &projects, &mut untitled) {
+                eprintln!("Could not refresh Claude conversation titles: {}", error.message);
+            }
+            untitled
+        }).await;
+        let Ok(checked) = result else { return };
+        untitled = checked;
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
@@ -407,5 +558,73 @@ mod tests {
         assert_eq!(derive_status(&t), "done");
         t.exit_code = Some(1);
         assert_eq!(derive_status(&t), "error");
+    }
+}
+
+#[cfg(test)]
+mod title_backfill_tests {
+    use super::*;
+
+    #[test]
+    fn replaces_prompt_names_only_when_claude_provides_a_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = store::open(&dir.path().join("herdsman.db")).unwrap();
+        let project = store::project_add(&db, "Project", "/project").unwrap();
+        let full = "Đổi icon của app này thành icon ở trong thư mục assets";
+        let legacy = "Đổi icon của app này thành icon ở trong…";
+        store::workspace_insert(&db, "ws", &project.id, Some(legacy), "project", "/project", None, None).unwrap();
+        store::workspace_insert(&db, "manual", &project.id, Some("Tên riêng…"), "project", "/project", None, None).unwrap();
+        let sessions = [
+            (store::session_insert(&db, "ws", "claude", "ask", Some(legacy)).unwrap(), full),
+            (store::session_insert(&db, "manual", "claude", "ask", Some(full)).unwrap(), full),
+            (store::session_insert(&db, "ws", "claude", "ask", Some("Tên khác…")).unwrap(), full),
+        ];
+        let st = AppState::new(Box::new(|_, _| {}), db, dir.path().into(), None, None, Default::default());
+        for (session, prompt) in &sessions {
+            let path = st.session_dir(&session.id);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("events.ndjson"), format!("{}\n{}\n",
+                json!({"type": "user_message", "source": "cli", "text": "A separate terminal message"}),
+                json!({"type": "user_message", "source": "app", "text": format!("\n  {prompt}\nChi tiết")}),
+            )).unwrap();
+        }
+
+        clear_legacy_prompt_titles(&st).unwrap();
+        let engine_id = "01234567-89ab-cdef-0123-456789abcdef";
+        let projects = dir.path().join("projects");
+        let project_dir = projects.join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        for (session, _) in &sessions[..2] {
+            std::fs::write(st.session_dir(&session.id).join("meta.json"), json!({"engine_session_id": engine_id}).to_string()).unwrap();
+        }
+        let transcript = project_dir.join(format!("{engine_id}.jsonl"));
+        std::fs::write(&transcript, format!("{}\n", json!({"type": "user", "message": {"content": full}}))).unwrap();
+
+        let mut untitled = HashMap::new();
+        refresh_claude_titles(&st, &projects, &mut untitled).unwrap();
+        {
+            let db = st.db.lock();
+            assert_eq!(store::workspace_get(&db, "ws").unwrap().name, None);
+            for (session, _) in &sessions[..2] {
+                assert_eq!(store::session_get(&db, &session.id).unwrap().title, None);
+            }
+        }
+
+        let generated = "Đổi icon ứng dụng";
+        let custom = "Icon ứng dụng";
+        std::fs::write(&transcript, format!("{}\n{}\n",
+            json!({"type": "custom-title", "customTitle": custom}),
+            json!({"type": "ai-title", "aiTitle": generated}),
+        )).unwrap();
+        // Avoid file modification timestamp granularity affecting this fixture.
+        untitled.clear();
+        refresh_claude_titles(&st, &projects, &mut untitled).unwrap();
+        clear_legacy_prompt_titles(&st).unwrap();
+        let db = st.db.lock();
+        assert_eq!(store::workspace_get(&db, "ws").unwrap().name.as_deref(), Some(custom));
+        assert_eq!(store::workspace_get(&db, "manual").unwrap().name.as_deref(), Some("Tên riêng…"));
+        assert_eq!(store::session_get(&db, &sessions[0].0.id).unwrap().title.as_deref(), Some(custom));
+        assert_eq!(store::session_get(&db, &sessions[1].0.id).unwrap().title.as_deref(), Some(custom));
+        assert_eq!(store::session_get(&db, &sessions[2].0.id).unwrap().title.as_deref(), Some("Tên khác…"));
     }
 }

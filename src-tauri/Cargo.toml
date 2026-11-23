@@ -23,7 +23,6 @@ ulid = "1"
 thiserror = "2"
 parking_lot = "0.12"
 
-[dev-dependencies]
 tempfile = "3"
 
 # spec 010: list installed font families for Settings → Appearance.

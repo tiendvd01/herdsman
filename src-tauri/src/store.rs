@@ -4,6 +4,8 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::path::Path;
 
+const CLAUDE_MODEL_PREFERENCE: &str = "claude_model_preference";
+
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_auto_mode.sql"),
@@ -235,12 +237,21 @@ fn s_row(r: &Row) -> rusqlite::Result<Session> {
     })
 }
 
-pub fn session_insert(c: &Connection, workspace_id: &str, engine: &str, mode: &str) -> AppResult<Session> {
+pub fn session_insert(c: &Connection, workspace_id: &str, engine: &str, mode: &str, title: Option<&str>) -> AppResult<Session> {
+    insert_session(c, workspace_id, engine, mode, title, None)
+}
+
+pub fn new_conversation_insert(c: &Connection, workspace_id: &str, engine: &str, mode: &str, title: Option<&str>) -> AppResult<Session> {
+    let model = if engine == "claude" { setting_get(c, CLAUDE_MODEL_PREFERENCE)? } else { None };
+    insert_session(c, workspace_id, engine, mode, title, model.as_deref())
+}
+
+fn insert_session(c: &Connection, workspace_id: &str, engine: &str, mode: &str, title: Option<&str>, model: Option<&str>) -> AppResult<Session> {
     let id = new_id();
     let now = now_ms();
     c.execute(
-        "INSERT INTO sessions (id, workspace_id, engine, permission_mode, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-        params![id, workspace_id, engine, mode, now],
+        "INSERT INTO sessions (id, workspace_id, engine, permission_mode, title, model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        params![id, workspace_id, engine, mode, title, model, now],
     )?;
     session_get(c, &id)
 }
@@ -259,6 +270,16 @@ pub fn session_all(c: &Connection) -> AppResult<Vec<Session>> {
     let mut st = c.prepare(&format!("SELECT {S_COLS} FROM sessions"))?;
     let rows = st.query_map([], s_row)?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+pub fn fill_conversation_title(c: &mut Connection, id: &str, workspace_id: &str, title: &str) -> AppResult<bool> {
+    let tx = c.transaction()?;
+    let changed = tx.execute("UPDATE sessions SET title = ?2 WHERE id = ?1 AND title IS NULL", params![id, title])?;
+    if changed > 0 {
+        tx.execute("UPDATE workspaces SET name = ?2 WHERE id = ?1 AND name IS NULL", params![workspace_id, title])?;
+    }
+    tx.commit()?;
+    Ok(changed > 0)
 }
 
 pub fn session_set_terminal(c: &Connection, id: &str, terminal: Option<&str>) -> AppResult<()> {
@@ -283,6 +304,17 @@ pub fn session_set_field(c: &Connection, id: &str, field: &str, value: Option<&s
         _ => return Err(AppError::new("bad_field", field.to_string())),
     };
     c.execute(&format!("UPDATE sessions SET {col} = ?2 WHERE id = ?1"), params![id, value])?;
+    Ok(())
+}
+
+pub fn session_confirm_model(c: &Connection, id: &str, model: &str) -> AppResult<()> {
+    let tx = c.unchecked_transaction()?;
+    let session = session_get(&tx, id)?;
+    session_set_field(&tx, id, "model", Some(model))?;
+    if session.engine == "claude" {
+        setting_set(&tx, CLAUDE_MODEL_PREFERENCE, model)?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -341,6 +373,7 @@ pub struct SearchHit {
     pub project_id: String,
     pub project_name: String,
     pub session_title: Option<String>,
+    pub engine_session_id: Option<String>,
 }
 
 /// Biến chuỗi người dùng gõ thành truy vấn FTS5 an toàn: mỗi từ thành một cụm trong ngoặc kép.
@@ -360,33 +393,59 @@ pub fn fts_query(input: &str) -> Option<String> {
 }
 
 pub fn search(c: &Connection, query: &str, workspace_id: Option<&str>, limit: i64) -> AppResult<Vec<SearchHit>> {
+    search_sessions(c, query, None, workspace_id, limit)
+}
+
+pub fn search_sessions(
+    c: &Connection, query: &str, project_id: Option<&str>, workspace_id: Option<&str>, limit: i64,
+) -> AppResult<Vec<SearchHit>> {
     let Some(q) = fts_query(query) else { return Ok(vec![]) };
     let mut st = c.prepare(
-        "SELECT f.session_id, f.seq, snippet(message_fts, 5, '[[', ']]', '…', 12),
-                w.id, w.name, w.archived_at IS NOT NULL, p.id, p.name, s.title
-         FROM message_fts f
-         JOIN sessions s ON s.id = f.session_id
+        "WITH matches AS MATERIALIZED (
+             SELECT session_id, seq, snippet(message_fts, 5, '[[', ']]', '…', 12) AS excerpt, rank
+             FROM message_fts
+             WHERE message_fts MATCH ?1 AND (?2 IS NULL OR project_id = ?2) AND (?3 IS NULL OR workspace_id = ?3)
+         ), best AS (
+             SELECT session_id, seq, excerpt, MIN(rank) AS score FROM matches GROUP BY session_id
+         )
+         SELECT s.id, best.seq, best.excerpt,
+                w.id, w.name, w.archived_at IS NOT NULL, p.id, p.name, s.title,
+                CASE WHEN s.engine = 'claude' THEN s.engine_session_id END
+         FROM sessions s
          JOIN workspaces w ON w.id = s.workspace_id
          JOIN projects p ON p.id = w.project_id
-         WHERE message_fts MATCH ?1 AND (?2 IS NULL OR f.workspace_id = ?2)
-         ORDER BY rank LIMIT ?3",
+         LEFT JOIN best ON best.session_id = s.id
+         WHERE (?2 IS NULL OR p.id = ?2) AND (?3 IS NULL OR w.id = ?3)
+         ORDER BY best.score IS NULL, best.score, s.updated_at DESC, s.id",
     )?;
-    let rows = st
-        .query_map(params![q, workspace_id, limit], |r| {
-            Ok(SearchHit {
-                session_id: r.get(0)?,
-                seq: r.get::<_, String>(1).map(|s| s.parse().unwrap_or(0)).or_else(|_| r.get::<_, i64>(1))?,
-                snippet: r.get(2)?,
-                workspace_id: r.get(3)?,
-                workspace_name: r.get(4)?,
-                workspace_archived: r.get(5)?,
-                project_id: r.get(6)?,
-                project_name: r.get(7)?,
-                session_title: r.get(8)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+    let terms: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
+    let mut rows = st.query(params![q, project_id, workspace_id])?;
+    let mut hits = Vec::new();
+    while (hits.len() as i64) < limit {
+        let Some(r) = rows.next()? else { break };
+        let title: Option<String> = r.get(8)?;
+        let snippet: Option<String> = r.get(2)?;
+        if snippet.is_none() && !title.as_deref().is_some_and(|title| {
+            let title = title.to_lowercase();
+            terms.iter().all(|term| title.contains(term))
+        }) {
+            continue;
+        }
+        hits.push(SearchHit {
+            session_id: r.get(0)?,
+            seq: r.get::<_, String>(1).map(|s| s.parse().unwrap_or(0))
+                .or_else(|_| r.get::<_, Option<i64>>(1).map(|seq| seq.unwrap_or(0)))?,
+            snippet: snippet.unwrap_or_default(),
+            workspace_id: r.get(3)?,
+            workspace_name: r.get(4)?,
+            workspace_archived: r.get(5)?,
+            project_id: r.get(6)?,
+            project_name: r.get(7)?,
+            session_title: title,
+            engine_session_id: r.get(9)?,
+        });
+    }
+    Ok(hits)
 }
 
 // ───────────────────────────── Settings ─────────────────────────────
@@ -411,7 +470,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let p = project_add(c, "demo", dir.to_str().unwrap()).unwrap();
         let w = workspace_insert(c, &new_id(), &p.id, None, "project", &p.path, None, None).unwrap();
-        let s = session_insert(c, &w.id, "echo", "ask").unwrap();
+        let s = session_insert(c, &w.id, "echo", "ask", None).unwrap();
         (p, w, s)
     }
 
@@ -436,6 +495,57 @@ mod tests {
     }
 
     #[test]
+    fn claude_model_preference_survives_reopen_and_only_seeds_new_claude_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preferences.sqlite");
+        let c = open(&path).unwrap();
+        let (_, w, echo) = seed(&c);
+        let original = new_conversation_insert(&c, &w.id, "claude", "ask", None).unwrap();
+        assert!(original.model.is_none());
+
+        session_confirm_model(&c, &original.id, "sonnet").unwrap();
+        let first = new_conversation_insert(&c, &w.id, "claude", "ask", Some("First")).unwrap();
+        assert_eq!(first.model.as_deref(), Some("sonnet"));
+        session_confirm_model(&c, &original.id, "opus").unwrap();
+        session_confirm_model(&c, &echo.id, "echo-large").unwrap();
+        // Engine-reported values are session-local.
+        session_set_field(&c, &first.id, "model", Some("claude-sonnet")).unwrap();
+        drop(c);
+
+        let c = open(&path).unwrap();
+        let project_dir = dir.path().join("second-project");
+        std::fs::create_dir(&project_dir).unwrap();
+        let p = project_add(&c, "second", project_dir.to_str().unwrap()).unwrap();
+        let second_workspace = workspace_insert(&c, &new_id(), &p.id, None, "project", &p.path, None, None).unwrap();
+        let later = new_conversation_insert(&c, &second_workspace.id, "claude", "ask", None).unwrap();
+        assert_eq!(later.model.as_deref(), Some("opus"));
+        assert_eq!(session_get(&c, &first.id).unwrap().model.as_deref(), Some("claude-sonnet"));
+        for engine in ["codex", "echo"] {
+            let other = new_conversation_insert(&c, &w.id, engine, "ask", None).unwrap();
+            assert!(other.model.is_none());
+        }
+        // Importing an old conversation bypasses the preferences for new conversations.
+        assert!(session_insert(&c, &w.id, "claude", "ask", None).unwrap().model.is_none());
+    }
+
+    #[test]
+    fn named_session_persists_after_reopening_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.sqlite");
+        let c = open(&path).unwrap();
+        let (_, w, original) = seed(&c);
+        let title = "Sửa bộ lọc";
+        let named = session_insert(&c, &w.id, "echo", "ask", Some(title)).unwrap();
+        let duplicate = session_insert(&c, &w.id, "echo", "ask", Some(title)).unwrap();
+        drop(c);
+
+        let reopened = open(&path).unwrap();
+        assert_eq!(session_get(&reopened, &named.id).unwrap().title.as_deref(), Some(title));
+        assert_eq!(session_get(&reopened, &duplicate.id).unwrap().title.as_deref(), Some(title));
+        assert!(session_get(&reopened, &original.id).unwrap().title.is_none());
+    }
+
+    #[test]
     fn search_scopes_and_archive() {
         let c = open_memory().unwrap();
         let (p, w, s) = seed(&c);
@@ -456,6 +566,83 @@ mod tests {
         workspace_delete(&c, &w.id).unwrap();
         assert_eq!(search(&c, "OAuth", None, 10).unwrap().len(), 0);
         assert_eq!(session_all(&c).unwrap().len(), 0, "xoá workspace xoá session");
+    }
+
+    #[test]
+    fn session_search_scopes_before_limiting_and_deduplicates_matches() {
+        let c = open_memory().unwrap();
+        let (p, w, s) = seed(&c);
+        let w2 = workspace_insert(&c, "second", &p.id, None, "project", &p.path, None, None).unwrap();
+        let s2 = session_insert(&c, &w2.id, "echo", "ask", Some("OAUTH title only")).unwrap();
+        let path = tempfile::tempdir().unwrap();
+        let other = project_add(&c, "other", path.path().to_str().unwrap()).unwrap();
+        let w3 = workspace_insert(&c, "third", &other.id, None, "project", &other.path, None, None).unwrap();
+        let s3 = session_insert(&c, &w3.id, "echo", "ask", None).unwrap();
+        for (session, ws) in [(&s, &w), (&s3, &w3)] {
+            let matches = [1, 2].map(|seq| IndexItem {
+                session_id: &session.id, workspace_id: &ws.id, project_id: &ws.project_id,
+                seq, role: "user", text: "OAuth in a message",
+            });
+            index_messages(&c, &matches, &session.id, 2).unwrap();
+        }
+
+        let all = search_sessions(&c, "oauth", None, None, 10).unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().any(|hit| hit.session_id == s2.id && hit.snippet.is_empty()));
+        let project = search_sessions(&c, "oauth", Some(&p.id), None, 10).unwrap();
+        assert_eq!(project.len(), 2);
+        assert!(project.iter().all(|hit| hit.project_id == p.id));
+        let workspace = search_sessions(&c, "oauth", None, Some(&w2.id), 1).unwrap();
+        assert_eq!(workspace.len(), 1);
+        assert_eq!(workspace[0].session_id, s2.id);
+    }
+
+    #[test]
+    #[ignore = "run explicitly to measure search on a seeded dataset"]
+    fn session_search_latency_on_1000_sessions() {
+        let c = open_memory().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let mut projects = Vec::new();
+        for index in 0..3 {
+            let path = root.path().join(index.to_string());
+            std::fs::create_dir(&path).unwrap();
+            let project = project_add(&c, "Fixture", path.to_str().unwrap()).unwrap();
+            let workspace = workspace_insert(&c, &new_id(), &project.id, None, "project", &project.path, None, None).unwrap();
+            projects.push((project, workspace));
+        }
+        for index in 0..1_000 {
+            let (project, workspace) = &projects[index % projects.len()];
+            let title = format!("Title case{index:04}");
+            let text = format!("Indexed message case{index:04}");
+            let session = session_insert(&c, &workspace.id, "echo", "ask", Some(&title)).unwrap();
+            index_messages(&c, &[IndexItem {
+                session_id: &session.id, workspace_id: &workspace.id, project_id: &project.id,
+                seq: 1, role: "user", text: &text,
+            }], &session.id, 1).unwrap();
+        }
+
+        let mut durations = Vec::new();
+        for index in 0..20 {
+            let (project, workspace) = &projects[index % projects.len()];
+            let (project_id, workspace_id) = match index % 3 {
+                1 => (Some(project.id.as_str()), None),
+                2 => (None, Some(workspace.id.as_str())),
+                _ => (None, None),
+            };
+            let (term, expected_hits) = match index % 4 {
+                0 => (format!("Title case{index:04}"), 1),
+                1 => (format!("message case{index:04}"), 1),
+                2 => ("no-such-phrase".to_string(), 0),
+                _ => ("indexed".to_string(), 50),
+            };
+            let start = std::time::Instant::now();
+            let results = search_sessions(&c, &term, project_id, workspace_id, 50).unwrap();
+            durations.push(start.elapsed());
+            assert_eq!(results.len(), expected_hits);
+        }
+        durations.sort_unstable();
+        eprintln!("Managed search, 1,000 sessions: p95 {:?}, max {:?}", durations[18], durations[19]);
+        assert!(durations[18] <= std::time::Duration::from_secs(1));
     }
 
     #[test]

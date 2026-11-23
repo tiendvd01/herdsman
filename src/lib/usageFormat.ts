@@ -1,11 +1,11 @@
-// Hàm thuần cho chỉ báo context / hạn mức (spec 014). Không phụ thuộc React.
+// Formatting for context usage and rate limits (spec 014).
 import type { LimitWindow } from './types';
 
 export type UsageLevel = 'normal' | 'warn' | 'danger';
 
 export const WARN_AT = 80;
 export const DANGER_AT = 95;
-/** Hạn mức cũ hơn mức này thì thêm dấu `~` (có thể đã cũ). */
+/** Limit snapshots older than this threshold display a `~`. */
 export const STALE_MS = 15 * 60 * 1000;
 
 export function levelOf(pct: number | null | undefined): UsageLevel {
@@ -14,7 +14,7 @@ export function levelOf(pct: number | null | undefined): UsageLevel {
   return p >= DANGER_AT ? 'danger' : p >= WARN_AT ? 'warn' : 'normal';
 }
 
-/** Làm tròn, kẹp 0–100; thiếu dữ liệu → null. */
+/** Round and clamp to 0–100. Return null when usage is unavailable. */
 export function clampPct(pct: number | null | undefined): number | null {
   if (pct == null || !Number.isFinite(pct)) return null;
   return Math.min(100, Math.max(0, Math.round(pct)));
@@ -25,7 +25,7 @@ export function formatPct(pct: number | null | undefined): string {
   return p == null ? '—' : `${p}%`;
 }
 
-/** "2 giờ 10 phút" / "35 phút" / "3 ngày 4 giờ"; đã qua hạn → null. */
+/** "2h 10m" / "35m" / "3d 4h". Return null when the reset time has passed. */
 export function formatReset(iso: string | null | undefined, now: number): string | null {
   if (!iso) return null;
   const t = Date.parse(iso);
@@ -34,9 +34,9 @@ export function formatReset(iso: string | null | undefined, now: number): string
   const d = Math.floor(min / 1440);
   const h = Math.floor((min % 1440) / 60);
   const m = min % 60;
-  if (d > 0) return h ? `${d} ngày ${h} giờ` : `${d} ngày`;
-  if (h > 0) return m ? `${h} giờ ${m} phút` : `${h} giờ`;
-  return `${m} phút`;
+  if (d > 0) return h ? `${d}d ${h}h` : `${d}d`;
+  if (h > 0) return m ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
 }
 
 export interface LimitView {
@@ -46,7 +46,7 @@ export interface LimitView {
   resetText: string | null;
 }
 
-/** Quyết định chữ hiển thị cho một cửa sổ hạn mức; null = ẩn hẳn. */
+/** Format a rate limit window. Return null when the window is unavailable. */
 export function limitView(w: LimitWindow | null | undefined, ts: number, now: number): LimitView | null {
   if (!w) return null;
   const expired = !!w.resets_at && Date.parse(w.resets_at) <= now;

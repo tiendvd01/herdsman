@@ -1,3 +1,5 @@
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { TruncatedText } from '@/components/ui/truncated-text';
 // FR-027/028: workspace session history (newest first) and content search, optionally across all projects.
 import { useEffect, useState } from 'react';
 import { History, Search } from 'lucide-react';
@@ -68,28 +70,25 @@ export function HistoryPopover({ ws, sessions }: { ws: Workspace; sessions: Sess
               autoFocus
             />
           </label>
-          <div className="inline-flex h-8 self-start rounded-lg bg-muted p-0.5" role="radiogroup" aria-label="Search scope">
+          <RadioGroup orientation="horizontal" value={String(all)} onValueChange={(value) => setAll(value === 'true')} className="inline-flex h-8 self-start rounded-lg bg-muted p-0.5" aria-label="Search scope">
             {(
               [
                 [false, 'This workspace'],
                 [true, 'All projects'],
               ] as const
             ).map(([v, label]) => (
-              <button
+              <RadioGroupItem
                 key={String(v)}
-                type="button"
-                role="radio"
-                aria-checked={all === v}
-                onClick={() => setAll(v)}
+                value={String(v)}
                 className={cn(
                   'h-6 rounded-md border px-2 text-[12px] font-medium',
                   all === v ? 'border-border bg-background text-foreground shadow-xs dark:shadow-none' : 'border-transparent text-muted-foreground',
                 )}
               >
                 {label}
-              </button>
+              </RadioGroupItem>
             ))}
-          </div>
+          </RadioGroup>
         </div>
         <span className="block px-2 py-1.5 text-xs font-medium text-muted-foreground">
           {shown ? 'Claude conversations' : `Sessions in ${ws.name ?? 'this workspace'} · newest first`}
@@ -107,11 +106,11 @@ export function HistoryPopover({ ws, sessions }: { ws: Workspace; sessions: Sess
                     void openClaudeConversation(qc, h);
                   }}
                 >
-                  <span className="truncate text-[12px] font-medium">{h.title ?? 'Conversation'}</span>
-                  <span className="truncate text-xs text-muted-foreground">
+                  <TruncatedText className="truncate text-[12px] font-medium">{h.title ?? 'Conversation'}</TruncatedText>
+                  <TruncatedText className="truncate text-xs text-muted-foreground">
                     {h.project_name ? `${h.project_name} › ${h.workspace_name ?? 'Workspace'}` : (h.cwd ?? 'Unknown folder')}
-                  </span>
-                  <span className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{h.snippet}</span>
+                  </TruncatedText>
+                  <TruncatedText className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{h.snippet}</TruncatedText>
                 </button>
               ))
             ) : (
@@ -128,7 +127,7 @@ export function HistoryPopover({ ws, sessions }: { ws: Workspace; sessions: Sess
                   onClick={() => openSession(ws.id, ws.project_id, s.id, st)}
                 >
                   <StatusDot status={st} />
-                  <span className="min-w-0 flex-1 truncate text-[12px]">{s.title ?? 'New session'}</span>
+                  <TruncatedText className="min-w-0 flex-1 truncate text-[12px]">{s.title ?? 'New session'}</TruncatedText>
                   <span className="shrink-0 text-xs text-muted-foreground">
                     {STATUS_LABEL[st]} · {timeAgo(s.updated_at)}
                   </span>

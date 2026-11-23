@@ -9,12 +9,13 @@ import { clampContentStep, clampZoom, CONTENT_STEP, nextZoom, ZOOM_DEFAULT } fro
 export type Theme = 'system' | 'light' | 'dark';
 /** Spec 016: theme ids picked for Light and for Dark (built-in `light`/`paper`/`dark` or a custom theme file name). */
 export const isThemeId = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 64;
-export type RightTab = 'agents' | 'tasks' | 'files' | 'log';
+export type RightTab = 'agents' | 'tasks' | 'files' | 'project-files' | 'log';
 
 interface UiState {
   projectId: string | null;
   workspaceId: string | null;
   sessionByWorkspace: Record<string, string>;
+  recentWorkspaceIds: string[];
   tempTabs: Record<string, string[]>; // finished sessions reopened from history (temporary tabs)
   collapsed: Record<string, boolean>;
   rightTab: RightTab;
@@ -39,7 +40,7 @@ interface UiState {
   newWorkspaceFor: string | null;
   settingsOpen: boolean;
   selectWorkspace: (projectId: string, workspaceId: string | null) => void;
-  selectSession: (workspaceId: string, sessionId: string) => void;
+  selectSession: (workspaceId: string, sessionId: string | null) => void;
   addTempTab: (workspaceId: string, sessionId: string) => void;
   removeTempTab: (workspaceId: string, sessionId: string) => void;
   toggleCollapsed: (projectId: string) => void;
@@ -74,6 +75,7 @@ export const useUiStore = create<UiState>()(
       projectId: null,
       workspaceId: null,
       sessionByWorkspace: {},
+      recentWorkspaceIds: [],
       tempTabs: {},
       collapsed: {},
       rightTab: 'agents',
@@ -95,9 +97,20 @@ export const useUiStore = create<UiState>()(
       addProjectOpen: false,
       newWorkspaceFor: null,
       settingsOpen: false,
-      selectWorkspace: (projectId, workspaceId) => set({ projectId, workspaceId }),
+      selectWorkspace: (projectId, workspaceId) => set((s) => ({
+        projectId,
+        workspaceId,
+        recentWorkspaceIds: workspaceId
+          ? [workspaceId, ...s.recentWorkspaceIds.filter((id) => id !== workspaceId)].slice(0, 10)
+          : s.recentWorkspaceIds,
+      })),
       selectSession: (workspaceId, sessionId) =>
-        set((s) => ({ workspaceId, sessionByWorkspace: { ...s.sessionByWorkspace, [workspaceId]: sessionId } })),
+        set((s) => {
+          const sessionByWorkspace = { ...s.sessionByWorkspace };
+          if (sessionId === null) delete sessionByWorkspace[workspaceId];
+          else sessionByWorkspace[workspaceId] = sessionId;
+          return sessionId === null ? { sessionByWorkspace } : { workspaceId, sessionByWorkspace };
+        }),
       addTempTab: (workspaceId, sessionId) =>
         set((s) => {
           const cur = s.tempTabs[workspaceId] ?? [];
@@ -143,6 +156,7 @@ export const useUiStore = create<UiState>()(
         projectId: s.projectId,
         workspaceId: s.workspaceId,
         sessionByWorkspace: s.sessionByWorkspace,
+        recentWorkspaceIds: s.recentWorkspaceIds,
         collapsed: s.collapsed,
         rightTab: s.rightTab,
         rightOpen: s.rightOpen,
