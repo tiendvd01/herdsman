@@ -2,7 +2,9 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ChevronRight, GitBranch, MoreHorizontal, Plus, Search, Settings, Square } from 'lucide-react';
-import markUrl from '@/assets/herdsman-mark.svg';
+import lightIconUrl from '@/assets/herdsman_lightmode.png';
+import darkIconUrl from '@/assets/herdsman_darkmode.png';
+import { useThemeColors } from '@/lib/theme';
 import { api } from '@/lib/api';
 import { qk, useAppInfo, useProjects, useWorkspaces } from '@/lib/queries';
 import type { Project } from '@/lib/types';
@@ -24,6 +26,7 @@ import { useLayoutWidths } from '@/lib/useLayoutWidths';
 
 export function Sidebar() {
   const { data: projects = [] } = useProjects();
+  const appearance = useThemeColors().appearance;
   const open = useUiStore((s) => s.sidebarOpen);
   const newWsFor = useUiStore((s) => s.newWorkspaceFor);
   const addOpen = useUiStore((s) => s.addProjectOpen);
@@ -39,7 +42,7 @@ export function Sidebar() {
           <div data-tauri-drag-region className="-mx-2 h-11 shrink-0 select-none" />
 
           <div data-tauri-drag-region className="flex shrink-0 select-none items-center gap-1.5 px-2 pb-1">
-            <img src={markUrl} alt="" className="pointer-events-none size-6" />
+            <img src={appearance === 'dark' ? darkIconUrl : lightIconUrl} alt="" className="pointer-events-none size-14 rounded-md" />
             <span className="pointer-events-none text-[14px] font-semibold tracking-tight text-foreground">Herdsman</span>
           </div>
 

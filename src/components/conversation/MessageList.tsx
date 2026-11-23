@@ -43,7 +43,7 @@ export function MessageList({ sessionId, working, agentName }: { sessionId: stri
   return (
     <div
       ref={parentRef}
-      className="min-h-0 flex-1 overflow-y-auto"
+      className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]"
       onScroll={(e) => {
         const el = e.currentTarget;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;

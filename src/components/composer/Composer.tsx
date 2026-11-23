@@ -48,6 +48,9 @@ async function toImg(f: File): Promise<Img> {
   return { name: f.name || 'image.png', media_type: f.type, data_b64: btoa(bin), url: URL.createObjectURL(f) };
 }
 
+// Unsent drafts survive switching conversations (in memory, per session).
+const drafts = new Map<string, { text: string; images: Img[] }>();
+
 export function Composer({
   session,
   status,
@@ -66,8 +69,9 @@ export function Composer({
   firstPrompt?: boolean;
 }) {
   const qc = useQueryClient();
-  const [text, setText] = useState('');
-  const [images, setImages] = useState<Img[]>([]);
+  const [text, setText] = useState(() => drafts.get(session.id)?.text ?? '');
+  const [images, setImages] = useState<Img[]>(() => drafts.get(session.id)?.images ?? []);
+  const draftOwner = useRef(session.id);
   const [sending, setSending] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -83,7 +87,20 @@ export function Composer({
   const fileRef = useRef<HTMLInputElement>(null);
   const working = status === 'working' || status === 'blocked';
   const typedSlash = text.startsWith('/') && !text.includes(' ');
-  useEffect(() => setExpanded(false), [session.id]);
+  useEffect(() => {
+    setExpanded(false);
+    if (draftOwner.current !== session.id) {
+      draftOwner.current = session.id;
+      const d = drafts.get(session.id);
+      setText(d?.text ?? '');
+      setImages(d?.images ?? []);
+    }
+  }, [session.id]);
+  useEffect(() => {
+    if (draftOwner.current !== session.id) return; // state still belongs to the previous session
+    if (text || images.length) drafts.set(session.id, { text, images });
+    else drafts.delete(session.id);
+  }, [session.id, text, images]);
   // Engine-reported commands: built-ins plus the project's/user's skills and custom commands.
   const commands = useQuery({
     queryKey: commandsKey(session.id),

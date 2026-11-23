@@ -592,11 +592,16 @@ pub async fn session_resume(st: St<'_>, id: String) -> AppResult<Session> {
 /// Đóng tab: tắt terminal hc của session (tránh rò terminal); session chưa chat → xoá hẳn khỏi lịch sử.
 #[tauri::command]
 pub async fn session_close(st: St<'_>, id: String) -> AppResult<()> {
+    close_session(&st, &id).await
+}
+
+pub async fn close_session(st: &AppState, id: &str) -> AppResult<()> {
+    let id = id.to_string();
     let s = store::session_get(&st.db.lock(), &id)?;
-    agent::close_view(&st, &id);
+    agent::close_view(st, &id);
     if let (Some(t), Some(hc)) = (&s.hc_terminal, &st.hc) {
         if s.status != "done" && s.status != "error" {
-            let _ = agent::command(&st, &id, json!({"cmd": "shutdown"})).await;
+            let _ = agent::command(st, &id, json!({"cmd": "shutdown"})).await;
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             let _ = hc.kill(t).await;
         }

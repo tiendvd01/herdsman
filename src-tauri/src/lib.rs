@@ -82,11 +82,25 @@ fn install_zoom_menu(app: &tauri::App) -> tauri::Result<()> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(target_os = "macos")]
+fn set_dock_icon() {
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let data = NSData::with_bytes(include_bytes!("../icons/icon.png"));
+    if let Some(img) = NSImage::initWithData(NSImage::alloc(), &data) {
+        unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&img)) };
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            set_dock_icon();
             let handle = app.handle().clone();
             let data_dir = std::env::var("HERDSMAN_DATA_DIR").map(PathBuf::from).unwrap_or(app.path().app_data_dir()?);
             std::fs::create_dir_all(data_dir.join("sock"))?;

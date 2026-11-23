@@ -95,8 +95,23 @@ export function applyFonts(uiFont: string, codeFont: string, root: HTMLElement =
   root.style.setProperty('--font-mono', fontStack('code', codeFont));
 }
 
+import lightIconUrl from '@/assets/herdsman_lightmode.png';
+import darkIconUrl from '@/assets/herdsman_darkmode.png';
+
+/** Favicon follows the theme in effect: herdsman_darkmode.png on dark, herdsman_lightmode.png on light. */
+function useFaviconEffect() {
+  const dark = useThemeColors().appearance === 'dark';
+  useEffect(() => {
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!link) return;
+    link.type = 'image/png';
+    link.href = dark ? darkIconUrl : lightIconUrl;
+  }, [dark]);
+}
+
 export function useAppearanceEffect() {
   useThemeEffect();
+  useFaviconEffect();
   const uiFont = useUiStore((s) => s.uiFont);
   const codeFont = useUiStore((s) => s.codeFont);
   useEffect(() => applyFonts(uiFont, codeFont), [uiFont, codeFont]);

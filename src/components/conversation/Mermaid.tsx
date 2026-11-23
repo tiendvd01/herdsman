@@ -1,6 +1,8 @@
 // Mermaid: renders lazily when scrolled into view, cached by content + theme; on error shows the source (FR-014).
 import { useEffect, useState } from 'react';
+import { Maximize2 } from 'lucide-react';
 import { CodeBlock } from './CodeBlock';
+import { MermaidViewer } from './MermaidViewer';
 import { useInView } from './useInView';
 import { currentFontSans, useThemeColors } from '@/lib/theme';
 import type { ResolvedTheme } from '@/theme/resolve';
@@ -71,6 +73,7 @@ export function Mermaid({ code }: { code: string }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
+  const [zoomOpen, setZoomOpen] = useState(false);
   useEffect(() => {
     if (!seen) return;
     let alive = true;
@@ -97,10 +100,18 @@ export function Mermaid({ code }: { code: string }) {
       </div>
       <figcaption className="flex items-center justify-between gap-2 border-t border-border bg-surface py-1 pl-3 pr-1.5 text-xs text-muted-foreground">
         <span className="font-mono">mermaid · {kind}</span>
-        <button type="button" className="h-7 rounded-md px-2 text-xs font-medium text-foreground hover:bg-accent" onClick={() => setShowSource((v) => !v)}>
-          {showSource ? 'Diagram' : 'Source'}
-        </button>
+        <span className="flex items-center gap-1">
+          {svg ? (
+            <button type="button" aria-label="Zoom diagram" title="Zoom diagram" className="flex size-7 items-center justify-center rounded-md text-foreground hover:bg-accent" onClick={() => setZoomOpen(true)}>
+              <Maximize2 className="size-3.5" />
+            </button>
+          ) : null}
+          <button type="button" className="h-7 rounded-md px-2 text-xs font-medium text-foreground hover:bg-accent" onClick={() => setShowSource((v) => !v)}>
+            {showSource ? 'Diagram' : 'Source'}
+          </button>
+        </span>
       </figcaption>
+      {svg ? <MermaidViewer svg={svg} open={zoomOpen} onOpenChange={setZoomOpen} /> : null}
       {showSource ? <pre className="m-0 max-h-72 overflow-auto border-t border-border bg-code px-3 py-2 font-mono text-content-code">{code}</pre> : null}
     </figure>
   );

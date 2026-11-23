@@ -109,14 +109,16 @@ export function isMonospace(family: string): boolean {
 }
 
 /**
- * Picker entries: pinned defaults first, then every installed family (code: monospace only).
+ * Picker entries: pinned defaults first, then every installed family (code: monospace first).
  * Without a system list (non-macOS, error) fall back to the presets found on this machine.
  */
 export function fontChoices(kind: FontKind, systemFamilies: string[] | undefined, current?: string): FontOption[] {
   if (!systemFamilies?.length) return availableFonts(kind, current);
   const pinned = FONTS[kind].filter((f) => f.bundled || !f.family);
   const pinnedFamilies = new Set(pinned.map((f) => f.family));
-  const families = systemFamilies.filter((n) => !pinnedFamilies.has(n) && (kind === 'ui' || isMonospace(n)));
+  const rest = systemFamilies.filter((n) => !pinnedFamilies.has(n));
+  // Code: monospace families first, then every other installed family so nothing is hidden.
+  const families = kind === 'ui' ? rest : [...rest.filter(isMonospace), ...rest.filter((n) => !isMonospace(n))];
   const out = [...pinned, ...families.map((n) => ({ id: familyId(n), label: n, family: n }))];
   const cur = fontOption(kind, current);
   if (!out.some((f) => sameFont(f, cur))) out.splice(pinned.length, 0, cur);

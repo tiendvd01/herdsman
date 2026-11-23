@@ -258,3 +258,40 @@ async fn model_change_survives_app_restart() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let _ = hcc.rm(&term.address).await;
 }
+
+/// Đóng tab phải tắt hẳn terminal hc (không để sidecar idle sống mãi) và dọn session chưa chat.
+#[tokio::test]
+async fn close_session_kills_idle_terminal() {
+    let tmp = tempfile::Builder::new().prefix("hsc-").tempdir_in("/tmp").unwrap();
+    let data_dir = tmp.path().to_path_buf();
+    let Some(env) = make_state(&data_dir, store::open(&data_dir.join("herdsman.db")).unwrap()) else {
+        eprintln!("bỏ qua: không có hc hoặc node");
+        return;
+    };
+    let st = env.st.clone();
+    let work = tempfile::tempdir().unwrap();
+    let (s, ws) = {
+        let db = st.db.lock();
+        let p = store::project_add(&db, "demo", work.path().to_str().unwrap()).unwrap();
+        let ws = store::workspace_insert(&db, &store::new_id(), &p.id, None, "project", &p.path, None, None).unwrap();
+        let s = store::session_insert(&db, &ws.id, "echo", "ask").unwrap();
+        (s, ws)
+    };
+    let term = agent::spawn_sidecar(&st, &s, &ws).await.expect("chạy sidecar qua hc");
+    let hcc = st.hc().unwrap().clone();
+    assert_eq!(hcc.get(&term.address).await.unwrap().state, "live");
+
+    herdsman_lib::commands::close_session(&st, &s.id).await.unwrap();
+
+    let mut gone = false;
+    for _ in 0..30 {
+        if hcc.list(&[("herdsman.session", &s.id)], true).await.unwrap().iter().all(|t| t.state != "live") {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "terminal hc phải bị tắt sau khi đóng session");
+    assert!(hcc.list(&[("herdsman.session", &s.id)], true).await.unwrap().is_empty(), "session chưa chat bị rm hẳn");
+    assert!(store::session_get(&st.db.lock(), &s.id).is_err(), "session chưa chat bị xoá khỏi DB");
+}
