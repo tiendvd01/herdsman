@@ -6,7 +6,7 @@ status: draft
 decision: "Engine = Claude Agent SDK, sidecar chạy bên trong terminal của hc"
 tags: [herdsman, architecture]
 related: "[[business-requirement]]"
-plan: "specs/001-herdsman-use-cases/plan.md"
+plan: "specs/archive/001-herdsman-use-cases/plan.md"
 design: "https://claude.ai/artifact/G5Po8nsNnNB5taxkrSwRkQ"
 ---
 
@@ -84,7 +84,7 @@ terminal.run {
 }
 ```
 - `node` đóng gói kèm app (Tauri sidecar binary) để không phụ thuộc Node của máy. Agent SDK dùng engine Claude Code có sẵn trong package; có thể trỏ sang `claude` đã cài bằng `pathToClaudeCodeExecutable`.
-- Label nằm trong `hc`, nên mất DB vẫn dựng lại được danh sách project/workspace/session từ `terminal.list`. Danh sách label đầy đủ: `specs/001-herdsman-use-cases/contracts/hc-integration.md`.
+- Label nằm trong `hc`, nên mất DB vẫn dựng lại được danh sách project/workspace/session từ `terminal.list`. Danh sách label đầy đủ: `specs/archive/001-herdsman-use-cases/contracts/hc-integration.md`.
 
 ### 3.2 Bên trong sidecar
 ```text
@@ -131,7 +131,7 @@ sessions(id /*= Claude session id*/, workspace_id, engine, account_id, hc_termin
 accounts(id, label, engine, config_dir, uses_api_key)   -- CLAUDE_CONFIG_DIR theo tài khoản
 message_fts USING fts5(session_id, workspace_id, project_id, seq, text)  -- tìm kiếm
 ```
-Không có bảng spaces. Đơn vị tổ chức là Project (thư mục local) → Workspace → Session. Chi tiết trường, ràng buộc và vòng đời: `specs/001-herdsman-use-cases/data-model.md`.
+Không có bảng spaces. Đơn vị tổ chức là Project (thư mục local) → Workspace → Session. Chi tiết trường, ràng buộc và vòng đời: `specs/archive/001-herdsman-use-cases/data-model.md`.
 
 ### 4.4 `git` (worktree)
 - Tạo: `git -C <project> worktree add -b <branch> <path> <base>`, `<path>` = `<project>/../.herdsman-worktrees/<project-name>/<workspace-slug>`; không ghi được thì dùng `<app data>/worktrees/…`.

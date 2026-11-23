@@ -24,7 +24,7 @@ pnpm --filter herdsman-agent test   # sidecar + smoke test Agent SDK
 | # | Kịch bản | Kết quả mong đợi | Story / SC |
 |---|---|---|---|
 | 1 | + Project mới → chọn `~/tmp/demo-repo`; thêm lại lần nữa | Project hiện trong sidebar; lần hai báo đã tồn tại | US4 |
-| 2 | + cạnh project, để trống tên, thư mục project, gửi "Vẽ sơ đồ Mermaid luồng login và một bảng so sánh" | Session chạy, chữ hiện dần; sơ đồ và bảng render; workspace lấy prompt làm tên | US1, US5, SC-002, SC-004 |
+| 2 | + cạnh project, để trống tên, thư mục project, gửi "Vẽ sơ đồ Mermaid luồng login và một bảng so sánh" | Session chạy, chữ hiện dần; sơ đồ và bảng render; workspace dùng tiêu đề Claude khi có, mặc định là “New workspace” | US1, US5, SC-002, SC-004 |
 | 3 | Gửi prompt có khối ` ```chart ` Vega-Lite và một khối Mermaid lỗi | Biểu đồ hiện; khối lỗi hiện source | US1, SC-002 |
 | 4 | Yêu cầu agent sửa `README.md` (chế độ Hỏi mọi lần) | Hộp duyệt có diff; Allow → file đổi, agent chạy tiếp ≤2 s | US3, SC-003 |
 | 5 | Gửi task dài, **Quit app**, đợi 10 phút, mở lại | Hội thoại đầy đủ, agent tiếp tục/xong, trạng thái đúng; `hc ls` vẫn thấy terminal | US2, SC-001 |

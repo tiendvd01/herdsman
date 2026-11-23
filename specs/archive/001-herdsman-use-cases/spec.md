@@ -117,16 +117,16 @@ Developer thêm project bằng cách chọn một thư mục trên máy (nút **
 
 ### User Story 5 - Tạo workspace kèm session đầu tiên (Priority: P1)
 
-Developer bấm **+** cạnh tên project để tạo workspace: nhập tên (không bắt buộc), chọn thư mục làm việc (thư mục project hoặc worktree mới). Workspace mới luôn có sẵn một session trống đang chờ prompt đầu tiên. Nếu để trống tên, workspace lấy prompt đầu tiên làm tên. Developer thêm session vào workspace bằng nút **+** cạnh hàng tab; các session hiện thành tab phía trên hội thoại.
+Developer bấm **+** cạnh tên project để tạo workspace: nhập tên (không bắt buộc), chọn thư mục làm việc (thư mục project hoặc worktree mới). Workspace mới luôn có sẵn một session trống đang chờ prompt đầu tiên. Nếu để trống tên, workspace dùng tiêu đề của cuộc hội thoại Claude khi có. Developer thêm session vào workspace bằng nút **+** cạnh hàng tab; các session hiện thành tab phía trên hội thoại.
 
 **Why this priority**: Workspace là cách gom các session cùng làm một việc (ví dụ một issue). Session nào cũng thuộc một workspace, nên muốn mở session (US1) phải có workspace.
 
-**Independent Test**: Bấm + cạnh project, để trống tên, chọn thư mục project, gửi prompt đầu tiên. Kiểm tra workspace có một session, session chạy, workspace đổi tên theo prompt. Bấm + cạnh hàng tab để thêm session thứ hai.
+**Independent Test**: Bấm + cạnh project, để trống tên, chọn thư mục project, gửi prompt đầu tiên. Kiểm tra workspace có một session, session chạy, workspace đổi tên khi Claude cung cấp tiêu đề. Bấm + cạnh hàng tab để thêm session thứ hai.
 
 **Acceptance Scenarios**:
 
 1. **Given** một project, **When** developer tạo workspace và để trống tên, **Then** workspace có sẵn một session trống, màn chờ prompt đầu tiên hiện ra.
-2. **Given** workspace vừa tạo không có tên, **When** developer gửi prompt đầu tiên, **Then** session bắt đầu chạy và workspace lấy prompt làm tên (rút gọn nếu dài).
+2. **Given** workspace vừa tạo không có tên, **When** developer gửi prompt đầu tiên, **Then** session bắt đầu chạy và workspace hiện “New workspace” cho đến khi có tiêu đề từ Claude.
 3. **Given** một workspace, **When** developer bấm + cạnh hàng tab, **Then** session mới được thêm thành tab và chạy trong cùng thư mục làm việc của workspace.
 4. **Given** hàng tab, **When** một session đã xong và developer chuyển sang tab khác, **Then** tab session đã xong được ẩn khỏi hàng tab (vẫn tìm được trong lịch sử).
 5. **Given** một workspace đã xong việc, **When** developer archive nó, **Then** workspace ẩn khỏi sidebar nhưng vẫn tìm thấy và mở lại được với đầy đủ lịch sử.
@@ -255,7 +255,7 @@ Session do Herdsman tạo hiện trong danh sách session của Herdr/`hc` với
 - Nhiều yêu cầu duyệt quyền cùng lúc trong nhiều session: mỗi session giữ hộp duyệt của mình, không lẫn sang session khác.
 - Archive hoặc xoá workspace có worktree còn thay đổi chưa commit: app cảnh báo và chờ xác nhận trước khi xoá worktree.
 - Tiến trình agent chết giữa chừng: session chuyển error, developer resume được từ transcript gốc.
-- Prompt đầu tiên rất dài hoặc nhiều dòng: tên workspace tự đặt được rút gọn còn một dòng.
+- Prompt dài hoặc nhiều dòng vẫn được gửi nguyên văn trong hội thoại. Workspace dùng tiêu đề từ Claude nếu có.
 
 ## Requirements *(mandatory)*
 
@@ -270,7 +270,7 @@ Session do Herdsman tạo hiện trong danh sách session của Herdr/`hc` với
 **Workspace (F11)**
 - **FR-004**: Tạo workspace MUST luôn sinh một workspace mới kèm một session trống chờ prompt đầu tiên.
 - **FR-005**: Form tạo workspace MUST có: tên (không bắt buộc), thư mục làm việc (thư mục project hoặc worktree mới từ base branch).
-- **FR-006**: Workspace không có tên MUST lấy prompt đầu tiên (rút gọn) làm tên.
+- **FR-006**: Workspace và session chưa có tên MUST ưu tiên tiêu đề người dùng đã đặt trong Claude, sau đó là tiêu đề tóm tắt do Claude tạo. Khi chưa có tiêu đề, giao diện hiển thị “New workspace” hoặc “New session”.
 - **FR-007**: Mọi session của workspace MUST chạy trong cùng thư mục làm việc của workspace.
 - **FR-008**: Workspace dùng worktree MUST có branch và bản checkout riêng, không ảnh hưởng thư mục project gốc và workspace khác.
 - **FR-008a**: Developer MUST archive được workspace: workspace ẩn khỏi sidebar, lịch sử session giữ nguyên, vẫn tìm thấy và mở lại (bỏ archive) được; khi archive có tuỳ chọn xoá worktree.
@@ -338,7 +338,7 @@ Session do Herdsman tạo hiện trong danh sách session của Herdr/`hc` với
 - **SC-001**: Tắt app trong lúc agent chạy, mở lại sau 10 phút: 100% tin nhắn có mặt, agent vẫn tiếp tục, trạng thái đúng.
 - **SC-002**: 100% khối Mermaid và ` ```chart ` hợp lệ hiện thành sơ đồ/biểu đồ; khối lỗi hiện lại mã nguồn.
 - **SC-003**: Yêu cầu quyền `Edit` luôn hiện diff; sau khi bấm Allow agent chạy tiếp trong vòng 2 giây.
-- **SC-004**: Developer tạo xong workspace (để trống tên) và gửi prompt đầu tiên trong dưới 30 giây; workspace tự lấy prompt làm tên.
+- **SC-004**: Developer tạo xong workspace (để trống tên) và gửi prompt đầu tiên trong dưới 30 giây; workspace tự hiển thị tiêu đề khi Claude cung cấp.
 - **SC-005**: Hai workspace dùng worktree trong cùng project chạy song song, 0 lần thay đổi file đè lên nhau.
 - **SC-006**: Hội thoại trên 5.000 message cuộn mượt (không tụt dưới 60 khung hình/giây khi cuộn); chữ stream hiện chậm không quá 200 ms so với agent.
 - **SC-007**: Đổi trạng thái session hiện trên tab và sidebar trong vòng 1 giây; thông báo hệ điều hành hiện trong vòng 2 giây.
@@ -353,7 +353,7 @@ Session do Herdsman tạo hiện trong danh sách session của Herdr/`hc` với
 - Ưu tiên macOS, sau đó Linux.
 - Không tự viết engine agent hay gọi model API trực tiếp; Mods ngoài phạm vi v1.
 - Xoá project hoặc workspace chỉ xoá khỏi app, không xoá thư mục trên đĩa; xoá worktree cần developer xác nhận.
-- Tên workspace tự đặt lấy dòng đầu của prompt, cắt khoảng 40 ký tự.
+- Tên workspace và session tự đặt lấy từ metadata tiêu đề của Claude.
 - Theme mặc định theo hệ điều hành.
 - Ngưỡng hiệu năng SC-006 đến SC-010 không có trong BR; đã chốt giữ làm tiêu chí nghiệm thu v1 (Clarifications 2026-11-21).
 - Mô hình Project → Workspace → Session khớp constitution v1.1.0 (nguyên tắc VI).
