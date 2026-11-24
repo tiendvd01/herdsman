@@ -8,6 +8,12 @@ const BASE_UI_SCALE = 1.1;
 /** Content text-size offset in px from the default (13px body / 12px code). */
 export const CONTENT_STEP = { min: -2, max: 4, def: 0 } as const;
 export const CONTENT_BASE_PX = 13;
+export const CODE_FONT_SIZE = { min: 10, max: 24 } as const;
+
+export function normalizeCodeFontSize(size: unknown): number | null {
+  if (typeof size !== 'number' || !Number.isFinite(size)) return null;
+  return Math.min(CODE_FONT_SIZE.max, Math.max(CODE_FONT_SIZE.min, Math.round(size)));
+}
 
 /** Any other value snaps to the nearest step; anything that is not a finite number becomes 1. */
 export function clampZoom(z: unknown): number {
@@ -64,4 +70,10 @@ export function currentZoomFactor(): number {
 
 export function applyContentStep(n: number): void {
   document.documentElement.style.setProperty('--content-step', `${clampContentStep(n)}px`);
+}
+
+export function applyCodeFontSize(size: number | null): void {
+  const style = document.documentElement.style;
+  if (size === null) style.removeProperty('--code-font-size');
+  else style.setProperty('--code-font-size', `${size}px`);
 }

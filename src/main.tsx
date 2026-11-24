@@ -12,12 +12,13 @@ async function boot() {
   const { default: App } = await import('./App');
   // Spec 006: apply the saved zoom and text size before the first render, so the default size never flashes.
   const { useUiStore } = await import('./stores/useUiStore');
-  const { applyZoom, applyContentStep } = await import('./lib/uiZoom');
+  const { applyZoom, applyCodeFontSize, applyContentStep } = await import('./lib/uiZoom');
   // Spec 016: paint the chosen theme (cached resolved colours, else built-in) before React renders, so no theme flashes.
   const { bootTheme } = await import('./lib/theme');
   bootTheme();
-  const { zoom, contentStep } = useUiStore.getState();
+  const { zoom, contentStep, codeFontSize } = useUiStore.getState();
   applyContentStep(contentStep);
+  applyCodeFontSize(codeFontSize);
   await applyZoom(zoom); // later changes: useZoomEffect in AppShell
   const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 2000, refetchOnWindowFocus: true, retry: 1 } } });
   ReactDOM.createRoot(document.getElementById('root')!).render(

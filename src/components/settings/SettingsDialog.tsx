@@ -3,10 +3,11 @@ import { TruncatedText } from '@/components/ui/truncated-text';
 // Settings dialog (spec 010): opened from the sidebar footer, ⌘, or the command menu. Sections on the left; Appearance only for now.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as D from '@radix-ui/react-dialog';
-import { Check, ChevronDown, Monitor, Moon, Paintbrush, Search, Sun, X } from 'lucide-react';
+import { Check, ChevronDown, Minus, Monitor, Moon, Paintbrush, Plus, Search, Sun, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { DEFAULT_FONT, fontChoices, fontOption, fontStack, sameFont, type FontKind, type FontOption } from '@/lib/fonts';
 import { useFontFamilies } from '@/lib/queries';
+import { CODE_FONT_SIZE } from '@/lib/uiZoom';
 import { useUiStore, type Theme } from '@/stores/useUiStore';
 import { useThemeCatalog } from '@/lib/theme';
 import { useThemeFiles } from '@/theme/files';
@@ -101,7 +102,41 @@ function AppearanceSection() {
       <Row label="Code font" hint="Code blocks, diffs, paths, commands and logs.">
         <FontPicker kind="code" />
       </Row>
+      <Row label="Code font size" hint="Code snippets, file editor, diffs and logs.">
+        <CodeFontSizePicker />
+      </Row>
     </>
+  );
+}
+
+function CodeFontSizePicker() {
+  const size = useUiStore((s) => s.codeFontSize);
+  const contentStep = useUiStore((s) => s.contentStep);
+  const setSize = useUiStore((s) => s.setCodeFontSize);
+  const displayedSize = size ?? 12 + contentStep;
+  return (
+    <div className="flex items-center gap-1.5">
+      {size !== null && (
+        <Button variant="ghost" size="sm" onClick={() => setSize(null)} aria-label="Reset code font size">
+          Reset
+        </Button>
+      )}
+      <div
+        role="group"
+        aria-label="Code font size"
+        className="grid w-32 shrink-0 grid-cols-[auto_1fr_auto] items-center rounded-lg border border-input bg-muted p-0.5"
+      >
+        <Button variant="muted" size="icon" aria-label="Decrease code font size" disabled={displayedSize <= CODE_FONT_SIZE.min} onClick={() => setSize(displayedSize - 1)}>
+          <Minus />
+        </Button>
+        <output aria-label="Current code font size" className="text-center text-base font-medium text-foreground tabular-nums">
+          {displayedSize}
+        </output>
+        <Button variant="muted" size="icon" aria-label="Increase code font size" disabled={displayedSize >= CODE_FONT_SIZE.max} onClick={() => setSize(displayedSize + 1)}>
+          <Plus />
+        </Button>
+      </div>
+    </div>
   );
 }
 

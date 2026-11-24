@@ -3,6 +3,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render as rtlRender, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useZoomEffect } from '@/lib/zoomShortcuts';
 
 vi.mock('@/lib/api', () => ({ api: { fontFamilies: vi.fn(async () => ['Arial', 'Courier New', 'Georgia', 'Menlo']) } }));
 
@@ -54,6 +55,50 @@ describe('SettingsDialog', () => {
     expect(screen.getByRole('button', { name: 'Code font' }).textContent).toContain('Menlo');
     fireEvent.click(screen.getByRole('button', { name: 'Reset code font' }));
     expect(useUiStore.getState().codeFont).toBe('geist-mono');
+  });
+
+  it('applies and restores a code font size independently of content text size', async () => {
+    function SettingsWithZoom() {
+      useZoomEffect();
+      return <SettingsDialog />;
+    }
+
+    const rootStyle = document.documentElement.style;
+    const previousStyle = document.documentElement.getAttribute('style');
+    const previousSettings = useUiStore.getState();
+    try {
+      act(() => useUiStore.setState({ codeFontSize: null, contentStep: 2 }));
+      render(<SettingsWithZoom />);
+      open();
+      const size = screen.getByRole('status', { name: 'Current code font size' });
+      expect(size.textContent).toBe('14');
+      expect(rootStyle.getPropertyValue('--code-font-size')).toBe('');
+      fireEvent.click(screen.getByRole('button', { name: 'Increase code font size' }));
+      expect(size.textContent).toBe('15');
+      expect(rootStyle.getPropertyValue('--code-font-size')).toBe('15px');
+      expect(rootStyle.getPropertyValue('--content-step')).toBe('2px');
+
+      const saved = localStorage.getItem('herdsman-ui')!;
+      await act(async () => {
+        useUiStore.getState().setCodeFontSize(null);
+        localStorage.setItem('herdsman-ui', saved);
+        await useUiStore.persist.rehydrate();
+      });
+      expect(size.textContent).toBe('15');
+      expect(rootStyle.getPropertyValue('--code-font-size')).toBe('15px');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Decrease code font size' }));
+      expect(size.textContent).toBe('14');
+      expect(rootStyle.getPropertyValue('--code-font-size')).toBe('14px');
+      fireEvent.click(screen.getByRole('button', { name: 'Reset code font size' }));
+      expect(useUiStore.getState().codeFontSize).toBeNull();
+      expect(rootStyle.getPropertyValue('--code-font-size')).toBe('');
+      expect(rootStyle.getPropertyValue('--content-step')).toBe('2px');
+    } finally {
+      act(() => useUiStore.setState(previousSettings));
+      if (previousStyle === null) document.documentElement.removeAttribute('style');
+      else document.documentElement.setAttribute('style', previousStyle);
+    }
   });
 
   it('closes on Escape', () => {

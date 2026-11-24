@@ -4,7 +4,7 @@ import { persist } from 'zustand/middleware';
 import type { SessionStatus } from '@/lib/types';
 import { clampWidth, COMPOSER, LEFT, RIGHT } from '@/lib/layout';
 import { DEFAULT_FONT } from '@/lib/fonts';
-import { clampContentStep, clampZoom, CONTENT_STEP, nextZoom, ZOOM_DEFAULT } from '@/lib/uiZoom';
+import { clampContentStep, clampZoom, CONTENT_STEP, nextZoom, normalizeCodeFontSize, ZOOM_DEFAULT } from '@/lib/uiZoom';
 
 export type Theme = 'system' | 'light' | 'dark';
 /** Spec 016: theme ids picked for Light and for Dark (built-in `light`/`paper`/`dark` or a custom theme file name). */
@@ -33,6 +33,7 @@ interface UiState {
   zoomFlash: { kind: 'zoom' | 'text'; at: number } | null;
   uiFont: string; // Settings → Appearance, spec 010
   codeFont: string;
+  codeFontSize: number | null;
   statuses: Record<string, { state: SessionStatus; kind?: string | null; workspace_id?: string }>;
   // Transient dialogs (not persisted)
   cmdOpen: boolean;
@@ -56,6 +57,7 @@ interface UiState {
   setDarkTheme: (id: string) => void;
   setUiFont: (id: string) => void;
   setCodeFont: (id: string) => void;
+  setCodeFontSize: (size: number | null) => void;
   setSettingsOpen: (o: boolean) => void;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -92,6 +94,7 @@ export const useUiStore = create<UiState>()(
       zoomFlash: null,
       uiFont: DEFAULT_FONT.ui,
       codeFont: DEFAULT_FONT.code,
+      codeFontSize: null,
       statuses: {},
       cmdOpen: false,
       addProjectOpen: false,
@@ -131,6 +134,7 @@ export const useUiStore = create<UiState>()(
       setDarkTheme: (id) => set({ darkTheme: isThemeId(id) ? id : 'dark' }),
       setUiFont: (uiFont) => set({ uiFont }),
       setCodeFont: (codeFont) => set({ codeFont }),
+      setCodeFontSize: (size) => set({ codeFontSize: normalizeCodeFontSize(size) }),
       setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
       zoomIn: () => set((s) => ({ zoom: nextZoom(s.zoom, 1), zoomFlash: { kind: 'zoom', at: Date.now() } })),
       zoomOut: () => set((s) => ({ zoom: nextZoom(s.zoom, -1), zoomFlash: { kind: 'zoom', at: Date.now() } })),
@@ -150,7 +154,7 @@ export const useUiStore = create<UiState>()(
       // Saved widths may be stale or corrupt: always clamp them back into range.
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<UiState>;
-        return { ...current, ...p, sidebarWidth: clampWidth(p.sidebarWidth, LEFT), rightWidth: clampWidth(p.rightWidth, RIGHT), composerHeight: clampWidth(p.composerHeight, COMPOSER), zoom: clampZoom(p.zoom), contentStep: clampContentStep(p.contentStep), lightTheme: isThemeId(p.lightTheme) ? p.lightTheme : 'light', darkTheme: isThemeId(p.darkTheme) ? p.darkTheme : 'dark' };
+        return { ...current, ...p, sidebarWidth: clampWidth(p.sidebarWidth, LEFT), rightWidth: clampWidth(p.rightWidth, RIGHT), composerHeight: clampWidth(p.composerHeight, COMPOSER), zoom: clampZoom(p.zoom), contentStep: clampContentStep(p.contentStep), codeFontSize: normalizeCodeFontSize(p.codeFontSize), lightTheme: isThemeId(p.lightTheme) ? p.lightTheme : 'light', darkTheme: isThemeId(p.darkTheme) ? p.darkTheme : 'dark' };
       },
       partialize: (s) => ({
         projectId: s.projectId,
@@ -171,6 +175,7 @@ export const useUiStore = create<UiState>()(
         contentStep: s.contentStep,
         uiFont: s.uiFont,
         codeFont: s.codeFont,
+        codeFontSize: s.codeFontSize,
       }),
     },
   ),

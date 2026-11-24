@@ -68,7 +68,7 @@ export function CodeBlock({ code, lang, plain }: { code: string; lang?: string; 
         </Button>
       </div>
       {html && !plain ? (
-        <div className="overflow-x-auto p-3 font-mono text-content-code leading-[1.7] [&_pre]:m-0" dangerouslySetInnerHTML={{ __html: html }} />
+        <div className="overflow-x-auto p-3 text-content-code leading-[1.7] [&_pre]:m-0 [&_:is(pre,code)]:font-mono" dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
         <pre className="m-0 overflow-x-auto p-3 font-mono text-content-code leading-[1.7]">{code}</pre>
       )}

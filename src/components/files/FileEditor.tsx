@@ -77,7 +77,7 @@ export function FileEditor({ file }: { file: FileTab }) {
         }),
         EditorView.theme({
           '&': { height: '100%', color: 'var(--foreground)', background: 'var(--background)' },
-          '.cm-scroller': { fontFamily: 'var(--font-mono)', fontSize: 'calc(12px + var(--content-step, 0px))', overflow: 'auto' },
+          '.cm-scroller': { fontFamily: 'var(--font-mono)', fontSize: 'var(--code-content-size)', overflow: 'auto' },
           '.cm-gutters': { color: 'var(--muted-foreground)', background: 'var(--background)', borderColor: 'var(--border)' },
           '.cm-activeLine, .cm-activeLineGutter': { background: 'var(--muted)' },
           '.cm-content': { padding: '8px 0' },

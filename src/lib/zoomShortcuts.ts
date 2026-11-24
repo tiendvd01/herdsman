@@ -1,7 +1,7 @@
 // Spec 006: ⌘= / ⌘+ / ⌘− / ⌘0 zoom the whole UI; ⌥⌘= / ⌥⌘− / ⌥⌘0 change the content text size (Ctrl / Alt off macOS).
 import { useEffect } from 'react';
 import { IS_MAC } from '@/lib/platform';
-import { applyContentStep, applyZoom } from '@/lib/uiZoom';
+import { applyCodeFontSize, applyContentStep, applyZoom } from '@/lib/uiZoom';
 import { useUiStore } from '@/stores/useUiStore';
 
 export type ZoomAction = 'in' | 'out' | 'reset' | 'text-in' | 'text-out' | 'text-reset';
@@ -74,6 +74,8 @@ export function installZoomShortcuts(): () => void {
 export function useZoomEffect() {
   const zoom = useUiStore((s) => s.zoom);
   const step = useUiStore((s) => s.contentStep);
+  const codeFontSize = useUiStore((s) => s.codeFontSize);
   useEffect(() => void applyZoom(zoom), [zoom]);
   useEffect(() => applyContentStep(step), [step]);
+  useEffect(() => applyCodeFontSize(codeFontSize), [codeFontSize]);
 }
