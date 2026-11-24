@@ -13,10 +13,21 @@ export interface FileTab {
   saving?: boolean;
 }
 
+export interface DiffTab {
+  id: string;
+  projectId: string;
+  workspaceId: string;
+  path: string;
+  name: string;
+}
+
 export const isDirty = (file: FileTab) => file.document !== undefined && file.draft !== file.document.text;
 
 interface FileState {
   tabs: FileTab[];
+  diffs: DiffTab[];
+  openDiff: (projectId: string, workspaceId: string, path: string) => void;
+  closeDiff: (id: string) => void;
   active: Record<string, string | undefined>;
   open: (project: Project, path: string, name: string) => Promise<void>;
   activate: (projectId: string, id?: string) => void;
@@ -32,6 +43,25 @@ export const useFileStore = create<FileState>((set, get) => {
 
   return {
     tabs: [],
+    diffs: [],
+    openDiff: (projectId, workspaceId, path) => set((state) => {
+      const id = JSON.stringify(['diff', workspaceId, path]);
+      const tab = { id, projectId, workspaceId, path, name: path.slice(path.lastIndexOf('/') + 1) };
+      return {
+        diffs: state.diffs.some((diff) => diff.id === id) ? state.diffs : [...state.diffs, tab],
+        active: { ...state.active, [projectId]: id },
+      };
+    }),
+    closeDiff: (id) => set((state) => {
+      const tab = state.diffs.find((diff) => diff.id === id);
+      if (!tab) return state;
+      return {
+        diffs: state.diffs.filter((diff) => diff.id !== id),
+        active: state.active[tab.projectId] === id
+          ? { ...state.active, [tab.projectId]: undefined }
+          : state.active,
+      };
+    }),
     active: {},
     activate: (projectId, id) => set((state) => ({ active: { ...state.active, [projectId]: id } })),
     open: async (project, path, name) => {

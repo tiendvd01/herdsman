@@ -19,6 +19,7 @@ interface UiState {
   tempTabs: Record<string, string[]>; // finished sessions reopened from history (temporary tabs)
   collapsed: Record<string, boolean>;
   rightTab: RightTab;
+  gitTreeView: boolean;
   rightOpen: boolean;
   rightWidth: number; // saved width of the right side panel (px), spec 004
   sidebarOpen: boolean;
@@ -47,6 +48,7 @@ interface UiState {
   toggleCollapsed: (projectId: string) => void;
   setCollapsed: (projectId: string, collapsed: boolean) => void;
   setRightTab: (t: RightTab) => void;
+  toggleGitTreeView: () => void;
   setRightOpen: (o: boolean) => void;
   setRightWidth: (px: number) => void;
   setSidebarOpen: (o: boolean) => void;
@@ -81,6 +83,7 @@ export const useUiStore = create<UiState>()(
       tempTabs: {},
       collapsed: {},
       rightTab: 'agents',
+      gitTreeView: false,
       rightOpen: true,
       rightWidth: RIGHT.def,
       sidebarOpen: true,
@@ -124,6 +127,7 @@ export const useUiStore = create<UiState>()(
       toggleCollapsed: (projectId) => set((s) => ({ collapsed: { ...s.collapsed, [projectId]: !s.collapsed[projectId] } })),
       setCollapsed: (projectId, collapsed) => set((s) => ({ collapsed: { ...s.collapsed, [projectId]: collapsed } })),
       setRightTab: (rightTab) => set({ rightTab, rightOpen: true }),
+      toggleGitTreeView: () => set((s) => ({ gitTreeView: !s.gitTreeView })),
       setRightOpen: (rightOpen) => set({ rightOpen }),
       setRightWidth: (px) => set({ rightWidth: clampWidth(px, RIGHT) }),
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),

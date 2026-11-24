@@ -1,7 +1,7 @@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useEffect, useRef } from 'react';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { HighlightStyle, LanguageDescription, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
@@ -39,7 +39,12 @@ async function languageFor(path: string) {
     case 'md':
     case 'markdown': return (await import('@codemirror/lang-markdown')).markdown();
     case 'rs': return (await import('@codemirror/lang-rust')).rust();
-    default: return [];
+    default: {
+      const { languages } = await import('@codemirror/language-data');
+      const filename = path.split(/[\\/]/).pop() ?? path;
+      const language = LanguageDescription.matchFilename(languages, filename);
+      return language ? language.load() : [];
+    }
   }
 }
 
@@ -80,7 +85,7 @@ export function FileEditor({ file }: { file: FileTab }) {
           '.cm-scroller': { fontFamily: 'var(--font-mono)', fontSize: 'var(--code-content-size)', overflow: 'auto' },
           '.cm-gutters': { color: 'var(--muted-foreground)', background: 'var(--background)', borderColor: 'var(--border)' },
           '.cm-activeLine, .cm-activeLineGutter': { background: 'var(--muted)' },
-          '.cm-content': { padding: '8px 0' },
+          '.cm-content': { padding: '8px 0', caretColor: 'var(--foreground)' },
           '.cm-line': { padding: '0 12px' },
           '.cm-cursor': { borderLeftColor: 'var(--foreground)' },
           '&.cm-focused': { outline: 'none' },

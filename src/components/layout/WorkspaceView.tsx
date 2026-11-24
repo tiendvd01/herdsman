@@ -1,3 +1,4 @@
+import { FileChanges } from '@/components/files/FileChanges';
 import { FileEditor } from '@/components/files/FileEditor';
 import { useFileClose } from '@/components/files/FileCloseDialog';
 import { isDirty, useFileStore } from '@/stores/useFileStore';
@@ -5,11 +6,11 @@ import { TruncatedText } from '@/components/ui/truncated-text';
 // Center column: workspace header, session tab row, conversation (BR 3.1; FR-009, FR-018, FR-027, FR-029).
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, FileText, PanelLeft, PanelRight, Plus, X } from 'lucide-react';
+import { ChevronRight, FileDiff, FileText, PanelLeft, PanelRight, Plus, X } from 'lucide-react';
 import { Button, Kbd } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/alert-dialog';
-import { Tooltip } from '@/components/ui/tooltip';
+import { Tooltip, TooltipProvider } from '@/components/ui/tooltip';
 import { StatusDot } from '@/components/ui/status-dot';
 import { EngineIcon } from '@/components/ui/engine-icon';
 import { HistoryPopover } from '@/components/history/HistoryPopover';
@@ -122,11 +123,15 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   const qc = useQueryClient();
   const fileTabs = useFileStore((state) => state.tabs);
   const fileId = useFileStore((state) => state.active[project.id]);
+  const diffs = useFileStore((state) => state.diffs);
+  const workspaceDiffs = diffs.filter((diff) => diff.workspaceId === workspaceId && diff.projectId === project.id);
+  const selectedDiff = workspaceDiffs.find((diff) => diff.id === fileId);
   const selectedFile = fileTabs.find((file) => file.id === fileId);
+  const selectedDocument = selectedFile ?? selectedDiff;
   const activeFileTab = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     activeFileTab.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
-  }, [fileId]);
+  }, [fileId, workspaceId]);
   const rowRef = useRef<HTMLDivElement>(null);
   const newSessionRef = useRef<HTMLButtonElement>(null);
   const rightPanelRef = useRef<HTMLButtonElement>(null);
@@ -176,7 +181,12 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   const projectFiles = fileTabs.filter((file) => file.projectId === project.id);
   const sessionKey = (id: string) => `session:${id}`;
   const fileKey = (id: string) => `file:${id}`;
-  const order = [...tabs.map((session) => sessionKey(session.id)), ...projectFiles.map((file) => fileKey(file.id))];
+  const diffKey = (id: string) => `diff:${id}`;
+  const order = [
+    ...tabs.map((session) => sessionKey(session.id)),
+    ...projectFiles.map((file) => fileKey(file.id)),
+    ...workspaceDiffs.map((diff) => diffKey(diff.id)),
+  ];
 
   function navigateTabs(event: KeyboardEvent<HTMLDivElement>) {
     if (!(event.target instanceof HTMLElement) || event.target.getAttribute('role') !== 'tab') return;
@@ -198,6 +208,7 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
     const index = prior.indexOf(key);
     return [...prior.slice(index + 1), ...prior.slice(0, index).reverse()]
       .find((candidate) => {
+        if (candidate.startsWith('diff:')) return useFileStore.getState().diffs.some((diff) => diffKey(diff.id) === candidate);
         if (candidate.startsWith('file:')) return useFileStore.getState().tabs.some((file) => fileKey(file.id) === candidate);
         const ui = useUiStore.getState();
         return !!workspaceId && (qc.getQueryData<Session[]>(qk.sessions(workspaceId)) ?? []).some((session) =>
@@ -207,7 +218,7 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   }
 
   function selectNeighbor(key: string | undefined) {
-    if (key?.startsWith('file:')) {
+    if (key?.startsWith('file:') || key?.startsWith('diff:')) {
       useFileStore.getState().activate(project.id, key.slice(5));
     } else if (key?.startsWith('session:') && workspaceId) {
       useFileStore.getState().activate(project.id);
@@ -231,17 +242,31 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
     });
   }
 
+  function closeDiff(id: string) {
+    const key = diffKey(id);
+    useFileStore.getState().closeDiff(id);
+    if (id === fileId) {
+      const target = nextTab(key, order);
+      selectNeighbor(target);
+      focusAfterClose(target ?? '');
+    } else {
+      focusAfterClose('');
+    }
+  }
+
   const previousSession = useRef(current);
   useEffect(() => {
     if (current && previousSession.current !== current) {
-      useFileStore.getState().activate(project.id);
+      const store = useFileStore.getState();
+      const diff = store.diffs.find((tab) => tab.id === store.active[project.id]);
+      if (!diff || diff.workspaceId === workspaceId) store.activate(project.id);
     }
     previousSession.current = current;
-  }, [current, project.id]);
+  }, [current, project.id, workspaceId]);
 
   useEffect(() => {
-    if (workspaceId && !selectedFile && active && active.id !== current) useUiStore.getState().selectSession(workspaceId, active.id);
-  }, [active, current, selectedFile, workspaceId]);
+    if (workspaceId && !selectedDocument && active && active.id !== current) useUiStore.getState().selectSession(workspaceId, active.id);
+  }, [active, current, selectedDocument, workspaceId]);
 
   const pad = useHeaderPad();
 
@@ -264,7 +289,7 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
 
   async function closeTab(s: Session, leaveWorkspace = false) {
     if (!ws) return;
-    const wasSelected = !selectedFile && active?.id === s.id;
+    const wasSelected = !selectedDocument && active?.id === s.id;
     let unpinned = false;
     const hadDialog = !!closing;
     setClosePending(true);
@@ -277,7 +302,11 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
         items?.map((item) => item.id === s.id ? { ...item, pinned_tab: false } : item),
       );
       const ui = useUiStore.getState();
-      const stillSelected = wasSelected && !useFileStore.getState().active[project.id]
+      const files = useFileStore.getState();
+      const activeId = files.active[project.id];
+      const hasDocument = files.tabs.some((file) => file.id === activeId)
+        || files.diffs.some((diff) => diff.id === activeId && diff.workspaceId === ws.id);
+      const stillSelected = wasSelected && !hasDocument
         && (ui.sessionByWorkspace[ws.id] ?? s.id) === s.id;
       ui.removeTempTab(ws.id, s.id);
       if (ui.sessionByWorkspace[ws.id] === s.id) ui.selectSession(ws.id, null);
@@ -354,9 +383,17 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
             <li aria-hidden="true" className="flex">
               <ChevronRight className="size-3.5" />
             </li>
-            <TruncatedText as="li" data-tauri-drag-region aria-current="page" className="w-24 min-w-0 grow truncate font-medium text-foreground">
-              {ws.name ?? 'New workspace'}
-            </TruncatedText>
+            <TooltipProvider delayDuration={1000} skipDelayDuration={0}>
+              <TruncatedText
+                as="li"
+                data-tauri-drag-region
+                aria-current="page"
+                className="min-w-0 truncate font-medium text-foreground"
+                tooltip={{ align: 'start', sideOffset: 3 }}
+              >
+                {ws.name ?? 'New workspace'}
+              </TruncatedText>
+            </TooltipProvider>
             </> : null}
           </ol>
         </nav>
@@ -366,11 +403,11 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
       </header>
 
       {/* Session tab row */}
-      <div className="flex min-h-11 shrink-0 items-end gap-1 border-b border-border px-3">
+      <div className="flex h-11 shrink-0 items-end gap-1 border-b border-border px-3">
         <div ref={rowRef} onKeyDown={navigateTabs} className="flex min-w-0 items-center gap-1 overflow-x-auto pb-1.5 overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label={ws ? "Workspace tabs" : "Project tabs"}>
           {tabs.map((s) => {
             const st = statusOf(s);
-            const selected = !selectedFile && s.id === active?.id;
+            const selected = !selectedDocument && s.id === active?.id;
             return (
               <div
                 key={s.id}
@@ -432,6 +469,26 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
               </Button>
             </div>
           ))}
+          {workspaceDiffs.map((diff) => {
+            const key = diffKey(diff.id);
+            const selected = diff.id === fileId;
+            return (
+              <div key={key} className={cn(tabFrame, selected && selectedTabFrame)}>
+                <Button variant={selected ? 'ghost' : 'muted'} size="xs" ref={selected ? activeFileTab : undefined}
+                  role="tab" aria-selected={selected} title={diff.path} aria-label={`Changes: ${diff.path}`}
+                  id={domId(key, 'tab')} aria-controls={domId(key, 'panel')}
+                  tabIndex={selected ? 0 : -1} className={tabTrigger}
+                  onClick={() => useFileStore.getState().activate(project.id, diff.id)}>
+                  <FileDiff data-icon="inline-start" />
+                  <TruncatedText className="truncate">{diff.name}</TruncatedText>
+                </Button>
+                <Button variant="muted" size="icon-sm" aria-label={`Close changes for ${diff.path}`}
+                  onClick={() => closeDiff(diff.id)} tabIndex={selected ? 0 : -1} className={tabClose}>
+                  <X />
+                </Button>
+              </div>
+            );
+          })}
         </div>
         {ws ? <Tooltip content="New session in workspace">
           <Button
@@ -450,7 +507,7 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
       </div>
 
       {active && ws ? (
-        <div role="tabpanel" id={domId(sessionKey(active.id), 'panel')} aria-labelledby={domId(sessionKey(active.id), 'tab')} hidden={!!selectedFile} className={cn('min-h-0 flex-1 flex-col', !selectedFile && 'flex')}>
+        <div role="tabpanel" id={domId(sessionKey(active.id), 'panel')} aria-labelledby={domId(sessionKey(active.id), 'tab')} hidden={!!selectedDocument} className={cn('min-h-0 flex-1 flex-col', !selectedDocument && 'flex')}>
           <SessionView key={active.id} session={active} ws={ws} />
         </div>
       ) : null}
@@ -459,10 +516,17 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
           <FileEditor key={selectedFile.id} file={selectedFile} />
         </div>
       ) : null}
-      {order.filter((key) => key !== (active && sessionKey(active.id)) && key !== (selectedFile && fileKey(selectedFile.id))).map((key) => (
+      {selectedDiff ? (
+        <div role="tabpanel" id={domId(diffKey(selectedDiff.id), 'panel')} aria-labelledby={domId(diffKey(selectedDiff.id), 'tab')} className="flex min-h-0 flex-1 flex-col">
+          <FileChanges key={selectedDiff.id} tab={selectedDiff} />
+        </div>
+      ) : null}
+      {order.filter((key) => key !== (active && sessionKey(active.id))
+        && key !== (selectedFile && fileKey(selectedFile.id))
+        && key !== (selectedDiff && diffKey(selectedDiff.id))).map((key) => (
         <div key={key} role="tabpanel" id={domId(key, 'panel')} aria-labelledby={domId(key, 'tab')} hidden />
       ))}
-      {!active && !selectedFile ? (ws ? <div className="flex-1" /> : (
+      {!active && !selectedDocument ? (ws ? <div className="flex-1" /> : (
         <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">
           Pick a workspace or open a file from the Files panel.
         </div>

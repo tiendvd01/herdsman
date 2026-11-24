@@ -147,6 +147,10 @@ export function installDevMock() {
           fileContents.set(key, a.text);
           return null;
         }
+        case 'project_files_changed':
+          return a.projectId === P.id
+            ? [{ status: 'M', path: 'README.md' }, { status: '??', path: 'src/workspace.ts' }]
+            : [];
         case 'files_changed':
           return [{ status: 'M', path: 'README.md' }, { status: '??', path: 'src/auth/pkce.ts' }];
         case 'file_diff':

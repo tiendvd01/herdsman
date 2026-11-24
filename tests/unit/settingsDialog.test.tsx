@@ -3,11 +3,12 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render as rtlRender, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useZoomEffect } from '@/lib/zoomShortcuts';
 
 vi.mock('@/lib/api', () => ({ api: { fontFamilies: vi.fn(async () => ['Arial', 'Courier New', 'Georgia', 'Menlo']) } }));
 
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
+import { applyFonts } from '@/lib/theme';
+import { useZoomEffect } from '@/lib/zoomShortcuts';
 import { useUiStore } from '@/stores/useUiStore';
 import { useThemeFiles } from '@/theme/files';
 
@@ -118,6 +119,38 @@ describe('SettingsDialog', () => {
     expect(screen.queryByRole('option', { name: /Arial/ })).toBeNull();
     fireEvent.click(screen.getByRole('option', { name: /Georgia/ }));
     expect(useUiStore.getState().uiFont).toBe('family:Georgia');
+  });
+
+  it('selects a code font with the keyboard and restores the saved choice and Reset', async () => {
+    render(<SettingsDialog />);
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Code font' }));
+    const option = await screen.findByRole('option', { name: 'Menlo' });
+    expect(option.querySelector('span')?.style.fontFamily).toContain('Menlo');
+    const search = screen.getByRole('textbox', { name: 'Search code font' });
+    fireEvent.change(search, { target: { value: 'no-such-font' } });
+    expect(screen.getByText('No fonts found')).toBeTruthy();
+    fireEvent.change(search, { target: { value: 'menlo' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(useUiStore.getState()).toMatchObject({ codeFont: 'family:Menlo', uiFont: 'geist' });
+
+    const root = document.createElement('div');
+    async function restoreFontStack() {
+      const saved = localStorage.getItem('herdsman-ui')!;
+      await act(async () => {
+        useUiStore.setState({ codeFont: 'monaco' });
+        localStorage.setItem('herdsman-ui', saved);
+        await useUiStore.persist.rehydrate();
+      });
+      const { uiFont, codeFont } = useUiStore.getState();
+      applyFonts(uiFont, codeFont, root);
+      return root.style.getPropertyValue('--font-mono');
+    }
+
+    expect(await restoreFontStack()).toBe("'Menlo', 'Geist Mono', ui-monospace, monospace");
+    fireEvent.click(screen.getByRole('button', { name: 'Reset code font' }));
+    expect(await restoreFontStack()).toBe("'Geist Mono', ui-monospace, monospace");
+    expect(root.style.getPropertyValue('--font-sans')).toBe("'Geist', system-ui, sans-serif");
   });
 
   it('lists built-in themes by brightness in the Light theme and Dark theme selects', () => {

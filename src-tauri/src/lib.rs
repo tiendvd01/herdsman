@@ -183,6 +183,7 @@ pub fn run() {
             commands::task_remove,
             commands::agent_tree,
             commands::files_changed,
+            commands::project_files_changed,
             commands::file_diff,
             commands::project_files_list,
             commands::project_file_read,

@@ -14,9 +14,10 @@ async function boot() {
   const { useUiStore } = await import('./stores/useUiStore');
   const { applyZoom, applyCodeFontSize, applyContentStep } = await import('./lib/uiZoom');
   // Spec 016: paint the chosen theme (cached resolved colours, else built-in) before React renders, so no theme flashes.
-  const { bootTheme } = await import('./lib/theme');
+  const { applyFonts, bootTheme } = await import('./lib/theme');
   bootTheme();
-  const { zoom, contentStep, codeFontSize } = useUiStore.getState();
+  const { zoom, contentStep, uiFont, codeFont, codeFontSize } = useUiStore.getState();
+  applyFonts(uiFont, codeFont);
   applyContentStep(contentStep);
   applyCodeFontSize(codeFontSize);
   await applyZoom(zoom); // later changes: useZoomEffect in AppShell

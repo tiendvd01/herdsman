@@ -11,6 +11,7 @@ export const qk = {
   tasks: (projectId: string) => ['tasks', projectId] as const,
   agentTree: (sessionId: string) => ['agentTree', sessionId] as const,
   files: (workspaceId: string) => ['files', workspaceId] as const,
+  projectFilesChanged: (projectId: string) => ['files', 'project', projectId] as const,
 };
 
 /** Installed font families (spec 010); fetched once per app run. */

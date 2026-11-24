@@ -58,6 +58,7 @@ export const ROLES: Role[] = [
   { key: 'diff_del', cssVar: '--diff-del', tailwind: true, derive: (b, c) => mix(b.background, c('error'), 12) },
   { key: 'diff_add_fg', cssVar: '--diff-add-fg', tailwind: true, derive: (b, c) => mix(c('done'), b.foreground, 30) },
   { key: 'diff_del_fg', cssVar: '--diff-del-fg', tailwind: true, derive: (b, c) => mix(c('error'), b.foreground, 30) },
+  { key: 'git_rename_fg', cssVar: '--git-rename-fg', tailwind: true, derive: (b, c) => mix(c('working'), b.foreground, 30) },
   // The Log (terminal) stays dark in every theme, so these defaults ignore the theme's own background.
   { key: 'term_bg', cssVar: '--term-bg', tailwind: true, derive: () => '#09090b' },
   { key: 'term_fg', cssVar: '--term-fg', tailwind: true, derive: () => '#d4d4d8' },

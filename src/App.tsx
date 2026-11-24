@@ -10,7 +10,7 @@ export default function App() {
   useAppearanceEffect();
   useBackendEvents();
   return (
-    <TooltipProvider>
+    <TooltipProvider delayDuration={300}>
       <AppShell />
       <CommandDialog />
       <SettingsDialog />

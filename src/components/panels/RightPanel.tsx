@@ -6,11 +6,11 @@ import { FileTree } from '@/components/files/FileTree';
 import { TruncatedText } from '@/components/ui/truncated-text';
 // Right side panel: Agents, Background tasks, Files, Git, Log (BR 3.1).
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
-import { Bot, ChevronLeft, FolderTree, GitBranch, Maximize2, Minimize2, Play, RefreshCw, ScrollText, SquareTerminal } from 'lucide-react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Bot, ChevronDown, ChevronRight, FolderTree, GitBranch, Maximize2, Minimize2, Play, RefreshCw, ScrollText, SquareTerminal } from 'lucide-react';
 import { api, errMsg } from '@/lib/api';
 import { qk, useProjects, useSessions } from '@/lib/queries';
-import type { AgentNode, SessionStatus, TaskRef } from '@/lib/types';
+import type { AgentNode, ChangedFile, SessionStatus, TaskRef } from '@/lib/types';
 import { cn, timeAgo } from '@/lib/utils';
 import { useUiStore, type RightTab } from '@/stores/useUiStore';
 import { RIGHT } from '@/lib/layout';
@@ -20,8 +20,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { StatusDot, STATUS_LABEL } from '@/components/ui/status-dot';
 import { toast } from '@/components/ui/toast';
-import { Diff } from '@/components/conversation/Diff';
-import type { DiffLine } from '@/components/conversation/lineDiff';
+import { filePanelHeader, fileRow, gitStatusMarker, gitStatusPresentation, selectedFileRow } from '@/components/files/fileRows';
+import { materialFileIcon } from '@/components/files/materialFileIcons';
+import { useFileStore } from '@/stores/useFileStore';
 
 const TABS: { id: RightTab; label: string; Icon: typeof Bot }[] = [
   { id: 'project-files', label: 'Files', Icon: FolderTree },
@@ -76,13 +77,13 @@ export function RightPanel() {
         </div>
         <TabsContent value="agents" className="min-h-0 flex-1 overflow-y-auto">{tab === 'agents' && <AgentsPanel sessionId={sessionId} />}</TabsContent>
         <TabsContent value="tasks" className="min-h-0 flex-1 overflow-y-auto">{tab === 'tasks' && <TasksPanel projectId={projectId} />}</TabsContent>
-        <TabsContent value="files" className="flex min-h-0 flex-1 flex-col overflow-y-auto data-[state=inactive]:hidden">{tab === 'files' && <GitPanel key={workspaceId} workspaceId={workspaceId} />}</TabsContent>
+        <TabsContent value="files" className="flex min-h-0 flex-1 flex-col overflow-y-auto data-[state=inactive]:hidden">{tab === 'files' && <GitPanel projectId={projectId} workspaceId={workspaceId} />}</TabsContent>
         <TabsContent value="project-files" className="flex min-h-0 flex-1 flex-col overflow-y-auto data-[state=inactive]:hidden">
           {tab === 'project-files' && (
             <section aria-label="Files" className="flex min-h-0 flex-1 flex-col">
               {project ? (
                 <>
-                  <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+                  <div className={filePanelHeader}>
                     <FolderTree className="size-4 shrink-0 text-muted-foreground" />
                     <h2 className="min-w-0 text-xs font-medium">
                       <TruncatedText className="block truncate">{project.name}</TruncatedText>
@@ -309,77 +310,148 @@ function TasksPanel({ projectId }: { projectId: string | null }) {
 }
 
 // ── Git ──
-function splitPath(p: string) {
-  const i = p.lastIndexOf('/');
-  return i < 0 ? { dir: '', name: p } : { dir: p.slice(0, i), name: p.slice(i + 1) };
+function navigateChangedFiles(event: KeyboardEvent<HTMLUListElement>) {
+  const rows = Array.from(event.currentTarget.querySelectorAll('button')).filter((row) => !row.closest('[hidden]'));
+  const index = rows.findIndex((row) => row === event.target);
+  if (index < 0) return;
+  let next: number;
+  switch (event.key) {
+    case 'ArrowDown': next = Math.min(index + 1, rows.length - 1); break;
+    case 'ArrowUp': next = Math.max(index - 1, 0); break;
+    case 'Home': next = 0; break;
+    case 'End': next = rows.length - 1; break;
+    default: return;
+  }
+  event.preventDefault();
+  rows[next].focus();
 }
 
-function GitPanel({ workspaceId }: { workspaceId: string | null }) {
-  const [sel, setSel] = useState<string | null>(null);
-  const { data: files, refetch, isFetching, isLoading, error } = useQuery({ queryKey: qk.files(workspaceId ?? ''), queryFn: () => api.filesChanged(workspaceId!), enabled: !!workspaceId, refetchInterval: 5000 });
-  const { data: diff, error: diffError } = useQuery({ queryKey: ['diff', workspaceId, sel], queryFn: () => api.fileDiff(workspaceId!, sel!), enabled: !!workspaceId && !!sel });
+interface ChangedDirectory {
+  folders: Map<string, ChangedDirectory>;
+  files: ChangedFile[];
+}
 
-  if (sel && workspaceId) {
-    const lines: DiffLine[] = (diff ?? '')
-      .split('\n')
-      .filter((l) => !/^(diff --git|index |--- |\+\+\+ )/.test(l))
-      .map((l) => ({ kind: l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : 'ctx', text: l.startsWith('@@') ? l : l.slice(1) }));
-    const add = lines.filter((l) => l.kind === 'add').length;
-    const del = lines.filter((l) => l.kind === 'del').length;
-    const { dir, name } = splitPath(sel);
+function groupChangedFiles(files: ChangedFile[]) {
+  const root: ChangedDirectory = { folders: new Map(), files: [] };
+  for (const file of files) {
+    const parts = file.path.split('/');
+    parts.pop();
+    let directory = root;
+    for (const name of parts) {
+      let child = directory.folders.get(name);
+      if (!child) {
+        child = { folders: new Map(), files: [] };
+        directory.folders.set(name, child);
+      }
+      directory = child;
+    }
+    directory.files.push(file);
+  }
+  return root;
+}
+
+const changedFileRow = 'h-[30px] w-full px-2 focus-visible:border-ring focus-visible:ring-inset';
+
+function ChangedFolder({ name, directory, renderFile }: {
+  name: string;
+  directory: ChangedDirectory;
+  renderFile: (file: ChangedFile) => JSX.Element;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const Icon = expanded ? ChevronDown : ChevronRight;
+  return (
+    <li>
+      <Button variant="ghost" size="xs" aria-expanded={expanded} title={name}
+        className={cn(changedFileRow, fileRow)} onClick={() => setExpanded((value) => !value)}>
+        <Icon data-icon="inline-start" />
+        <TruncatedText className="min-w-0 flex-1 truncate text-left">{name}</TruncatedText>
+      </Button>
+      <ul hidden={!expanded} className="pl-4">
+        <ChangedDirectoryRows directory={directory} renderFile={renderFile} />
+      </ul>
+    </li>
+  );
+}
+
+function ChangedDirectoryRows({ directory, renderFile }: {
+  directory: ChangedDirectory;
+  renderFile: (file: ChangedFile) => JSX.Element;
+}) {
+  return (
+    <>
+      {Array.from(directory.folders, ([name, child]) => (
+        <ChangedFolder key={'folder:' + name} name={name} directory={child} renderFile={renderFile} />
+      ))}
+      {directory.files.map(renderFile)}
+    </>
+  );
+}
+
+function GitPanel({ projectId, workspaceId }: { projectId: string | null; workspaceId: string | null }) {
+  const { data: files, refetch, isFetching, isPending, error } = useQuery({
+    queryKey: qk.files(workspaceId ?? ''),
+    queryFn: () => api.filesChanged(workspaceId!),
+    enabled: !!workspaceId,
+    refetchInterval: 5000,
+  });
+  const qc = useQueryClient();
+  const treeView = useUiStore((state) => state.gitTreeView);
+  const toggleTreeView = useUiStore((state) => state.toggleGitTreeView);
+  const activePath = useFileStore((state) => state.diffs.find((diff) =>
+    diff.workspaceId === workspaceId && diff.id === state.active[diff.projectId])?.path);
+
+  function renderFile({ path, status }: ChangedFile) {
+    const name = path.slice(path.lastIndexOf('/') + 1);
+    const change = gitStatusPresentation(status);
+    const selected = activePath === path;
     return (
-      <section aria-label="File content" className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center gap-1.5 border-b border-border py-2 pl-2 pr-3">
-          <Button variant="ghost" size="icon" aria-label="Back to file list" onClick={() => setSel(null)}>
-            <ChevronLeft />
-          </Button>
-          <span className="flex min-w-0 flex-1 flex-col leading-snug">
-            <TruncatedText className="truncate font-mono text-[12px] font-medium">{name}</TruncatedText>
-            <TruncatedText className="truncate text-xs text-muted-foreground">
-              {dir || 'project root'} · <span className="text-diff-add-fg">+{add}</span> <span className="text-diff-del-fg">−{del}</span>
-            </TruncatedText>
-          </span>
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto">
-          {diff === undefined ? (diffError ? <LoadError error={diffError} /> : <Loading />) : <Diff lines={lines} maxHeight={100000} bare />}
-        </div>
-      </section>
+      <li key={'file:' + path} className="h-[32px]">
+        <Button variant="ghost" size="xs" title={path} aria-label={`Changes for ${path}, Git status ${status}: ${change.label}`}
+          aria-current={selected || undefined}
+          onClick={() => { if (projectId && workspaceId) useFileStore.getState().openDiff(projectId, workspaceId, path); }}
+          className={cn(changedFileRow, fileRow, selected && selectedFileRow)}>
+          <img src={materialFileIcon(name, false)} alt="" data-icon="inline-start" className="size-4 shrink-0" />
+          <TruncatedText className={cn('min-w-0 flex-1 truncate text-left', change.className)}>{treeView ? name : path}</TruncatedText>
+          <span aria-hidden="true" className={cn(gitStatusMarker, change.className)}>{change.marker}</span>
+        </Button>
+      </li>
     );
   }
 
   return (
-    <section aria-label="Git" className="flex flex-col gap-3 p-4">
-      <SectionHead title="Git" desc={workspaceId && files ? `${files.length} uncommitted ${files.length === 1 ? 'change' : 'changes'} in the workspace` : 'Uncommitted changes in the workspace'}>
+    <section aria-label="Git changes" className="flex min-h-0 flex-1 flex-col">
+      <div className={filePanelHeader}>
+        <GitBranch className="size-4 shrink-0 text-muted-foreground" />
+        <h2 className="min-w-0 flex-1 text-xs font-medium">Changes{files ? ` (${files.length})` : ''}</h2>
+        <Button variant={treeView ? 'secondary' : 'ghost'} size="icon-sm" aria-label="Tree view"
+          aria-pressed={treeView} title={treeView ? 'Show as list' : 'Show as tree'} onClick={toggleTreeView}>
+          <FolderTree data-icon="inline-start" />
+        </Button>
         {workspaceId ? (
-          <Button variant="ghost" size="icon" onClick={() => refetch()} aria-label="Refresh">
-            <RefreshCw className={cn('size-[15px]', isFetching && 'animate-spin')} />
+          <Button variant="ghost" size="icon-sm" aria-label="Refresh Git changes" disabled={isFetching}
+            onClick={() => {
+              void refetch();
+              void qc.invalidateQueries({ queryKey: ['diff', workspaceId] });
+              if (projectId) void qc.invalidateQueries({ queryKey: qk.projectFilesChanged(projectId) });
+            }}>
+            <RefreshCw className={cn(isFetching && 'animate-spin')} />
           </Button>
         ) : null}
-      </SectionHead>
-      {!workspaceId ? <Empty>Pick a workspace.</Empty> : files === undefined ? (isLoading ? <Loading /> : error ? <LoadError error={error} /> : null) : files.length === 0 ? <Empty>No changes yet.</Empty> : null}
-      {(files?.length ?? 0) ? (
-        <div className="flex flex-col gap-0.5">
-          {(files ?? []).map((f) => {
-            const { dir, name } = splitPath(f.path);
-            const kind = f.status === '??' ? 'A' : f.status.trim().slice(0, 1) || 'M';
-            return (
-              <button
-                type="button"
-                key={f.path}
-                onClick={() => setSel(f.path)}
-                className="flex min-h-11 items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-accent"
-                title={f.path}
-              >
-                <span className="flex size-5 shrink-0 items-center justify-center rounded border border-border font-mono text-[11px] font-semibold">{kind}</span>
-                <span className="flex min-w-0 flex-1 flex-col leading-snug">
-                  <TruncatedText className="truncate font-mono text-[12px]">{name}</TruncatedText>
-                  <TruncatedText className="truncate text-xs text-muted-foreground">{dir || 'project root'}</TruncatedText>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col px-2 py-2">
+        {!workspaceId ? <Empty>Select a workspace to view changes.</Empty>
+          : isPending ? <Loading />
+          : error ? <LoadError error={error} />
+          : files?.length === 0 ? <Empty>No changes yet.</Empty> : null}
+        {workspaceId && files && files.length > 0 ? (
+          <ul aria-label="Changed files" hidden={Boolean(error)} onKeyDown={navigateChangedFiles}
+            className="min-h-0 overflow-auto rounded-md">
+            {treeView
+              ? <ChangedDirectoryRows key={workspaceId} directory={groupChangedFiles(files)} renderFile={renderFile} />
+              : files.map(renderFile)}
+          </ul>
+        ) : null}
+      </div>
     </section>
   );
 }

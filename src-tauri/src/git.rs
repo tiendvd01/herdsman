@@ -4,8 +4,12 @@ use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 async fn git(dir: &Path, args: &[&str]) -> AppResult<String> {
+    git_output(dir, args, false).await
+}
+
+async fn git_output(dir: &Path, args: &[&str], allow_differences: bool) -> AppResult<String> {
     let out = Command::new("git").arg("-C").arg(dir).args(args).output().await?;
-    if !out.status.success() {
+    if !(out.status.success() || allow_differences && out.status.code() == Some(1)) {
         return Err(AppError::new("git", String::from_utf8_lossy(&out.stderr).trim().to_string()));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
@@ -89,27 +93,81 @@ pub async fn worktree_remove(project: &Path, path: &Path, force: bool) -> AppRes
     git(project, &args).await.map(|_| ())
 }
 
-/// File đã thay đổi so với HEAD trong thư mục làm việc (panel Files).
+struct Change {
+    status: String,
+    path: String,
+    original: Option<String>,
+}
+
+async fn changes(dir: &Path) -> AppResult<Vec<Change>> {
+    let output = git(dir, &["status", "--porcelain=v1", "-z", "--untracked-files=all"]).await?;
+    let mut fields = output.split_terminator('\0');
+    let mut changes = Vec::new();
+    while let Some(field) = fields.next() {
+        let (Some(status), Some(path)) = (field.get(..2), field.get(3..)) else {
+            continue;
+        };
+        // Porcelain v1 with -z reports the destination before the source.
+        let original = if status.contains(['R', 'C']) {
+            fields.next().map(str::to_owned)
+        } else {
+            None
+        };
+        changes.push(Change { status: status.trim().to_owned(), path: path.to_owned(), original });
+    }
+    Ok(changes)
+}
+
 pub async fn changed_files(dir: &Path) -> AppResult<Vec<(String, String)>> {
-    let out = git(dir, &["status", "--porcelain"]).await?;
-    Ok(out
-        .lines()
-        .filter(|l| l.len() > 3)
-        .map(|l| (l[..2].trim().to_string(), l[3..].to_string()))
-        .collect())
+    Ok(changes(dir).await?.into_iter().map(|change| (change.status, change.path)).collect())
+}
+
+pub async fn project_changed_files(dir: &Path) -> AppResult<Vec<(String, String)>> {
+    let project = tokio::fs::canonicalize(dir).await?;
+    let output = Command::new("git")
+        .arg("-C").arg(&project)
+        .args(["rev-parse", "--show-toplevel"])
+        .env("LC_ALL", "C")
+        .output().await?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr);
+        if message.starts_with("fatal: not a git repository")
+            || message.starts_with("fatal: this operation must be run in a work tree")
+        {
+            return Ok(vec![]);
+        }
+        return Err(AppError::new("git", message.trim()));
+    }
+    let root = String::from_utf8_lossy(&output.stdout);
+    let root = tokio::fs::canonicalize(root.strip_suffix('\n').unwrap_or(&root)).await?;
+    let prefix = project.strip_prefix(&root)
+        .map_err(|error| AppError::new("git", error.to_string()))?;
+    Ok(changed_files(&root).await?.into_iter().filter_map(|(status, path)| {
+        let relative = Path::new(&path).strip_prefix(prefix).ok()?;
+        Some((status, relative.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")))
+    }).collect())
 }
 
 pub async fn file_diff(dir: &Path, file: &str) -> AppResult<String> {
-    let d = git(dir, &["diff", "HEAD", "--", file]).await.unwrap_or_default();
-    if d.is_empty() {
-        // file mới chưa track
-        let p = dir.join(file);
-        if p.is_file() {
-            let content = std::fs::read_to_string(&p).unwrap_or_default();
-            return Ok(content.lines().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n"));
-        }
+    let Some(change) = changes(dir).await?.into_iter().find(|change| change.path == file) else {
+        return Ok(String::new());
+    };
+    let root = git(dir, &["rev-parse", "--show-toplevel"]).await?;
+    let dir = Path::new(root.strip_suffix('\n').unwrap_or(&root));
+    if change.status == "??" {
+        let file = format!("./{file}");
+        return git_output(dir, &["diff", "--no-index", "--no-ext-diff", "--no-color", "--", "/dev/null", &file], true).await;
     }
-    Ok(d)
+    let base = if git(dir, &["rev-parse", "--verify", "HEAD"]).await.is_ok() {
+        "HEAD".to_owned()
+    } else {
+        git(dir, &["hash-object", "-t", "tree", "/dev/null"]).await?.trim().to_owned()
+    };
+    let mut args = vec!["--literal-pathspecs", "diff", "--no-ext-diff", "--no-color", &base, "--", file];
+    if let Some(original) = change.original.as_deref() {
+        args.push(original);
+    }
+    git(dir, &args).await
 }
 
 #[cfg(test)]
@@ -133,6 +191,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_status_uses_project_relative_paths_and_checkout() {
+        let repo = init_repo().await;
+        let root = repo.path();
+        for folder in ["app", "app-other"] {
+            std::fs::create_dir(root.join(folder)).unwrap();
+            std::fs::write(root.join(folder).join("main.ts"), "baseline").unwrap();
+        }
+        git(root, &["add", "."]).await.unwrap();
+        git(root, &["commit", "-m", "add projects"]).await.unwrap();
+
+        let worktrees = tempfile::tempdir().unwrap();
+        let worktree = worktrees.path().join("feature");
+        worktree_add(root, &worktree, "feature", "main").await.unwrap();
+        std::fs::write(worktree.join("app/main.ts"), "worktree change").unwrap();
+        std::fs::write(root.join("app-other/main.ts"), "outside project").unwrap();
+        let project = root.join("app");
+        assert!(project_changed_files(&project).await.unwrap().is_empty());
+        assert_eq!(
+            project_changed_files(&worktree.join("app")).await.unwrap(),
+            vec![("M".into(), "main.ts".into())],
+        );
+        std::fs::write(project.join("main.ts"), "project change").unwrap();
+        assert_eq!(
+            project_changed_files(&project).await.unwrap(),
+            vec![("M".into(), "main.ts".into())],
+        );
+        assert!(project_changed_files(worktrees.path()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn worktree_lifecycle() {
         let repo = init_repo().await;
         let wt_root = tempfile::tempdir().unwrap();
@@ -153,6 +241,25 @@ mod tests {
         worktree_remove(repo.path(), &a, true).await.unwrap();
         assert!(!a.exists());
         assert_eq!(current_branch(&b).await.as_deref(), Some("feat-b"));
+    }
+
+    #[tokio::test]
+    async fn file_changes_use_literal_paths_and_show_empty_after_revert() {
+        let repo = init_repo().await;
+        let root = repo.path();
+        let path = "tên [file].md";
+        std::fs::write(root.join(path), "new text\n").unwrap();
+        assert!(changed_files(root).await.unwrap().contains(&("??".into(), path.into())));
+        assert!(file_diff(root, path).await.unwrap().contains("+new text"));
+
+        std::fs::write(root.join("README.md"), "edited\n").unwrap();
+        assert!(file_diff(root, "README.md").await.unwrap().contains("-hello"));
+        std::fs::write(root.join("README.md"), "hello\n").unwrap();
+        assert!(file_diff(root, "README.md").await.unwrap().is_empty());
+
+        git(root, &["mv", "README.md", "signed off.md"]).await.unwrap();
+        assert!(changed_files(root).await.unwrap().contains(&("R".into(), "signed off.md".into())));
+        assert!(file_diff(root, "signed off.md").await.unwrap().contains("rename from README.md"));
     }
 
     #[test]

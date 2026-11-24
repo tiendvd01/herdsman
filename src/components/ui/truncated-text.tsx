@@ -1,15 +1,19 @@
-import { useCallback, useRef, useState, type HTMLAttributes } from 'react';
+import { useCallback, useRef, useState, type ComponentProps, type HTMLAttributes } from 'react';
 import { Tooltip } from '@/components/ui/tooltip';
 
-type TruncatedTextProps = HTMLAttributes<HTMLElement> & { as?: 'span' | 'li' };
+type TruncatedTextProps = HTMLAttributes<HTMLElement> & {
+  as?: 'span' | 'li';
+  tooltip?: Pick<ComponentProps<typeof Tooltip>, 'align' | 'sideOffset'>;
+};
 
-export function TruncatedText({ as: Tag = 'span', children, ...props }: TruncatedTextProps) {
+export function TruncatedText({ as: Tag = 'span', children, tooltip, ...props }: TruncatedTextProps) {
   const label = useRef<HTMLElement | null>(null);
   const setLabel = useCallback((element: HTMLElement | null) => { label.current = element; }, []);
   const [open, setOpen] = useState(false);
 
   return (
     <Tooltip
+      {...tooltip}
       open={open}
       onOpenChange={(nextOpen) => {
         const element = label.current;

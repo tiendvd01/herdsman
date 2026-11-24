@@ -1,13 +1,16 @@
+import { fileRow, gitStatusMarker, gitStatusPresentation, selectedFileRow } from './fileRows';
+import { materialFileIcon } from './materialFileIcons';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { useRef, useState, type KeyboardEvent } from 'react';
-import { useQueries } from '@tanstack/react-query';
+import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
-import { AlertCircle, ChevronRight, FileCode2, FileImage, FileText, Folder, FolderOpen } from 'lucide-react';
+import { AlertCircle, ChevronRight, Folder } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { TruncatedText } from '@/components/ui/truncated-text';
 import { api, errMsg, type ProjectFileEntry } from '@/lib/api';
+import { qk } from '@/lib/queries';
 import type { Project } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { useFileStore } from '@/stores/useFileStore';
@@ -22,6 +25,12 @@ export function FileTree({ project }: { project: Project }) {
   const [focused, setFocused] = useState('');
   const active = useFileStore((state) => state.active[project.id]);
   const activePath = useFileStore((state) => state.tabs.find((file) => file.id === active)?.path);
+  const { data: changes } = useQuery({
+    queryKey: qk.projectFilesChanged(project.id),
+    queryFn: () => api.projectFilesChanged(project.id),
+    refetchInterval: 5000,
+  });
+  const statuses = useMemo(() => new Map(changes?.map(({ path, status }) => [path, status])), [changes]);
   const expandedPaths = new Set(expanded);
   const paths = ['', ...expanded];
   const queries = useQueries({
@@ -106,21 +115,22 @@ export function FileTree({ project }: { project: Project }) {
               const row = rows[index];
               const open = expandedPaths.has(row.path);
               const query = byPath.get(row.path);
-              const isCode = /\.(ts|js|tsx|jsx|rs|py|css|html|json|toml|ya?ml|sh|go|java)$/i.test(row.name);
-              const isImage = /\.(png|jpe?g|svg|gif|webp)$/i.test(row.name);
-              const Icon = row.directory ? open ? FolderOpen : Folder : isCode ? FileCode2 : isImage ? FileImage : FileText;
+              const status = row.directory ? undefined : statuses.get(row.path);
+              const change = status ? gitStatusPresentation(status) : undefined;
               return (
                 <Button variant="ghost" size="xs" tabIndex={-1} key={row.path} id={`file-tree-${index}`} role="treeitem"
                   aria-level={row.depth + 1} aria-expanded={row.directory ? open : undefined}
                   aria-selected={row.directory ? undefined : activePath === row.path}
+                  aria-label={change ? `${row.name}, Git status: ${change.label}` : undefined}
                   onClick={() => { host.current?.focus({ preventScroll: true }); select(row); }}
                   style={{ top: start, height: size - 2, paddingLeft: 8 + row.depth * 14 }}
-                  className={cn('absolute inset-x-0 justify-start gap-1.5 border border-transparent font-normal text-foreground hover:bg-accent/60',
-                    activePath === row.path && 'border-border bg-accent font-medium text-accent-foreground hover:bg-accent',
+                  className={cn('absolute inset-x-0', fileRow,
+                    activePath === row.path && selectedFileRow,
                     focusIndex === index && 'group-focus-visible/tree:border-ring')}>
                   {row.directory ? <ChevronRight className={cn('shrink-0 text-muted-foreground', open && 'rotate-90')} /> : <span className="size-4 shrink-0" />}
-                  <Icon data-icon="inline-start" />
-                  <TruncatedText className="min-w-0 flex-1 truncate text-left">{row.name}</TruncatedText>
+                  <img src={materialFileIcon(row.name, row.directory)} alt="" data-icon="inline-start" className="size-4 shrink-0" />
+                  <TruncatedText className={cn('min-w-0 flex-1 truncate text-left', change?.className)}>{row.name}</TruncatedText>
+                  {change ? <span aria-hidden="true" className={cn(gitStatusMarker, change.className)}>{change.marker}</span> : null}
                   {query?.isPending ? <Spinner label="Loading folder" className="text-muted-foreground" /> : null}
                   {query?.error ? <span role="img" aria-label={errMsg(query.error)} title={errMsg(query.error)} className="text-destructive">!</span> : null}
                 </Button>

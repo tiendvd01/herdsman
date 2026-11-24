@@ -895,6 +895,13 @@ pub async fn files_changed(st: St<'_>, workspace_id: String) -> AppResult<Vec<Ch
 }
 
 #[tauri::command]
+pub async fn project_files_changed(st: St<'_>, project_id: String) -> AppResult<Vec<ChangedFile>> {
+    let project = store::project_get(&st.db.lock(), &project_id)?;
+    Ok(git::project_changed_files(Path::new(&project.path)).await?.into_iter()
+        .map(|(status, path)| ChangedFile { status, path }).collect())
+}
+
+#[tauri::command]
 pub async fn file_diff(st: St<'_>, workspace_id: String, path: String) -> AppResult<String> {
     let ws = store::workspace_get(&st.db.lock(), &workspace_id)?;
     git::file_diff(Path::new(&ws.work_dir), &path).await

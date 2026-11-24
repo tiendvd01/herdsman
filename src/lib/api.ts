@@ -120,5 +120,6 @@ export const api = {
   taskRemove: (terminal: string) => invoke<void>('task_remove', { terminal }),
   agentTree: (sessionId: string) => invoke<AgentNode | null>('agent_tree', { sessionId }),
   filesChanged: (workspaceId: string) => invoke<ChangedFile[]>('files_changed', { workspaceId }),
+  projectFilesChanged: (projectId: string) => invoke<ChangedFile[]>('project_files_changed', { projectId }),
   fileDiff: (workspaceId: string, path: string) => invoke<string>('file_diff', { workspaceId, path }),
 };
