@@ -4,18 +4,20 @@ import { useFileClose } from '@/components/files/FileCloseDialog';
 import { isDirty, useFileStore } from '@/stores/useFileStore';
 import { TruncatedText } from '@/components/ui/truncated-text';
 // Center column: workspace header, session tab row, conversation (BR 3.1; FR-009, FR-018, FR-027, FR-029).
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, FileDiff, FileText, PanelLeft, PanelRight, Plus, X } from 'lucide-react';
+import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ChevronRight, FileDiff, FileText, PanelLeft, PanelRight, Plus, Terminal as TerminalIcon, X } from 'lucide-react';
 import { Button, Kbd } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/alert-dialog';
 import { Tooltip, TooltipProvider } from '@/components/ui/tooltip';
+import { Spinner } from '@/components/ui/spinner';
 import { StatusDot } from '@/components/ui/status-dot';
 import { EngineIcon } from '@/components/ui/engine-icon';
 import { HistoryPopover } from '@/components/history/HistoryPopover';
 import { SessionView } from '@/components/conversation/SessionView';
-import { api, errMsg } from '@/lib/api';
+import { api, errMsg, type WorkspaceTerminalRef } from '@/lib/api';
 import { toast } from '@/components/ui/toast';
 import { createSession } from '@/lib/actions';
 import { qk, useProjects, useSessions, useWorkspaces } from '@/lib/queries';
@@ -23,7 +25,9 @@ import type { Project, Session, SessionStatus, Workspace } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { IS_MAC, TRAFFIC_LIGHTS_PAD } from '@/lib/platform';
 import { SHORTCUT_ARIA, SHORTCUT_LABEL } from '@/lib/sidebarShortcuts';
-import { useUiStore } from '@/stores/useUiStore';
+import { sessionTabStatus, useUiStore } from '@/stores/useUiStore';
+
+const WorkspaceTerminal = lazy(() => import('@/components/terminal/WorkspaceTerminal'));
 
 export function useLiveStatus(s: Session | undefined): SessionStatus {
   const live = useUiStore((st) => (s ? st.statuses[s.id]?.state : undefined));
@@ -113,10 +117,10 @@ function TopBar() {
   );
 }
 
-const tabFrame = 'flex shrink-0 items-center rounded-md border border-transparent pr-0.5';
+const tabFrame = 'flex shrink-0 items-center rounded-md border border-transparent pr-0.5 transition-colors hover:bg-muted';
 const selectedTabFrame = 'border-border bg-muted';
-const tabTrigger = 'max-w-[240px] justify-start gap-1.5 px-2';
-const tabClose = 'size-6';
+const tabTrigger = 'max-w-[240px] justify-start gap-1.5 px-2 hover:bg-transparent';
+const tabClose = 'size-6 hover:bg-transparent';
 
 function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   const workspaceId = ws?.id ?? null;
@@ -128,6 +132,46 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   const selectedDiff = workspaceDiffs.find((diff) => diff.id === fileId);
   const selectedFile = fileTabs.find((file) => file.id === fileId);
   const selectedDocument = selectedFile ?? selectedDiff;
+  const [launcherOpen, setLauncherOpen] = useState(false);
+  const [terminalAddress, setTerminalAddress] = useState<string>();
+  const terminalQueryKey = qk.workspaceTerminals(workspaceId ?? '');
+  const { data: workspaceTerminals = [] } = useQuery({
+    queryKey: terminalQueryKey,
+    queryFn: () => api.workspaceTerminalList(workspaceId!),
+    enabled: !!workspaceId && ws?.archived_at == null,
+    retry: false,
+  });
+  const terminals = ws?.archived_at == null ? workspaceTerminals : [];
+  const selectedTerminal = selectedDocument ? undefined : terminals.find((t) => t.address === terminalAddress);
+  const createTerminal = useMutation({
+    mutationFn: () => api.workspaceTerminalCreate(workspaceId!),
+    onSuccess: (terminal) => {
+      void qc.cancelQueries({ queryKey: terminalQueryKey });
+      qc.setQueryData<WorkspaceTerminalRef[]>(terminalQueryKey, (items) => [
+        ...(items ?? []).filter((item) => item.address !== terminal.address),
+        terminal,
+      ]);
+      if (inContext()) selectTerminal(terminal.address);
+    },
+    onError: (error) => toast(errMsg(error), 'error'),
+  });
+  const stopTerminal = useMutation({
+    mutationFn: (address: string) => api.workspaceTerminalStop(workspaceId!, address),
+    onSuccess: (_, address) => {
+      void qc.cancelQueries({ queryKey: terminalQueryKey });
+      qc.setQueryData<WorkspaceTerminalRef[]>(terminalQueryKey, (items) => items?.filter((item) => item.address !== address));
+      setTerminalAddress((current) => current === address ? undefined : current);
+      const target = selectedTerminal?.address === address ? nextTab(terminalKey(address), order) : undefined;
+      if (target && inContext()) selectNeighbor(target);
+      focusAfterClose(target ?? '');
+    },
+    onError: (error) => toast(errMsg(error), 'error'),
+  });
+  function selectTerminal(address: string) {
+    useFileStore.getState().activate(project.id);
+    setTerminalAddress(address);
+  }
+
   const activeFileTab = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     activeFileTab.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
@@ -164,26 +208,57 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   const fileClose = useFileClose(restoreCloseFocus);
   const { data: sessions = [] } = useSessions(workspaceId);
   const statuses = useUiStore((s) => s.statuses);
+  const viewedCompletions = useUiStore((s) => s.viewedCompletions);
   const current = useUiStore((s) => workspaceId ? s.sessionByWorkspace[workspaceId] : undefined);
   const temp = useUiStore((s) => workspaceId ? s.tempTabs[workspaceId] : undefined) ?? [];
 
+  const [pendingClose, setPendingClose] = useState<{ id: string; wasDone: boolean } | null>(null);
+  const closePending = pendingClose !== null;
   const statusOf = (s: Session) => statuses[s.id]?.state ?? s.status;
   // FR-029: the tab row only shows unfinished sessions + the one being viewed + temporary tabs.
   const tabs = useMemo(
     () =>
       sessions
-        .filter((s) => s.id === current || temp.includes(s.id) || (s.pinned_tab && statusOf(s) !== 'done'))
+        .filter((s) => s.id === current || s.id === pendingClose?.id || temp.includes(s.id) || (s.pinned_tab && statusOf(s) !== 'done'))
         .sort((a, b) => a.created_at - b.created_at),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, current, temp, statuses],
+    [sessions, current, pendingClose, temp, statuses],
   );
   const active = sessions.find((s) => s.id === current) ?? tabs[0];
+  const visibleSession = selectedTerminal || selectedDocument ? undefined : active;
+  const visibleCompletion = visibleSession ? statuses[visibleSession.id] : undefined;
+  useLayoutEffect(() => {
+    if (
+      visibleSession && visibleCompletion?.completionTs !== undefined
+      && visibleCompletion.completionTs >= performance.timeOrigin && document.hasFocus()
+    ) {
+      useUiStore.getState().acknowledgeCompletion(visibleSession);
+    }
+  }, [visibleSession, visibleCompletion]);
+  const windowBlurred = useRef(false);
+  useEffect(() => {
+    const onBlur = () => { windowBlurred.current = true; };
+    const onFocus = () => {
+      if (windowBlurred.current && visibleSession) {
+        useUiStore.getState().acknowledgeCompletion(visibleSession);
+      }
+      windowBlurred.current = false;
+    };
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [visibleSession]);
   const projectFiles = fileTabs.filter((file) => file.projectId === project.id);
   const sessionKey = (id: string) => `session:${id}`;
   const fileKey = (id: string) => `file:${id}`;
   const diffKey = (id: string) => `diff:${id}`;
+  const terminalKey = (address: string) => `terminal:${address}`;
   const order = [
     ...tabs.map((session) => sessionKey(session.id)),
+    ...terminals.map((terminal) => terminalKey(terminal.address)),
     ...projectFiles.map((file) => fileKey(file.id)),
     ...workspaceDiffs.map((diff) => diffKey(diff.id)),
   ];
@@ -208,6 +283,7 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
     const index = prior.indexOf(key);
     return [...prior.slice(index + 1), ...prior.slice(0, index).reverse()]
       .find((candidate) => {
+        if (candidate.startsWith('terminal:')) return terminals.some((t) => terminalKey(t.address) === candidate);
         if (candidate.startsWith('diff:')) return useFileStore.getState().diffs.some((diff) => diffKey(diff.id) === candidate);
         if (candidate.startsWith('file:')) return useFileStore.getState().tabs.some((file) => fileKey(file.id) === candidate);
         const ui = useUiStore.getState();
@@ -218,9 +294,12 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   }
 
   function selectNeighbor(key: string | undefined) {
-    if (key?.startsWith('file:') || key?.startsWith('diff:')) {
+    if (key?.startsWith('terminal:')) {
+      selectTerminal(key.slice(9));
+    } else if (key?.startsWith('file:') || key?.startsWith('diff:')) {
       useFileStore.getState().activate(project.id, key.slice(5));
     } else if (key?.startsWith('session:') && workspaceId) {
+      setTerminalAddress(undefined);
       useFileStore.getState().activate(project.id);
       useUiStore.getState().selectSession(workspaceId, key.slice(8));
     }
@@ -257,6 +336,7 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   const previousSession = useRef(current);
   useEffect(() => {
     if (current && previousSession.current !== current) {
+      setTerminalAddress(undefined);
       const store = useFileStore.getState();
       const diff = store.diffs.find((tab) => tab.id === store.active[project.id]);
       if (!diff || diff.workspaceId === workspaceId) store.activate(project.id);
@@ -265,21 +345,20 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   }, [current, project.id, workspaceId]);
 
   useEffect(() => {
-    if (workspaceId && !selectedDocument && active && active.id !== current) useUiStore.getState().selectSession(workspaceId, active.id);
-  }, [active, current, selectedDocument, workspaceId]);
+    if (workspaceId && !selectedTerminal && !selectedDocument && active && active.id !== current) useUiStore.getState().selectSession(workspaceId, active.id);
+  }, [active, current, selectedDocument, selectedTerminal, workspaceId]);
 
   const pad = useHeaderPad();
 
   const [closing, setClosing] = useState<Session | null>(null);
   const [closeWorkspace, setCloseWorkspace] = useState(false);
-  const [closePending, setClosePending] = useState(false);
-  const lastTab = !!closing && tabs.length === 1 && tabs[0]?.id === closing.id;
+  const lastTab = !!closing && !terminals.length && tabs.length === 1 && tabs[0]?.id === closing.id;
   const running = !!closing && ['working', 'blocked'].includes(statusOf(closing));
 
   function requestClose(s: Session, trigger: HTMLButtonElement) {
     closeTrigger.current = trigger;
     const st = statusOf(s);
-    if (tabs.length === 1 || st === 'working' || st === 'blocked') {
+    if ((!terminals.length && tabs.length === 1) || st === 'working' || st === 'blocked') {
       setCloseWorkspace(false);
       setClosing(s);
     } else {
@@ -289,10 +368,10 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
 
   async function closeTab(s: Session, leaveWorkspace = false) {
     if (!ws) return;
-    const wasSelected = !selectedDocument && active?.id === s.id;
+    const wasSelected = !selectedTerminal && !selectedDocument && active?.id === s.id;
     let unpinned = false;
     const hadDialog = !!closing;
-    setClosePending(true);
+    setPendingClose({ id: s.id, wasDone: statusOf(s) === 'done' });
     const key = qk.sessions(ws.id);
     try {
       await api.sessionSetPinned(s.id, false);
@@ -331,6 +410,8 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
       if (unpinned && s.pinned_tab) {
         await api.sessionSetPinned(s.id, true).catch((rollbackError) => toast(errMsg(rollbackError), 'error'));
       }
+      const ui = useUiStore.getState();
+      if ((ui.statuses[s.id]?.state ?? s.status) === 'done') ui.addTempTab(ws.id, s.id);
       toast(errMsg(error), 'error');
       if (!hadDialog) {
         const trigger = closeTrigger.current;
@@ -338,7 +419,7 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
       }
     } finally {
       void qc.invalidateQueries({ queryKey: key });
-      setClosePending(false);
+      setPendingClose(null);
     }
   }
 
@@ -406,8 +487,8 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
       <div className="flex h-11 shrink-0 items-end gap-1 border-b border-border px-3">
         <div ref={rowRef} onKeyDown={navigateTabs} className="flex min-w-0 items-center gap-1 overflow-x-auto pb-1.5 overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label={ws ? "Workspace tabs" : "Project tabs"}>
           {tabs.map((s) => {
-            const st = statusOf(s);
-            const selected = !selectedDocument && s.id === active?.id;
+            const indicator = sessionTabStatus(s, statuses[s.id], viewedCompletions[s.id]);
+            const selected = !selectedTerminal && !selectedDocument && s.id === active?.id;
             return (
               <div
                 key={s.id}
@@ -423,12 +504,19 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
                   aria-selected={selected}
                   className={tabTrigger}
                   onClick={() => {
+                    setTerminalAddress(undefined);
                     useFileStore.getState().activate(project.id);
-                    if (workspaceId) useUiStore.getState().selectSession(workspaceId, s.id);
+                    if (workspaceId) {
+                      const ui = useUiStore.getState();
+                      ui.selectSession(workspaceId, s.id);
+                      if (document.hasFocus()) ui.acknowledgeCompletion(s);
+                    }
                   }}
                 >
                   <span className="flex size-3 shrink-0 items-center justify-center">
-                    <StatusDot status={st} spin />
+                    {pendingClose?.id === s.id && !pendingClose.wasDone
+                      ? <Spinner label="Closing session" className="text-muted-foreground" />
+                      : <StatusDot status={indicator} spin />}
                   </span>
                   <TruncatedText className="truncate">{s.title ?? 'New session'}</TruncatedText>
                   <EngineIcon engine={s.engine} />
@@ -447,6 +535,26 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
                   className={tabClose}
                   aria-label={`Hide tab ${s.title ?? 'session'}`}
                 >
+                  <X />
+                </Button>
+              </div>
+            );
+          })}
+          {terminals.map((terminal) => {
+            const key = terminalKey(terminal.address);
+            const selected = selectedTerminal?.address === terminal.address;
+            return (
+              <div key={key} className={cn(tabFrame, selected && selectedTabFrame)}>
+                <Button variant={selected ? 'ghost' : 'muted'} size="xs"
+                  role="tab" aria-selected={selected} id={domId(key, 'tab')} aria-controls={domId(key, 'panel')}
+                  tabIndex={selected || (!active && !selectedDocument && !selectedTerminal && terminals[0] === terminal) ? 0 : -1}
+                  className={tabTrigger} onClick={() => selectTerminal(terminal.address)}>
+                  <TerminalIcon aria-hidden="true" />
+                  Terminal {terminal.address}
+                </Button>
+                <Button variant="muted" size="icon-sm" aria-label={`Close terminal ${terminal.address}`}
+                  tabIndex={selected ? 0 : -1} disabled={stopTerminal.isPending}
+                  className={tabClose} onClick={() => stopTerminal.mutate(terminal.address)}>
                   <X />
                 </Button>
               </div>
@@ -490,25 +598,56 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
             );
           })}
         </div>
-        {ws ? <Tooltip content="New session in workspace">
-          <Button
-            variant="muted"
-            size="icon-sm"
-            ref={newSessionRef}
-            className="mb-2 shrink-0"
-            onClick={() => createSession(qc, ws.id, active?.engine === 'echo' ? 'echo' : 'claude')}
-            aria-label="New session in workspace"
-          >
-            <Plus />
-          </Button>
-        </Tooltip> : null}
+        {ws && ws.archived_at == null ? (
+          <DropdownMenu open={launcherOpen} onOpenChange={setLauncherOpen}>
+            <Tooltip content="New session in workspace">
+              <DropdownMenuTrigger asChild>
+                <Button variant="muted" size="icon-sm" ref={newSessionRef}
+                  className="mb-2 shrink-0" aria-label="New session in workspace" disabled={createTerminal.isPending}
+                  onClick={(event) => {
+                    // Assistive technology can activate the trigger with a click alone.
+                    if (event.detail === 0) setLauncherOpen((open) => !open);
+                  }}>
+                  <Plus />
+                </Button>
+              </DropdownMenuTrigger>
+            </Tooltip>
+            <DropdownMenuContent>
+              <DropdownMenuItem onSelect={() => createTerminal.mutate()}>
+                <TerminalIcon aria-hidden="true" /> Terminal
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {(['claude', 'codex'] as const).map((engine) => (
+                <DropdownMenuItem key={engine} onSelect={() => {
+                  void createSession(qc, ws.id, engine).then((session) => {
+                    if (!session) return;
+                    setTerminalAddress(undefined);
+                    useFileStore.getState().activate(project.id);
+                  });
+                }}>
+                  <EngineIcon engine={engine} /> {engine === 'claude' ? 'Claude Code' : 'Codex'}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
         <span className="flex-1" />
         {ws ? <HistoryPopover ws={ws} sessions={sessions} /> : null}
       </div>
 
       {active && ws ? (
-        <div role="tabpanel" id={domId(sessionKey(active.id), 'panel')} aria-labelledby={domId(sessionKey(active.id), 'tab')} hidden={!!selectedDocument} className={cn('min-h-0 flex-1 flex-col', !selectedDocument && 'flex')}>
+        <div role="tabpanel" id={domId(sessionKey(active.id), 'panel')} aria-labelledby={domId(sessionKey(active.id), 'tab')} hidden={!!selectedTerminal || !!selectedDocument} className={cn('min-h-0 flex-1 flex-col', !selectedTerminal && !selectedDocument && 'flex')}>
           <SessionView key={active.id} session={active} ws={ws} />
+        </div>
+      ) : null}
+      {selectedTerminal && ws ? (
+        <div role="tabpanel" id={domId(terminalKey(selectedTerminal.address), 'panel')}
+          aria-labelledby={domId(terminalKey(selectedTerminal.address), 'tab')}
+          className="flex min-h-0 flex-1 flex-col">
+          <Suspense fallback={<Spinner label="Opening terminal" className="m-3 text-muted-foreground" />}>
+            <WorkspaceTerminal key={selectedTerminal.address} workspaceId={ws.id} address={selectedTerminal.address}
+              live={selectedTerminal.state === 'live'} />
+          </Suspense>
         </div>
       ) : null}
       {selectedFile ? (
@@ -522,11 +661,12 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
         </div>
       ) : null}
       {order.filter((key) => key !== (active && sessionKey(active.id))
+        && key !== (selectedTerminal && terminalKey(selectedTerminal.address))
         && key !== (selectedFile && fileKey(selectedFile.id))
         && key !== (selectedDiff && diffKey(selectedDiff.id))).map((key) => (
         <div key={key} role="tabpanel" id={domId(key, 'panel')} aria-labelledby={domId(key, 'tab')} hidden />
       ))}
-      {!active && !selectedDocument ? (ws ? <div className="flex-1" /> : (
+      {!active && !selectedTerminal && !selectedDocument ? (ws ? <div className="flex-1" /> : (
         <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">
           Pick a workspace or open a file from the Files panel.
         </div>

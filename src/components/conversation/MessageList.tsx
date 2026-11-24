@@ -4,10 +4,13 @@ import { skipToken, useQuery } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { AlertCircle, Info, Terminal } from 'lucide-react';
 import { useSessionStore, type Item } from '@/stores/useSessionStore';
-import { api } from '@/lib/api';
+import { api, errMsg } from '@/lib/api';
+import { toast } from '@/components/ui/toast';
+import { useFileStore } from '@/stores/useFileStore';
 import type { ChatAttachment } from '@/lib/types';
 import { ImagePreview, ImageThumbnail, UnavailableImage, type ImageSelection } from './ImagePreview';
 import { Markdown } from './Markdown';
+import { FileLink, fileParts } from './fileLinks';
 import { ToolCard } from './ToolCard';
 
 export const COLUMN = 'mx-auto w-full max-w-[768px] px-6';
@@ -18,6 +21,15 @@ export function MessageList({ sessionId, working, agentName }: { sessionId: stri
   const parentRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [selection, setSelection] = useState<ImageSelection | null>(null);
+  const fileRequest = useRef(0);
+  useEffect(() => () => { fileRequest.current += 1; }, [sessionId]);
+  const openFile = useCallback((path: string) => {
+    const request = ++fileRequest.current;
+    const isCurrent = () => request === fileRequest.current;
+    void useFileStore.getState().openSessionFile(sessionId, path, isCurrent).catch((error) => {
+      if (isCurrent()) toast(`Could not open file: ${errMsg(error)}`, 'error');
+    });
+  }, [sessionId]);
   const previewScrollTop = useRef<number | null>(null);
   const selectImage = useCallback((image: ImageSelection) => {
     previewScrollTop.current = parentRef.current?.scrollTop ?? 0;
@@ -80,9 +92,9 @@ export function MessageList({ sessionId, working, agentName }: { sessionId: stri
           >
             <div className={COLUMN}>
               {row.index < count ? (
-                <Row sessionId={sessionId} index={row.index} onSelect={selectImage} />
+                <Row sessionId={sessionId} index={row.index} onSelect={selectImage} openFile={openFile} />
               ) : (
-                <StreamRow sessionId={sessionId} show={hasStream || working} agentName={agentName} />
+                <StreamRow sessionId={sessionId} show={hasStream || working} agentName={agentName} openFile={openFile} />
               )}
             </div>
           </div>
@@ -93,10 +105,11 @@ export function MessageList({ sessionId, working, agentName }: { sessionId: stri
   );
 }
 
-const Row = memo(function Row({ sessionId, index, onSelect }: {
+const Row = memo(function Row({ sessionId, index, onSelect, openFile }: {
   sessionId: string;
   index: number;
   onSelect: (image: ImageSelection) => void;
+  openFile: (path: string) => void;
 }) {
   const item = useSessionStore((s) => s.sessions[sessionId]?.items[index]);
   const prevKind = useSessionStore((s) => (index > 0 ? s.sessions[sessionId]?.items[index - 1]?.kind : undefined));
@@ -106,15 +119,16 @@ const Row = memo(function Row({ sessionId, index, onSelect }: {
   return (
     <>
       {startsReply ? <div className="pt-2" /> : null}
-      <ItemView item={item} sessionId={sessionId} onSelect={onSelect} />
+      <ItemView item={item} sessionId={sessionId} onSelect={onSelect} openFile={openFile} />
     </>
   );
 });
 
-function ItemView({ item, sessionId, onSelect }: {
+function ItemView({ item, sessionId, onSelect, openFile }: {
   item: Item;
   sessionId: string;
   onSelect: (image: ImageSelection) => void;
+  openFile: (path: string) => void;
 }) {
   switch (item.kind) {
     case 'user':
@@ -139,7 +153,9 @@ function ItemView({ item, sessionId, onSelect }: {
                 <Terminal className="size-3" /> via hc send
               </div>
             ) : null}
-            {item.text}
+            {fileParts(item.text).map(({ text, path }, i) => path
+              ? <FileLink sessionId={sessionId} key={i} path={path} open={openFile}>{text}</FileLink>
+              : text)}
           </div>
         </div>
       );
@@ -153,7 +169,7 @@ function ItemView({ item, sessionId, onSelect }: {
                 <div className="mt-1 whitespace-pre-wrap border-l border-border pl-3">{b.text}</div>
               </details>
             ) : (
-              <Markdown key={i} text={b.text} />
+              <Markdown sessionId={sessionId} key={i} text={b.text} openFile={openFile} />
             ),
           )}
         </div>
@@ -191,7 +207,12 @@ function ItemView({ item, sessionId, onSelect }: {
   }
 }
 
-function StreamRow({ sessionId, show, agentName }: { sessionId: string; show: boolean; agentName: string }) {
+function StreamRow({ sessionId, show, agentName, openFile }: {
+  sessionId: string;
+  show: boolean;
+  agentName: string;
+  openFile: (path: string) => void;
+}) {
   const text = useSessionStore((s) => s.sessions[sessionId]?.streaming?.text);
   const lastKind = useSessionStore((s) => {
     const items = s.sessions[sessionId]?.items;
@@ -202,7 +223,7 @@ function StreamRow({ sessionId, show, agentName }: { sessionId: string; show: bo
     <div className="pb-6">
       {lastKind === undefined || lastKind === 'user' ? <div className="pt-2" /> : null}
       <div className="pt-4">
-        {text ? <Markdown text={text} streaming /> : null}
+        {text ? <Markdown sessionId={sessionId} text={text} streaming openFile={openFile} /> : null}
         <span className="hs-caret text-foreground" aria-label={`${agentName} is replying`} />
       </div>
     </div>

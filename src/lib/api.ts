@@ -1,5 +1,5 @@
 // Wrapper có kiểu cho các Tauri command (contracts/tauri-commands.md).
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
   ModelList,
   SlashCommandInfo,
@@ -15,7 +15,6 @@ import type {
   SearchHit,
   ClaudeHit,
   Session,
-  TaskRef,
   Workspace,
 } from './types';
 
@@ -34,7 +33,10 @@ export function errCode(e: unknown): string | undefined {
   return undefined;
 }
 
-export type DirChoice = { kind: 'project' } | { kind: 'worktree'; base_branch: string; branch?: string };
+export type DirChoice =
+  | { kind: 'project' }
+  | { kind: 'worktree'; base_branch?: string; branch?: string }
+  | { kind: 'existing_worktree'; branch: string };
 
 export interface ProjectFileEntry {
   name: string;
@@ -47,17 +49,50 @@ export interface ProjectFileDocument {
   writable: boolean;
 }
 
+export interface WorkspaceTerminalRef {
+  address: string;
+  state: string;
+}
+
 export const api = {
+  workspaceTerminalList: (workspaceId: string) =>
+    invoke<WorkspaceTerminalRef[]>('workspace_terminal_list', { workspaceId }),
+  workspaceTerminalCreate: (workspaceId: string) =>
+    invoke<WorkspaceTerminalRef>('workspace_terminal_create', { workspaceId }),
+  workspaceTerminalStop: (workspaceId: string, address: string) =>
+    invoke<void>('workspace_terminal_stop', { workspaceId, address }),
+  workspaceTerminalAttach: (id: string, workspaceId: string, address: string, rows: number, cols: number, onOutput: (bytes: ArrayBuffer) => void) =>
+    invoke<void>('workspace_terminal_attach', { id, workspaceId, address, rows, cols, output: new Channel(onOutput) }),
+  workspaceTerminalDetach: (id: string) => invoke<void>('workspace_terminal_detach', { id }),
+  workspaceTerminalInput: (id: string, data: Uint8Array) =>
+    invoke<void>('workspace_terminal_input', { id, data: Array.from(data) }),
+  workspaceTerminalResize: (id: string, rows: number, cols: number) =>
+    invoke<void>('workspace_terminal_resize', { id, rows, cols }),
+
   projectFiles: (projectId: string, path: string) =>
     invoke<ProjectFileEntry[]>('project_files_list', { projectId, path }),
+  projectFilesSearch: (projectId: string, query: string) =>
+    invoke<ProjectFileEntry[]>('project_files_search', { projectId, query }),
   projectFileRead: (projectId: string, path: string) =>
     invoke<ProjectFileDocument>('project_file_read', { projectId, path }),
+  sessionFileExists: (sessionId: string, path: string) =>
+    invoke<boolean>('session_file_exists', { sessionId, path }),
+  sessionFileRead: (sessionId: string, path: string) =>
+    invoke<{ projectId: string; path: string; document: ProjectFileDocument }>('session_file_read', { sessionId, path }),
+  absoluteFileRead: (path: string) =>
+    invoke<ProjectFileDocument>('absolute_file_read', { path }),
+  absoluteFilesSearch: (path: string) =>
+    invoke<ProjectFileEntry[]>('absolute_files_search', { path }),
   projectFileSave: (projectId: string, path: string, baseline: string, text: string) =>
     invoke<void>('project_file_save', { projectId, path, baseline, text }),
+  projectMarkdownDownload: (projectId: string, path: string, text: string) =>
+    invoke<void>('project_markdown_download', { projectId, path, text }),
 
   appInfo: () => invoke<AppInfo>('app_info'),
   fontFamilies: () => invoke<string[]>('font_families'),
+  terminalFontData: (family: string) => invoke<ArrayBuffer>('terminal_font_data', { family }),
   themeFiles: () => invoke<ThemeFile[]>('theme_files'),
+  notificationsRequestPermission: () => invoke<void>('notifications_request_permission'),
   settingsGet: (key: string) => invoke<string | null>('settings_get', { key }),
   settingsSet: (key: string, value: string) => invoke<void>('settings_set', { key, value }),
 
@@ -110,14 +145,12 @@ export const api = {
   search: (query: string, workspaceId?: string, projectId?: string) => invoke<SearchHit[]>('search', { query, workspaceId, projectId }),
   claudeSearch: (query: string, scope?: { workspaceId?: string; projectId?: string }) =>
     invoke<ClaudeHit[]>('claude_search', { query, ...scope, palette: !!scope }),
+  codexThreads: (workspaceId: string) => invoke<{ id: string; name: string }[]>('codex_threads', { workspaceId }),
+  codexOpen: (workspaceId: string, threadId: string) => invoke<Session>('codex_open', { workspaceId, threadId }),
   claudeOpen: (claudeSessionId: string, cwd: string, workspaceId?: string) =>
     invoke<Session>('claude_open', { claudeSessionId, cwd, workspaceId }),
 
   terminalRead: (terminal: string, lines = 2000) => invoke<string>('terminal_read', { terminal, lines }),
-  taskRun: (projectId: string, command: string) => invoke<TaskRef>('task_run', { projectId, command }),
-  taskList: (projectId: string) => invoke<TaskRef[]>('task_list', { projectId }),
-  taskKill: (terminal: string) => invoke<void>('task_kill', { terminal }),
-  taskRemove: (terminal: string) => invoke<void>('task_remove', { terminal }),
   agentTree: (sessionId: string) => invoke<AgentNode | null>('agent_tree', { sessionId }),
   filesChanged: (workspaceId: string) => invoke<ChangedFile[]>('files_changed', { workspaceId }),
   projectFilesChanged: (projectId: string) => invoke<ChangedFile[]>('project_files_changed', { projectId }),

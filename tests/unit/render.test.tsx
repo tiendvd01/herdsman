@@ -28,6 +28,12 @@ describe('Markdown', () => {
     await waitFor(() => expect(screen.getByText(/Chart error/)).toBeTruthy());
   });
 
+  it('shows malformed math as source and renders neighboring content', () => {
+    const { container } = render(<Markdown text={'$$\\frac{$$\n\n# Next heading'} />);
+    expect(container.querySelector('.katex-error')?.textContent).toBe('\\frac{');
+    expect(screen.getByRole('heading', { name: 'Next heading' })).toBeTruthy();
+  });
+
   it('công thức KaTeX', () => {
     const { container } = render(<Markdown text={'$$E = mc^2$$'} />);
     expect(container.querySelector('.katex')).not.toBeNull();

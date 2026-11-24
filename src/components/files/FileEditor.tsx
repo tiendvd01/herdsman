@@ -1,17 +1,19 @@
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { HighlightStyle, LanguageDescription, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
-import { AlertCircle, FileText, Save } from 'lucide-react';
+import { AlertCircle, Download, FileText, Save } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Spinner } from '@/components/ui/spinner';
 import { TruncatedText } from '@/components/ui/truncated-text';
 import { Button } from '@/components/ui/button';
+import { Empty, EmptyDescription } from '@/components/ui/empty';
+import { Markdown } from '@/components/conversation/Markdown';
 import { toast } from '@/components/ui/toast';
-import { errMsg } from '@/lib/api';
+import { api, errMsg } from '@/lib/api';
 import { isDirty, useFileStore, type FileTab } from '@/stores/useFileStore';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -49,6 +51,8 @@ async function languageFor(path: string) {
 }
 
 export function FileEditor({ file }: { file: FileTab }) {
+  const [preview, setPreview] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const host = useRef<HTMLDivElement>(null);
   const qc = useQueryClient();
   const save = useRef<() => void>(() => {});
@@ -62,6 +66,21 @@ export function FileEditor({ file }: { file: FileTab }) {
   };
   const ready = !!file.document;
   const writable = !!file.document?.writable;
+  const canPreview = ready && /\.(md|markdown)$/i.test(file.path);
+  const showingPreview = canPreview && preview;
+  const text = file.draft ?? file.document?.text ?? '';
+
+  async function download() {
+    setDownloading(true);
+    try {
+      await api.projectMarkdownDownload(file.projectId, file.path, text);
+    } catch (error) {
+      toast(errMsg(error), 'error');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   useEffect(() => {
     if (!host.current || !ready) return;
     const initial = useFileStore.getState().tabs.find((item) => item.id === file.id)?.draft ?? '';
@@ -109,6 +128,17 @@ export function FileEditor({ file }: { file: FileTab }) {
         <FileText className="size-4 shrink-0 text-muted-foreground" />
         <TruncatedText className="min-w-0 flex-1 truncate text-muted-foreground">{file.path}</TruncatedText>
         {ready && !writable ? <Badge variant="outline">Read-only</Badge> : null}
+        {canPreview ? (
+          <Button size="xs" variant="outline" onClick={() => setPreview(!preview)}>
+            {showingPreview ? 'Source' : 'Preview'}
+          </Button>
+        ) : null}
+        {showingPreview ? (
+          <Button size="xs" variant="outline" disabled={downloading} onClick={() => void download()}>
+            {downloading ? <Spinner label="Downloading" /> : <Download data-icon="inline-start" />}
+            Download
+          </Button>
+        ) : null}
         {writable ? (
           <Button size="xs" variant="outline" disabled={!isDirty(file) || file.saving} onClick={() => save.current()}>
             {file.saving ? <Spinner label="Saving" /> : <Save data-icon="inline-start" />}
@@ -118,7 +148,12 @@ export function FileEditor({ file }: { file: FileTab }) {
       </div>
       {file.loadError ? <div className="p-3"><Alert variant="destructive"><AlertCircle /><AlertDescription>{file.loadError}</AlertDescription></Alert></div> : null}
       {!ready && !file.loadError ? <p role="status" className="flex items-center gap-2 p-4 text-sm text-muted-foreground"><Spinner label="Loading" className="text-muted-foreground" />Loading file…</p> : null}
-      <div ref={host} className="min-h-0 flex-1" />
+      <div ref={host} hidden={showingPreview} className="min-h-0 flex-1" />
+      {showingPreview ? (
+        <div className="min-h-0 flex-1 overflow-auto p-4" role="region" aria-label="Markdown preview" tabIndex={0}>
+          {text ? <Markdown text={text} /> : <Empty><EmptyDescription>This file is empty.</EmptyDescription></Empty>}
+        </div>
+      ) : null}
     </section>
   );
 }

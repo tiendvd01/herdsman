@@ -1,10 +1,12 @@
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { TruncatedText } from '@/components/ui/truncated-text';
-// Settings dialog (spec 010): opened from the sidebar footer, ⌘, or the command menu. Sections on the left; Appearance only for now.
+// Settings dialog (spec 010): opened from the sidebar footer, ⌘, or the command menu. Sections on the left.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as D from '@radix-ui/react-dialog';
-import { Check, ChevronDown, Minus, Monitor, Moon, Paintbrush, Plus, Search, Sun, X } from 'lucide-react';
+import { Bell, Check, ChevronDown, Minus, Monitor, Moon, Paintbrush, Plus, Search, Sun, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { api } from '@/lib/api';
+import { toast } from '@/components/ui/toast';
 import { DEFAULT_FONT, fontChoices, fontOption, fontStack, sameFont, type FontKind, type FontOption } from '@/lib/fonts';
 import { useFontFamilies } from '@/lib/queries';
 import { CODE_FONT_SIZE } from '@/lib/uiZoom';
@@ -15,16 +17,21 @@ import { useAppInfo } from '@/lib/queries';
 import { pickTheme } from '@/theme/catalog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
-const SECTIONS = [{ id: 'appearance', label: 'Appearance', Icon: Paintbrush }] as const;
+const SECTIONS = [
+  { id: 'appearance', label: 'Appearance', Icon: Paintbrush, Content: AppearanceSection },
+  { id: 'notifications', label: 'Notifications', Icon: Bell, Content: NotificationsSection },
+] as const;
 type SectionId = (typeof SECTIONS)[number]['id'];
 
 export function SettingsDialog() {
   const open = useUiStore((s) => s.settingsOpen);
   const setOpen = useUiStore((s) => s.setSettingsOpen);
   const [section, setSection] = useState<SectionId>('appearance');
+  const { label, Content } = SECTIONS.find((item) => item.id === section) ?? SECTIONS[0];
   return (
     <D.Root open={open} onOpenChange={setOpen}>
       <D.Portal>
@@ -58,12 +65,12 @@ export function SettingsDialog() {
           </nav>
           <div className="flex min-w-0 flex-1 flex-col">
             <header className="flex h-12 shrink-0 items-center justify-between border-b border-border pl-6 pr-3">
-              <h2 className="text-[15px] font-semibold">Appearance</h2>
+              <h2 className="text-[15px] font-semibold">{label}</h2>
               <D.Close className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close">
                 <X className="size-4" />
               </D.Close>
             </header>
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-2">{section === 'appearance' ? <AppearanceSection /> : null}</div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-2"><Content /></div>
           </div>
         </D.Content>
       </D.Portal>
@@ -83,6 +90,33 @@ function Row({ label, hint, children }: { label: string; hint?: React.ReactNode;
   );
 }
 
+function NotificationsSection() {
+  const enabled = useUiStore((s) => s.completionNotifications);
+  const sound = useUiStore((s) => s.completionSound);
+  const setEnabled = useUiStore((s) => s.setCompletionNotifications);
+  const setSound = useUiStore((s) => s.setCompletionSound);
+  const completionLabel = 'Agent completion notifications';
+  const soundLabel = 'Play completion sound';
+
+  function setOption(setValue: (value: boolean) => void, value: boolean) {
+    setValue(value);
+    if (value) {
+      void api.notificationsRequestPermission().catch(() => toast('Could not request notification permission.', 'error'));
+    }
+  }
+
+  return (
+    <>
+      <Row label={completionLabel} hint="Send a notification when an agent finishes a turn.">
+        <Switch aria-label={completionLabel} checked={enabled} onCheckedChange={(value) => setOption(setEnabled, value)} />
+      </Row>
+      <Row label={soundLabel} hint="Play a short chime with completion notifications.">
+        <Switch aria-label={soundLabel} checked={sound} onCheckedChange={(value) => setOption(setSound, value)} disabled={!enabled} />
+      </Row>
+    </>
+  );
+}
+
 function AppearanceSection() {
   return (
     <>
@@ -99,10 +133,10 @@ function AppearanceSection() {
       <Row label="Interface font" hint="Menus, sidebar and conversation text.">
         <FontPicker kind="ui" />
       </Row>
-      <Row label="Code font" hint="Code blocks, diffs, paths, commands and logs.">
+      <Row label="Code font" hint="Code blocks, diffs, paths, commands, logs and workspace terminals.">
         <FontPicker kind="code" />
       </Row>
-      <Row label="Code font size" hint="Code snippets, file editor, diffs and logs.">
+      <Row label="Code font size" hint="Code snippets, file editor, diffs, logs and workspace terminals.">
         <CodeFontSizePicker />
       </Row>
     </>
@@ -113,7 +147,7 @@ function CodeFontSizePicker() {
   const size = useUiStore((s) => s.codeFontSize);
   const contentStep = useUiStore((s) => s.contentStep);
   const setSize = useUiStore((s) => s.setCodeFontSize);
-  const displayedSize = size ?? 12 + contentStep;
+  const displayedSize = size ?? CODE_FONT_SIZE.base + contentStep;
   return (
     <div className="flex items-center gap-1.5">
       {size !== null && (

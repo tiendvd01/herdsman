@@ -24,10 +24,13 @@ thiserror = "2"
 parking_lot = "0.12"
 
 tempfile = "3"
+portable-pty = "0.9"
 
 # spec 010: list installed font families for Settings → Appearance.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-text = "21"
+block2 = "0.6"
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "UNUserNotificationCenter", "block2"] }
 
 # Dock icon in `tauri dev` (no .app bundle → macOS shows a generic icon).
 [target.'cfg(target_os = "macos")'.dependencies.objc2]

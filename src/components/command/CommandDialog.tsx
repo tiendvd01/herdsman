@@ -141,7 +141,7 @@ function CommandBody({ close }: { close: () => void }) {
     [projectName, workspaceName ?? 'New workspace'].join(' › ');
 
   function openSession(projectId: string, workspaceId: string, sessionId: string, done: boolean) {
-    ui.selectWorkspace(projectId, workspaceId);
+    ui.reopenWorkspace(projectId, workspaceId);
     if (done) ui.addTempTab(workspaceId, sessionId);
     ui.selectSession(workspaceId, sessionId);
   }

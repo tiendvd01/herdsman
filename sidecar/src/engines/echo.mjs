@@ -42,7 +42,7 @@ export function createEchoEngine(ctx) {
       }
     }
     ctx.emit('turn_end', { interrupted, is_error: false, usage: { input_tokens: text.length, output_tokens: acc.length }, model });
-    ctx.onTurnState('idle');
+    ctx.onTurnState('idle', interrupted ? undefined : 'turn_complete');
   }
 
   let chain = Promise.resolve();

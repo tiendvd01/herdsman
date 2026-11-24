@@ -38,10 +38,11 @@ export function WorkspaceMenu({ ws, variant = 'header' }: { ws: Workspace; varia
         toast('Workspace archived. Find it again via history search.');
       } else {
         await api.workspaceDelete(ws.id, removeWt, confirmDirty);
-        toast('Workspace deleted');
+        toast('Workspace deleted. Session history is available in Search.');
       }
       // Only leave the workspace when it is the one being viewed (spec 002 FR-004/FR-005).
       const ui = useUiStore.getState();
+      ui.hideReopenedWorkspace(ws.id);
       if (ui.workspaceId === ws.id) ui.selectWorkspace(ws.project_id, null);
       qc.invalidateQueries({ queryKey: ['workspaces'] });
       setAction(null);
@@ -97,7 +98,7 @@ export function WorkspaceMenu({ ws, variant = 'header' }: { ws: Workspace; varia
         description={
           action === 'archive'
             ? 'The workspace is hidden from the sidebar; its conversation history is kept and still searchable. Running sessions will stop.'
-            : 'The workspace and its session history are removed from Herdsman. Running sessions will stop. The project folder and the engine’s original transcripts are not deleted.'
+            : 'The workspace is removed from the sidebar and running sessions will stop. You can still find and open its conversations in Search.'
         }
         confirmLabel={action === 'archive' ? 'Archive' : 'Delete'}
         onConfirm={run}

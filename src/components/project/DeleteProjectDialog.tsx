@@ -51,14 +51,14 @@ export function DeleteProjectDialog({ project, open, onOpenChange }: { project: 
             {running.map((r) => (
               <li key={r.terminal} className="flex gap-2">
                 <span className="font-mono opacity-70">{r.terminal}</span>
-                <span>{r.kind === 'session' ? 'Session' : 'Task'}:</span>
+                <span>{r.kind === 'session' ? 'Session' : 'Terminal'}:</span>
                 <TruncatedText className="truncate">{r.title}</TruncatedText>
               </li>
             ))}
           </ul>
         </div>
       ) : (
-        <p className="text-[12px] text-muted-foreground">No sessions or tasks are running.</p>
+        <p className="text-[12px] text-muted-foreground">No processes are running.</p>
       )}
     </ConfirmDialog>
   );

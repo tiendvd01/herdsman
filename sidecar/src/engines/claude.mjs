@@ -46,7 +46,7 @@ function toolResultText(content) {
  *   onEngineSession: (id: string, model?: string) => void,
  *   onModelFallback: (unavailable: string) => void,
  *   onInitialModelSettled: () => void,
- *   onTurnState: (state: 'working'|'idle'|'error') => void}} ctx
+ *   onTurnState: (state: 'working'|'idle'|'error', kind?: 'turn_complete') => void}} ctx
  */
 export function createClaudeEngine(ctx, runQuery = query) {
   let input = null;
@@ -244,9 +244,10 @@ export function createClaudeEngine(ctx, runQuery = query) {
             duration_ms: msg.duration_ms ?? null,
             model: lastTurnModel ?? model ?? undefined,
           });
+          const completed = !interrupted && !msg.is_error;
           interrupted = false;
           emitUsageSnapshot(stream);
-          ctx.onTurnState(msg.is_error && msg.subtype !== 'success' ? 'error' : 'idle');
+          ctx.onTurnState(msg.is_error && msg.subtype !== 'success' ? 'error' : 'idle', completed ? 'turn_complete' : undefined);
           break;
         }
         default:

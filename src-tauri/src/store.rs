@@ -4,12 +4,14 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::path::Path;
 
-const CLAUDE_MODEL_PREFERENCE: &str = "claude_model_preference";
+pub const DEFAULT_MODE: &str = "auto";
 
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_auto_mode.sql"),
     include_str!("../migrations/0003_drop_issue_ref.sql"),
+    include_str!("../migrations/0004_codex_custom_mode.sql"),
+    include_str!("../migrations/0005_workspace_history.sql"),
 ];
 
 pub fn now_ms() -> i64 {
@@ -121,11 +123,12 @@ pub struct Workspace {
     pub branch: Option<String>,
     pub base_branch: Option<String>,
     pub archived_at: Option<i64>,
+    pub deleted_at: Option<i64>,
     pub worktree_removed: bool,
     pub created_at: i64,
 }
 
-const WS_COLS: &str = "id, project_id, name, dir_kind, work_dir, branch, base_branch, archived_at, worktree_removed, created_at";
+const WS_COLS: &str = "id, project_id, name, dir_kind, work_dir, branch, base_branch, archived_at, worktree_removed, created_at, deleted_at";
 
 fn ws_row(r: &Row) -> rusqlite::Result<Workspace> {
     Ok(Workspace {
@@ -139,6 +142,7 @@ fn ws_row(r: &Row) -> rusqlite::Result<Workspace> {
         archived_at: r.get(7)?,
         worktree_removed: r.get::<_, i64>(8)? != 0,
         created_at: r.get(9)?,
+        deleted_at: r.get(10)?,
     })
 }
 
@@ -181,11 +185,23 @@ pub fn workspace_rename(c: &Connection, id: &str, name: &str) -> AppResult<Works
 
 pub fn workspace_set_archived(c: &Connection, id: &str, archived: bool, worktree_removed: Option<bool>) -> AppResult<Workspace> {
     let at = if archived { Some(now_ms()) } else { None };
+    if !archived && workspace_get(c, id)?.deleted_at.is_some() {
+        return Err(AppError::new("workspace_deleted", "This workspace was deleted"));
+    }
     c.execute("UPDATE workspaces SET archived_at = ?2 WHERE id = ?1", params![id, at])?;
     if let Some(r) = worktree_removed {
         c.execute("UPDATE workspaces SET worktree_removed = ?2 WHERE id = ?1", params![id, r as i64])?;
     }
     workspace_get(c, id)
+}
+
+pub fn workspace_keep_history(c: &Connection, id: &str, removed_worktree: bool) -> AppResult<()> {
+    c.execute(
+        "UPDATE workspaces SET archived_at = COALESCE(archived_at, ?2), deleted_at = COALESCE(deleted_at, ?2),
+         worktree_removed = worktree_removed OR ?3 WHERE id = ?1",
+        params![id, now_ms(), removed_worktree],
+    )?;
+    Ok(())
 }
 
 pub fn workspace_delete(c: &Connection, id: &str) -> AppResult<()> {
@@ -213,6 +229,8 @@ pub struct Session {
     pub created_at: i64,
     pub updated_at: i64,
     pub ended_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_seq: Option<u64>,
 }
 
 const S_COLS: &str = "id, workspace_id, engine, hc_terminal, title, status, permission_mode, model, engine_session_id, last_seen_seq, indexed_seq, pinned_tab, created_at, updated_at, ended_at";
@@ -234,6 +252,7 @@ fn s_row(r: &Row) -> rusqlite::Result<Session> {
         created_at: r.get(12)?,
         updated_at: r.get(13)?,
         ended_at: r.get(14)?,
+        completion_seq: None,
     })
 }
 
@@ -241,8 +260,15 @@ pub fn session_insert(c: &Connection, workspace_id: &str, engine: &str, mode: &s
     insert_session(c, workspace_id, engine, mode, title, None)
 }
 
-pub fn new_conversation_insert(c: &Connection, workspace_id: &str, engine: &str, mode: &str, title: Option<&str>) -> AppResult<Session> {
-    let model = if engine == "claude" { setting_get(c, CLAUDE_MODEL_PREFERENCE)? } else { None };
+pub fn new_conversation_insert(c: &Connection, workspace_id: &str, engine: &str, mode: Option<&str>, title: Option<&str>) -> AppResult<Session> {
+    let (preferred_mode, model) = match engine {
+        "claude" | "codex" => (
+            setting_get(c, &format!("{engine}_permission_mode_preference"))?,
+            setting_get(c, &format!("{engine}_model_preference"))?,
+        ),
+        _ => (None, None),
+    };
+    let mode = mode.or(preferred_mode.as_deref()).unwrap_or(DEFAULT_MODE);
     insert_session(c, workspace_id, engine, mode, title, model.as_deref())
 }
 
@@ -308,11 +334,19 @@ pub fn session_set_field(c: &Connection, id: &str, field: &str, value: Option<&s
 }
 
 pub fn session_confirm_model(c: &Connection, id: &str, model: &str) -> AppResult<()> {
+    confirm_session_preference(c, id, "model", model)
+}
+
+pub fn session_confirm_permission_mode(c: &Connection, id: &str, mode: &str) -> AppResult<()> {
+    confirm_session_preference(c, id, "permission_mode", mode)
+}
+
+fn confirm_session_preference(c: &Connection, id: &str, field: &str, value: &str) -> AppResult<()> {
     let tx = c.unchecked_transaction()?;
     let session = session_get(&tx, id)?;
-    session_set_field(&tx, id, "model", Some(model))?;
-    if session.engine == "claude" {
-        setting_set(&tx, CLAUDE_MODEL_PREFERENCE, model)?;
+    session_set_field(&tx, id, field, Some(value))?;
+    if matches!(session.engine.as_str(), "claude" | "codex") {
+        setting_set(&tx, &format!("{}_{field}_preference", session.engine), value)?;
     }
     tx.commit()?;
     Ok(())
@@ -495,21 +529,28 @@ mod tests {
     }
 
     #[test]
-    fn claude_model_preference_survives_reopen_and_only_seeds_new_claude_sessions() {
+    fn engine_preferences_survive_reopen_and_only_seed_new_conversations() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("preferences.sqlite");
         let c = open(&path).unwrap();
         let (_, w, echo) = seed(&c);
-        let original = new_conversation_insert(&c, &w.id, "claude", "ask", None).unwrap();
-        assert!(original.model.is_none());
+        let claude = new_conversation_insert(&c, &w.id, "claude", None, None).unwrap();
+        let codex = new_conversation_insert(&c, &w.id, "codex", None, None).unwrap();
+        assert_eq!(claude.permission_mode, "auto");
+        assert!(claude.model.is_none());
 
-        session_confirm_model(&c, &original.id, "sonnet").unwrap();
-        let first = new_conversation_insert(&c, &w.id, "claude", "ask", Some("First")).unwrap();
+        session_confirm_model(&c, &claude.id, "sonnet").unwrap();
+        session_confirm_permission_mode(&c, &claude.id, "bypass").unwrap();
+        let first = new_conversation_insert(&c, &w.id, "claude", None, Some("First")).unwrap();
         assert_eq!(first.model.as_deref(), Some("sonnet"));
-        session_confirm_model(&c, &original.id, "opus").unwrap();
+        assert_eq!(first.permission_mode, "bypass");
+        session_confirm_model(&c, &claude.id, "opus").unwrap();
+        session_confirm_model(&c, &codex.id, "gpt-codex").unwrap();
+        session_confirm_permission_mode(&c, &codex.id, "custom").unwrap();
         session_confirm_model(&c, &echo.id, "echo-large").unwrap();
         // Engine-reported values are session-local.
         session_set_field(&c, &first.id, "model", Some("claude-sonnet")).unwrap();
+        session_set_field(&c, &first.id, "permission_mode", Some("auto")).unwrap();
         drop(c);
 
         let c = open(&path).unwrap();
@@ -517,15 +558,22 @@ mod tests {
         std::fs::create_dir(&project_dir).unwrap();
         let p = project_add(&c, "second", project_dir.to_str().unwrap()).unwrap();
         let second_workspace = workspace_insert(&c, &new_id(), &p.id, None, "project", &p.path, None, None).unwrap();
-        let later = new_conversation_insert(&c, &second_workspace.id, "claude", "ask", None).unwrap();
+        let later = new_conversation_insert(&c, &second_workspace.id, "claude", None, None).unwrap();
         assert_eq!(later.model.as_deref(), Some("opus"));
+        assert_eq!(later.permission_mode, "bypass");
         assert_eq!(session_get(&c, &first.id).unwrap().model.as_deref(), Some("claude-sonnet"));
-        for engine in ["codex", "echo"] {
-            let other = new_conversation_insert(&c, &w.id, engine, "ask", None).unwrap();
-            assert!(other.model.is_none());
-        }
-        // Importing an old conversation bypasses the preferences for new conversations.
-        assert!(session_insert(&c, &w.id, "claude", "ask", None).unwrap().model.is_none());
+
+        let later_codex = new_conversation_insert(&c, &second_workspace.id, "codex", None, None).unwrap();
+        assert_eq!(later_codex.model.as_deref(), Some("gpt-codex"));
+        assert_eq!(later_codex.permission_mode, "custom");
+        let explicit = new_conversation_insert(&c, &w.id, "codex", Some("ask"), None).unwrap();
+        assert_eq!(explicit.permission_mode, "ask");
+        let other = new_conversation_insert(&c, &w.id, "echo", None, None).unwrap();
+        assert_eq!(other.permission_mode, "auto");
+        assert!(other.model.is_none());
+        let imported = session_insert(&c, &w.id, "claude", "ask", None).unwrap();
+        assert_eq!(imported.permission_mode, "ask");
+        assert!(imported.model.is_none());
     }
 
     #[test]
@@ -563,9 +611,25 @@ mod tests {
         let hits = search(&c, "OAuth", None, 10).unwrap();
         assert_eq!(hits.len(), 1, "workspace đã archive vẫn tìm thấy");
         assert!(hits[0].workspace_archived);
+        workspace_keep_history(&c, &w.id, false).unwrap();
+        assert!(workspace_list(&c, Some(&p.id), false).unwrap().is_empty());
+        assert_eq!(search(&c, "OAuth", None, 10).unwrap()[0].session_id, s.id);
+        assert!(workspace_set_archived(&c, &w.id, false, None).is_err());
         workspace_delete(&c, &w.id).unwrap();
         assert_eq!(search(&c, "OAuth", None, 10).unwrap().len(), 0);
         assert_eq!(session_all(&c).unwrap().len(), 0, "xoá workspace xoá session");
+    }
+
+    #[test]
+    fn keeping_deleted_history_releases_the_worktree_branch() {
+        let c = open_memory().unwrap();
+        let (p, _, _) = seed(&c);
+        let insert = |id: &str| workspace_insert(&c, id, &p.id, None, "worktree", &p.path, Some("feature"), None);
+        insert("old").unwrap();
+        assert!(insert("new").is_err());
+        workspace_keep_history(&c, "old", true).unwrap();
+        insert("new").unwrap();
+        assert!(workspace_get(&c, "old").unwrap().worktree_removed);
     }
 
     #[test]

@@ -15,9 +15,8 @@ use tauri::State;
 
 type St<'a> = State<'a, Arc<AppState>>;
 
-const ENGINES: &[&str] = &["claude", "echo"];
+const ENGINES: &[&str] = &["claude", "codex", "echo"];
 const MODES: &[&str] = &["ask", "accept_edits", "auto", "bypass"];
-const DEFAULT_MODE: &str = "auto";
 
 // ───────────────────────────── Chung ─────────────────────────────
 
@@ -59,6 +58,30 @@ fn list_font_families() -> Vec<String> {
 #[cfg(not(target_os = "macos"))]
 fn list_font_families() -> Vec<String> {
     Vec::new()
+}
+
+/// Resolve a selectable font through Core Text for WebKit, which hides some local fonts.
+#[tauri::command]
+pub async fn terminal_font_data(family: String) -> AppResult<tauri::ipc::Response> {
+    let data = tokio::task::spawn_blocking(move || read_terminal_font(&family))
+        .await
+        .map_err(|error| AppError::new("terminal_font", error.to_string()))??;
+    Ok(tauri::ipc::Response::new(data))
+}
+
+fn read_terminal_font(family: &str) -> AppResult<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    if let Ok(font) = core_text::font::new_from_name(family, 13.0) {
+        if font.family_name() == family {
+            if let Some(path) = font.url().and_then(|url| url.to_path()) {
+                if matches!(path.extension().and_then(|ext| ext.to_str()), Some("ttf" | "otf")) {
+                    return Ok(std::fs::read(path)?);
+                }
+            }
+        }
+    }
+
+    Err(AppError::new("terminal_font", format!("Font cannot be loaded: {family}")))
 }
 
 /// A custom theme file as read from disk (spec 016); the frontend validates the contents.
@@ -170,9 +193,10 @@ pub async fn project_delete_preview(st: St<'_>, id: String) -> AppResult<Vec<Run
     Ok(running_in_project(&st, &id).await?.into_iter().map(|(_, r)| r).collect())
 }
 
-/// FR-002a: dừng mọi session/task đang chạy của project rồi mới bỏ project khỏi app.
+/// FR-002a: dừng mọi tiến trình đang chạy của project rồi mới bỏ project khỏi app.
 #[tauri::command]
 pub async fn project_delete(st: St<'_>, id: String, confirm: bool) -> AppResult<()> {
+    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
     if !confirm {
         return Err(AppError::new("confirm_required", "Confirmation required"));
     }
@@ -220,7 +244,8 @@ pub fn workspace_list(st: St<'_>, project_id: Option<String>, include_archived: 
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DirChoice {
     Project,
-    Worktree { base_branch: String, branch: Option<String> },
+    Worktree { base_branch: Option<String>, branch: Option<String> },
+    ExistingWorktree { branch: String },
 }
 
 #[derive(Serialize)]
@@ -230,9 +255,6 @@ pub struct CreatedWorkspace {
 }
 
 fn check_engine(engine: &str) -> AppResult<()> {
-    if engine == "codex" {
-        return Err(AppError::new("engine_unavailable", "The Codex engine is not supported in this version"));
-    }
     if !ENGINES.contains(&engine) {
         return Err(AppError::new("bad_engine", engine.to_string()));
     }
@@ -251,7 +273,14 @@ pub async fn workspace_create(
 ) -> AppResult<CreatedWorkspace> {
     let engine = engine.unwrap_or_else(|| "claude".into());
     check_engine(&engine)?;
-    let mode = permission_mode.unwrap_or_else(|| DEFAULT_MODE.into());
+    let mode = permission_mode.as_deref();
+    if let Some(mode) = mode {
+        if engine == "codex" && !matches!(mode, "ask" | "auto" | "accept_edits" | "custom")
+            || engine != "codex" && mode == "custom"
+        {
+            return Err(AppError::new("bad_mode", mode));
+        }
+    }
     let project = store::project_get(&st.db.lock(), &project_id)?;
     if project.missing {
         return Err(AppError::new("project_missing", "The project folder no longer exists"));
@@ -259,13 +288,18 @@ pub async fn workspace_create(
     let name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
     let ws_id = store::new_id();
 
+    let repo = Path::new(&project.path);
+    if !matches!(&dir, DirChoice::Project) && !git::is_repo(repo).await {
+        return Err(AppError::new("not_a_repo", "The project is not a git repo; cannot create a worktree"));
+    }
     let (dir_kind, work_dir, branch, base) = match dir {
         DirChoice::Project => ("project", project.path.clone(), None, None),
         DirChoice::Worktree { base_branch, branch } => {
-            let repo = Path::new(&project.path);
-            if !git::is_repo(repo).await {
-                return Err(AppError::new("not_a_repo", "The project is not a git repo; cannot create a worktree"));
-            }
+            let base_branch = match base_branch {
+                Some(base) => base,
+                None => git::default_branch(repo, &git::branches(repo).await?).await
+                    .ok_or_else(|| AppError::new("base_not_found", "No default branch is available"))?,
+            };
             let branch = branch
                 .map(|b| b.trim().to_string())
                 .filter(|b| !b.is_empty())
@@ -278,13 +312,19 @@ pub async fn workspace_create(
             git::worktree_add(repo, &path, &branch, &base_branch).await?;
             ("worktree", path.to_string_lossy().to_string(), Some(branch), Some(base_branch))
         }
+        DirChoice::ExistingWorktree { branch } => {
+            let folder = format!("{}-{ws_id}", git::slug(&branch));
+            let path = git::worktree_path(repo, &folder, &st.data_dir.join("worktrees"));
+            git::worktree_add_existing(repo, &path, &branch).await?;
+            ("worktree", path.to_string_lossy().to_string(), Some(branch), None)
+        }
     };
 
     let created = {
         let db = st.db.lock();
         let ws = store::workspace_insert(&db, &ws_id, &project_id, name.as_deref(), dir_kind, &work_dir, branch.as_deref(), base.as_deref());
         match ws {
-            Ok(ws) => store::new_conversation_insert(&db, &ws.id, &engine, &mode, None).map(|s| (ws, s)),
+            Ok(ws) => store::new_conversation_insert(&db, &ws.id, &engine, mode, None).map(|s| (ws, s)),
             Err(e) => Err(e),
         }
     };
@@ -359,12 +399,17 @@ async fn stop_workspace_sessions(st: &AppState, ws_id: &str) {
 /// FR-008a/c: archive; có tuỳ chọn xoá worktree (cảnh báo nếu còn thay đổi chưa commit).
 #[tauri::command]
 pub async fn workspace_archive(st: St<'_>, id: String, remove_worktree_dir: bool, confirm_dirty: Option<bool>) -> AppResult<Workspace> {
+    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
     let ws = store::workspace_get(&st.db.lock(), &id)?;
+    if ws.deleted_at.is_some() {
+        return Ok(ws);
+    }
     let mut removed = None;
     if remove_worktree_dir && ws.dir_kind == "worktree" && !ws.worktree_removed {
         remove_worktree(&st, &ws, confirm_dirty.unwrap_or(false)).await?;
         removed = Some(true);
     }
+    crate::workspace_terminal::stop_for_workspace(&st, &ws).await?;
     stop_workspace_sessions(&st, &id).await;
     let ws = store::workspace_set_archived(&st.db.lock(), &id, true, removed)?;
     st.emit("workspace:changed", json!({"project_id": ws.project_id}));
@@ -381,22 +426,33 @@ pub fn workspace_unarchive(st: St<'_>, id: String) -> AppResult<Workspace> {
     store::workspace_set_archived(&db, &id, false, None)
 }
 
-/// FR-008b: xoá workspace khỏi app (không đụng thư mục project, transcript gốc giữ nguyên).
+/// Remove the workspace from the sidebar while keeping its sessions searchable.
 #[tauri::command]
 pub async fn workspace_delete(st: St<'_>, id: String, remove_worktree_dir: bool, confirm_dirty: Option<bool>) -> AppResult<()> {
+    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
     let ws = store::workspace_get(&st.db.lock(), &id)?;
-    if remove_worktree_dir && ws.dir_kind == "worktree" && !ws.worktree_removed {
+    if ws.deleted_at.is_some() {
+        return Ok(());
+    }
+    let removed = remove_worktree_dir && ws.dir_kind == "worktree" && !ws.worktree_removed;
+    if removed {
         remove_worktree(&st, &ws, confirm_dirty.unwrap_or(false)).await?;
     }
+    crate::workspace_terminal::stop_for_workspace(&st, &ws).await?;
     stop_workspace_sessions(&st, &id).await;
     let sessions = store::session_list(&st.db.lock(), &id)?;
     for s in &sessions {
         if let (Some(t), Some(hc)) = (&s.hc_terminal, &st.hc) {
             let _ = hc.rm(t).await;
         }
-        let _ = std::fs::remove_dir_all(st.session_dir(&s.id));
     }
-    store::workspace_delete(&st.db.lock(), &id)?;
+    let state = st.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        for session in sessions {
+            agent::backfill_session_index(&state, &session);
+        }
+    }).await.map_err(|e| AppError::new("index_failed", e.to_string()))?;
+    store::workspace_keep_history(&st.db.lock(), &id, removed)?;
     st.emit("workspace:changed", json!({"project_id": ws.project_id}));
     Ok(())
 }
@@ -405,6 +461,8 @@ pub async fn workspace_delete(st: St<'_>, id: String, remove_worktree_dir: bool,
 pub struct BranchInfo {
     is_repo: bool,
     branches: Vec<String>,
+    checked_out: Vec<String>,
+    default_branch: Option<String>,
     current: Option<String>,
 }
 
@@ -413,16 +471,27 @@ pub async fn git_branches(st: St<'_>, project_id: String) -> AppResult<BranchInf
     let p = store::project_get(&st.db.lock(), &project_id)?;
     let dir = Path::new(&p.path);
     if !git::is_repo(dir).await {
-        return Ok(BranchInfo { is_repo: false, branches: vec![], current: None });
+        return Ok(BranchInfo { is_repo: false, branches: vec![], checked_out: vec![], default_branch: None, current: None });
     }
-    Ok(BranchInfo { is_repo: true, branches: git::branches(dir).await?, current: git::current_branch(dir).await })
+    let (branches, checked_out) = git::branches_with_checkouts(dir).await?;
+    let default_branch = git::default_branch(dir, &branches).await;
+    Ok(BranchInfo { is_repo: true, branches, checked_out, default_branch, current: git::current_branch(dir).await })
 }
 
 // ───────────────────────────── Session (F2, F4, F6, F10) ─────────────────────────────
 
 #[tauri::command]
 pub fn session_history(st: St<'_>, workspace_id: String) -> AppResult<Vec<Session>> {
-    store::session_list(&st.db.lock(), &workspace_id)
+    let sessions = store::session_list(&st.db.lock(), &workspace_id)?;
+    Ok(sessions.into_iter().map(|session| with_completion(&st, session)).collect())
+}
+
+fn with_completion(st: &AppState, mut session: Session) -> Session {
+    if session.status == "idle" {
+        session.completion_seq = agent::completed_turn(&st.session_dir(&session.id).join("events.ndjson"))
+            .map(|(seq, _)| seq);
+    }
+    session
 }
 
 #[tauri::command]
@@ -435,7 +504,14 @@ pub async fn session_create(
 ) -> AppResult<Session> {
     let engine = engine.unwrap_or_else(|| "claude".into());
     check_engine(&engine)?;
-    let mode = permission_mode.unwrap_or_else(|| DEFAULT_MODE.into());
+    let mode = permission_mode.as_deref();
+    if let Some(mode) = mode {
+        if engine == "codex" && !matches!(mode, "ask" | "auto" | "accept_edits" | "custom")
+            || engine != "codex" && mode == "custom"
+        {
+            return Err(AppError::new("bad_mode", mode));
+        }
+    }
     let title = title.as_deref().map(str::trim).filter(|title| !title.is_empty());
     if title.is_some_and(|title| title.contains(['\r', '\n'])) {
         return Err(AppError::new("bad_title", "Session title must fit on one line"));
@@ -443,7 +519,10 @@ pub async fn session_create(
     let (ws, s) = {
         let db = st.db.lock();
         let ws = store::workspace_get(&db, &workspace_id)?;
-        let s = store::new_conversation_insert(&db, &workspace_id, &engine, &mode, title)?;
+        if ws.deleted_at.is_some() {
+            return Err(AppError::new("workspace_deleted", "This workspace was deleted"));
+        }
+        let s = store::new_conversation_insert(&db, &workspace_id, &engine, mode, title)?;
         (ws, s)
     };
     if let Err(e) = agent::spawn_sidecar(&st, &s, &ws).await {
@@ -455,7 +534,15 @@ pub async fn session_create(
 
 #[tauri::command]
 pub async fn session_open(st: St<'_>, id: String) -> AppResult<()> {
-    store::session_get(&st.db.lock(), &id)?;
+    let deleted = {
+        let db = st.db.lock();
+        let session = store::session_get(&db, &id)?;
+        store::workspace_get(&db, &session.workspace_id)?.deleted_at.is_some()
+    };
+    if deleted {
+        agent::open_saved_history(st.inner().clone(), id);
+        return Ok(());
+    }
     agent::open_view(st.inner().clone(), id);
     Ok(())
 }
@@ -521,15 +608,46 @@ pub async fn session_permission(st: St<'_>, id: String, request_id: String, deci
 /// FR-022a/b: đổi chế độ quyền; `bypass` cần xác nhận rõ.
 #[tauri::command]
 pub async fn session_set_permission_mode(st: St<'_>, id: String, mode: String, confirm_bypass: Option<bool>) -> AppResult<()> {
-    if !MODES.contains(&mode.as_str()) {
+    if !MODES.contains(&mode.as_str())
+        && !(mode == "custom" && store::session_get(&st.db.lock(), &id)?.engine == "codex")
+    {
         return Err(AppError::new("bad_mode", mode));
     }
     if mode == "bypass" && !confirm_bypass.unwrap_or(false) {
         return Err(AppError::new("confirm_required", "Bypass all approvals mode requires confirmation"));
     }
-    agent::command(&st, &id, json!({"cmd": "set_permission_mode", "mode": mode})).await?;
-    store::session_set_field(&st.db.lock(), &id, "permission_mode", Some(&mode))?;
-    Ok(())
+    let command = json!({"cmd": "set_permission_mode", "mode": mode});
+    if let Err(error) = agent::command(&st, &id, command.clone()).await {
+        let outdated = matches!(mode.as_str(), "accept_edits" | "bypass" | "custom")
+            && (error.message == "Choose Ask or Workspace write for Codex."
+                || mode == "custom" && error.code == "bad_mode" && error.message == "invalid mode");
+        if !outdated {
+            return Err(error);
+        }
+        let session = store::session_get(&st.db.lock(), &id)?;
+        if session.engine != "codex" {
+            return Err(error);
+        }
+        if session.status != "idle" {
+            return Err(AppError::new("agent_busy", "Wait for the Codex turn to finish before updating permissions."));
+        }
+        let terminal = session.hc_terminal.ok_or(error)?;
+        let hc = st.hc()?;
+        agent::command(&st, &id, json!({"cmd": "shutdown"})).await?;
+        for _ in 0..25 {
+            if !hc.get(&terminal).await.is_ok_and(|term| term.state == "live") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        }
+        let resumed = session_resume(st.clone(), id.clone()).await?;
+        if resumed.hc_terminal.as_deref() == Some(terminal.as_str()) {
+            return Err(AppError::new("agent_restart", "Codex is still stopping. Try changing permissions again."));
+        }
+        agent::open_view(st.inner().clone(), id.clone());
+        agent::command(&st, &id, command).await?;
+    }
+    store::session_confirm_permission_mode(&st.db.lock(), &id, &mode)
 }
 
 /// specs/005: danh sách model engine hỗ trợ. Agent chạy từ bản app cũ không biết `list_models`.
@@ -576,6 +694,9 @@ pub async fn session_resume(st: St<'_>, id: String) -> AppResult<Session> {
         let ws = store::workspace_get(&db, &s.workspace_id)?;
         (s, ws)
     };
+    if ws.deleted_at.is_some() {
+        return Err(AppError::new("workspace_deleted", "This workspace was deleted"));
+    }
     if !Path::new(&ws.work_dir).is_dir() {
         return Err(AppError::new("work_dir_missing", "The workspace working directory no longer exists"));
     }
@@ -608,23 +729,26 @@ pub async fn session_close(st: St<'_>, id: String) -> AppResult<()> {
 pub async fn close_session(st: &AppState, id: &str) -> AppResult<()> {
     let id = id.to_string();
     let s = store::session_get(&st.db.lock(), &id)?;
+    let ws = store::workspace_get(&st.db.lock(), &s.workspace_id)?;
     agent::close_view(st, &id);
+    if ws.deleted_at.is_some() {
+        return Ok(());
+    }
+    let discard = s.title.is_none();
     if let (Some(t), Some(hc)) = (&s.hc_terminal, &st.hc) {
         if s.status != "done" && s.status != "error" {
             let _ = agent::command(st, &id, json!({"cmd": "shutdown"})).await;
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             let _ = hc.kill(t).await;
         }
-        if s.title.is_none() {
+        if discard {
             let _ = hc.rm(t).await;
         }
     }
-    if s.title.is_none() {
+    if discard {
         let _ = std::fs::remove_dir_all(st.session_dir(&id));
         st.db.lock().execute("DELETE FROM sessions WHERE id = ?1", [&id])?;
-        if let Ok(ws) = store::workspace_get(&st.db.lock(), &s.workspace_id) {
-            st.emit("workspace:changed", json!({"project_id": ws.project_id, "workspace_id": ws.id}));
-        }
+        st.emit("workspace:changed", json!({"project_id": ws.project_id, "workspace_id": ws.id}));
     }
     Ok(())
 }
@@ -647,7 +771,8 @@ pub fn session_set_pinned(st: St<'_>, id: String, pinned: bool) -> AppResult<()>
 
 #[tauri::command]
 pub fn session_get(st: St<'_>, id: String) -> AppResult<Session> {
-    store::session_get(&st.db.lock(), &id)
+    let session = store::session_get(&st.db.lock(), &id)?;
+    Ok(with_completion(&st, session))
 }
 
 #[derive(serde::Serialize)]
@@ -679,7 +804,7 @@ pub async fn claude_search(
     let hits = tokio::task::spawn_blocking(move || {
         let workspaces_by_id: HashMap<_, _> = workspaces.iter().map(|w| (w.id.as_str(), w)).collect();
         let mut workspaces_by_dir: HashMap<&str, Vec<&Workspace>> = HashMap::new();
-        for ws in &workspaces {
+        for ws in workspaces.iter().filter(|ws| ws.deleted_at.is_none()) {
             workspaces_by_dir.entry(&ws.work_dir).or_default().push(ws);
         }
         let mut sessions_by_engine_id: HashMap<&str, Vec<&Session>> = HashMap::new();
@@ -756,9 +881,12 @@ pub async fn claude_open(st: St<'_>, claude_session_id: String, cwd: String, wor
     if let Some(s) = existing {
         return Ok(s);
     }
+    if ws.deleted_at.is_some() {
+        return Err(AppError::new("workspace_deleted", "This workspace was deleted"));
+    }
     let s = {
         let db = st.db.lock();
-        let s = store::session_insert(&db, &ws.id, "claude", DEFAULT_MODE, None)?;
+        let s = store::session_insert(&db, &ws.id, "claude", store::DEFAULT_MODE, None)?;
         store::session_set_field(&db, &s.id, "engine_session_id", Some(&claude_session_id))?;
         s
     };
@@ -773,65 +901,71 @@ pub async fn claude_open(st: St<'_>, claude_session_id: String, cwd: String, wor
 }
 
 #[tauri::command]
+pub async fn codex_threads(st: St<'_>, workspace_id: String) -> AppResult<Value> {
+    let ws = store::workspace_get(&st.db.lock(), &workspace_id)?;
+    agent::codex_probe(&st, &ws.work_dir, "list", None).await
+}
+
+#[tauri::command]
+pub async fn codex_open(st: St<'_>, workspace_id: String, thread_id: String) -> AppResult<Session> {
+    let ws = store::workspace_get(&st.db.lock(), &workspace_id)?;
+    if ws.deleted_at.is_some() {
+        return Err(AppError::new("workspace_deleted", "This workspace was deleted"));
+    }
+    // Reuse the link before consulting Codex so its running session can be reopened.
+    let linked = |db: &rusqlite::Connection| -> AppResult<Option<Session>> {
+        let existing = store::session_all(db)?.into_iter().find(|session| {
+            session.engine == "codex" && session.engine_session_id.as_deref() == Some(thread_id.as_str())
+        });
+        match existing {
+            Some(session) if session.workspace_id != ws.id => {
+                Err(AppError::new("codex_already_linked", "This Codex conversation is linked to another workspace. Open it there."))
+            }
+            session => Ok(session),
+        }
+    };
+    if let Some(session) = linked(&st.db.lock())? {
+        return Ok(session);
+    }
+    let thread = agent::codex_probe(&st, &ws.work_dir, "read", Some(&thread_id)).await?;
+    let session = {
+        let db = st.db.lock();
+        if let Some(session) = linked(&db)? {
+            return Ok(session);
+        }
+        let session = store::session_insert(&db, &ws.id, "codex", "ask", thread["name"].as_str())?;
+        let save = (|| -> AppResult<()> {
+            let dir = st.session_dir(&session.id);
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join("meta.json"), json!({ "engine_session_id": thread_id }).to_string())?;
+            store::session_set_field(&db, &session.id, "engine_session_id", Some(&thread_id))?;
+            Ok(())
+        })();
+        if let Err(error) = save {
+            let _ = db.execute("DELETE FROM sessions WHERE id = ?1", [&session.id]);
+            return Err(error);
+        }
+        session
+    };
+    if let Err(error) = agent::spawn_sidecar(&st, &session, &ws).await {
+        let _ = st.db.lock().execute("DELETE FROM sessions WHERE id = ?1", [&session.id]);
+        return Err(error);
+    }
+    store::session_get(&st.db.lock(), &session.id)
+}
+
+#[tauri::command]
 pub fn search(
     st: St<'_>, query: String, workspace_id: Option<String>, project_id: Option<String>,
 ) -> AppResult<Vec<SearchHit>> {
     store::search_sessions(&st.db.lock(), &query, project_id.as_deref(), workspace_id.as_deref(), 50)
 }
 
-// ───────────────────────────── Log, tasks, agents (F7, F8, F9) ─────────────────────────────
+// ───────────────────────────── Log and agents (F7, F8) ─────────────────────────────
 
 #[tauri::command]
 pub async fn terminal_read(st: St<'_>, terminal: String, lines: Option<u32>) -> AppResult<String> {
     st.hc()?.read(&terminal, lines.unwrap_or(2000)).await
-}
-
-#[derive(Serialize)]
-pub struct TaskRef {
-    terminal: String,
-    command: String,
-    state: String,
-    exit_code: Option<i32>,
-    created_ms: Option<u64>,
-}
-
-#[tauri::command]
-pub async fn task_run(st: St<'_>, project_id: String, command: String) -> AppResult<TaskRef> {
-    let p = store::project_get(&st.db.lock(), &project_id)?;
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let labels = [
-        ("herdsman.app", "1".to_string()),
-        ("herdsman.kind", "task".to_string()),
-        ("herdsman.project", project_id.clone()),
-        ("herdsman.command", command.chars().take(200).collect::<String>()),
-    ];
-    let t = st.hc()?.run(&[shell, "-lc".into(), command.clone()], &p.path, &labels).await?;
-    Ok(TaskRef { terminal: t.address, command, state: t.state, exit_code: t.exit_code, created_ms: t.created_ms })
-}
-
-#[tauri::command]
-pub async fn task_list(st: St<'_>, project_id: String) -> AppResult<Vec<TaskRef>> {
-    let terms = st.hc()?.list(&[("herdsman.app", "1"), ("herdsman.kind", "task"), ("herdsman.project", &project_id)], true).await?;
-    Ok(terms
-        .into_iter()
-        .map(|t| TaskRef {
-            command: t.label("herdsman.command").map(|s| s.to_string()).unwrap_or_else(|| t.argv.last().cloned().unwrap_or_default()),
-            terminal: t.address,
-            state: t.state,
-            exit_code: t.exit_code,
-            created_ms: t.created_ms,
-        })
-        .collect())
-}
-
-#[tauri::command]
-pub async fn task_kill(st: St<'_>, terminal: String) -> AppResult<()> {
-    st.hc()?.kill(&terminal).await
-}
-
-#[tauri::command]
-pub async fn task_remove(st: St<'_>, terminal: String) -> AppResult<()> {
-    st.hc()?.rm(&terminal).await
 }
 
 #[derive(Serialize)]
@@ -915,10 +1049,83 @@ pub async fn project_files_list(st: St<'_>, project_id: String, path: String) ->
 }
 
 #[tauri::command]
+pub async fn project_files_search(
+    st: St<'_>,
+    project_id: String,
+    query: String,
+) -> AppResult<Vec<crate::project_files::Entry>> {
+    let project = store::project_get(&st.db.lock(), &project_id)?;
+    tokio::task::spawn_blocking(move || crate::project_files::search(Path::new(&project.path), &query))
+        .await
+        .map_err(|error| AppError::new("file_task", error.to_string()))?
+}
+
+#[tauri::command]
 pub async fn project_file_read(st: St<'_>, project_id: String, path: String) -> AppResult<crate::project_files::Document> {
     let project = store::project_get(&st.db.lock(), &project_id)?;
     tokio::task::spawn_blocking(move || crate::project_files::read(Path::new(&project.path), &path))
         .await.map_err(|error| AppError::new("file_task", error.to_string()))?
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionFile {
+    project_id: String,
+    path: String,
+    document: crate::project_files::Document,
+}
+
+fn session_workspace(st: &St<'_>, session_id: &str) -> AppResult<store::Workspace> {
+    let db = st.db.lock();
+    let session = store::session_get(&db, session_id)?;
+    store::workspace_get(&db, &session.workspace_id)
+}
+
+#[tauri::command]
+pub async fn session_file_exists(st: St<'_>, session_id: String, path: String) -> AppResult<bool> {
+    let workspace = session_workspace(&st, &session_id)?;
+    tokio::task::spawn_blocking(move || {
+        crate::project_files::workspace_file_exists(Path::new(&workspace.work_dir), Path::new(&path))
+    })
+    .await
+    .map_err(|error| AppError::new("file_task", error.to_string()))
+}
+
+#[tauri::command]
+pub async fn session_file_read(
+    st: St<'_>,
+    session_id: String,
+    path: String,
+) -> AppResult<SessionFile> {
+    let workspace = session_workspace(&st, &session_id)?;
+    tokio::task::spawn_blocking(move || {
+        let (path, document) = crate::project_files::read_workspace(
+            Path::new(&workspace.work_dir),
+            Path::new(&path),
+            workspace.dir_kind == "worktree",
+        )?;
+        Ok(SessionFile {
+            project_id: workspace.project_id,
+            path,
+            document,
+        })
+    })
+    .await
+    .map_err(|error| AppError::new("file_task", error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn absolute_files_search(path: String) -> AppResult<Vec<crate::project_files::Entry>> {
+    tokio::task::spawn_blocking(move || crate::project_files::search_absolute(Path::new(&path)))
+        .await
+        .map_err(|error| AppError::new("file_task", error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn absolute_file_read(path: String) -> AppResult<crate::project_files::Document> {
+    tokio::task::spawn_blocking(move || crate::project_files::read_absolute(Path::new(&path)))
+        .await
+        .map_err(|error| AppError::new("file_task", error.to_string()))?
 }
 
 #[tauri::command]
@@ -926,6 +1133,52 @@ pub async fn project_file_save(st: St<'_>, project_id: String, path: String, bas
     let project = store::project_get(&st.db.lock(), &project_id)?;
     tokio::task::spawn_blocking(move || crate::project_files::save(Path::new(&project.path), &path, &baseline, &text))
         .await.map_err(|error| AppError::new("file_task", error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn project_markdown_download(
+    window: tauri::WebviewWindow,
+    st: St<'_>,
+    project_id: String,
+    path: String,
+    text: String,
+) -> AppResult<()> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let source = if Path::new(&path).is_absolute() {
+        Path::new(&path).to_path_buf()
+    } else {
+        let project = store::project_get(&st.db.lock(), &project_id)?;
+        Path::new(&project.path).join(&path)
+    };
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| {
+            let name = name.to_ascii_lowercase();
+            name.ends_with(".md") || name.ends_with(".markdown")
+        })
+        .ok_or_else(|| AppError::new("unsupported_file", "Choose a Markdown file."))?
+        .to_owned();
+
+    tokio::task::spawn_blocking(move || {
+        let Some(destination) = window
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("Download Markdown")
+            .set_file_name(name)
+            .blocking_save_file()
+        else {
+            return Ok(());
+        };
+        let destination = destination
+            .into_path()
+            .map_err(|error| AppError::new("invalid_path", error.to_string()))?;
+        crate::project_files::write_markdown_copy(&source, &destination, &text)
+    })
+    .await
+    .map_err(|error| AppError::new("file_task", error.to_string()))?
 }
 
 #[cfg(test)]

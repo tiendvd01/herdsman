@@ -4,8 +4,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render as rtlRender, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-vi.mock('@/lib/api', () => ({ api: { fontFamilies: vi.fn(async () => ['Arial', 'Courier New', 'Georgia', 'Menlo']) } }));
+vi.mock('@/lib/api', () => ({
+  api: {
+    fontFamilies: vi.fn(async () => ['Arial', 'Courier New', 'Georgia', 'Menlo']),
+    notificationsRequestPermission: vi.fn(async () => {}),
+  },
+}));
 
+import { api } from '@/lib/api';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import { applyFonts } from '@/lib/theme';
 import { useZoomEffect } from '@/lib/zoomShortcuts';
@@ -37,6 +43,56 @@ describe('SettingsDialog', () => {
     open();
     expect(screen.getByRole('dialog')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Appearance' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('restores notification defaults and persists both choices across rehydration', async () => {
+    vi.mocked(api.notificationsRequestPermission).mockClear();
+    const key = 'herdsman-ui';
+    const previous = localStorage.getItem(key);
+    try {
+      await act(async () => {
+        localStorage.setItem(key, JSON.stringify({ state: { theme: 'system' }, version: 4 }));
+        await useUiStore.persist.rehydrate();
+      });
+      render(<SettingsDialog />);
+      open();
+      fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+      expect(screen.getByRole('heading', { name: 'Notifications' })).toBeTruthy();
+      const completion = screen.getByRole('switch', { name: 'Agent completion notifications' });
+      const sound = screen.getByRole('switch', { name: 'Play completion sound' });
+      expect(completion.getAttribute('aria-checked')).toBe('true');
+      expect(sound.getAttribute('aria-checked')).toBe('true');
+
+      fireEvent.click(sound);
+      fireEvent.click(completion);
+      expect((sound as HTMLButtonElement).disabled).toBe(true);
+      expect(api.notificationsRequestPermission).not.toHaveBeenCalled();
+      const configured = localStorage.getItem(key)!;
+      await act(async () => {
+        useUiStore.setState({ completionNotifications: true, completionSound: true });
+        localStorage.setItem(key, configured);
+        await useUiStore.persist.rehydrate();
+      });
+      expect(completion.getAttribute('aria-checked')).toBe('false');
+      expect(sound.getAttribute('aria-checked')).toBe('false');
+
+      fireEvent.click(completion);
+      expect((sound as HTMLButtonElement).disabled).toBe(false);
+      expect(sound.getAttribute('aria-checked')).toBe('false');
+      expect(api.notificationsRequestPermission).toHaveBeenCalledTimes(1);
+      fireEvent.click(sound);
+      expect(api.notificationsRequestPermission).toHaveBeenCalledTimes(2);
+    } finally {
+      await act(async () => {
+        if (previous === null) {
+          useUiStore.setState({ completionNotifications: true, completionSound: true });
+          localStorage.removeItem(key);
+        } else {
+          localStorage.setItem(key, previous);
+          await useUiStore.persist.rehydrate();
+        }
+      });
+    }
   });
 
   it('switches theme from the radio group', () => {

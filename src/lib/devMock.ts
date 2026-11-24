@@ -6,6 +6,11 @@ import { emit } from '@tauri-apps/api/event';
 const now = Date.now();
 const P = { id: 'p1', name: 'herdsman', path: '/Users/dev/herdsman', sort: 1, created_at: now, missing: false };
 const P2 = { id: 'p2', name: 'api-server', path: '/Users/dev/api-server', sort: 2, created_at: now, missing: false };
+const SAMPLE_FILES = [
+  { name: 'src', path: 'src', directory: true },
+  { name: 'README.md', path: 'README.md', directory: false },
+  { name: 'workspace.ts', path: 'src/workspace.ts', directory: false },
+];
 const WS = [
   { id: 'w1', project_id: 'p1', name: 'Fix login OAuth', dir_kind: 'worktree', work_dir: '/Users/dev/.herdsman-worktrees/herdsman/fix-login', branch: 'herdsman/fix-login', base_branch: 'main', archived_at: null, worktree_removed: false, created_at: now },
   { id: 'w2', project_id: 'p1', name: 'Refactor store', dir_kind: 'project', work_dir: P.path, branch: null, base_branch: null, archived_at: null, worktree_removed: false, created_at: now - 5e6 },
@@ -23,7 +28,7 @@ const LOGIN_PROMPT = 'Draw the OAuth login flow, with a comparison table and a c
 const EVENTS = [
   t(1, { type: 'session_started', engine: 'claude', model: 'claude-opus-5-5', cwd: WS[0].work_dir, permission_mode: 'ask', resumed: false }),
   t(2, { type: 'user_message', text: LOGIN_PROMPT, source: 'app' }),
-  t(3, { type: 'assistant_message', message_id: 'm1', blocks: [{ kind: 'text', text: 'Here is the current **OAuth login flow**:\n\n```mermaid\nsequenceDiagram\n  participant U as User\n  participant A as App\n  participant G as Google\n  U->>A: Click "Sign in"\n  A->>G: Redirect /authorize\n  G-->>A: code\n  A->>G: Exchange code for token\n  G-->>A: access_token\n  A-->>U: Home page\n```\n\n| Step | Current | After fix |\n|---|---|---|\n| Token storage | localStorage | httpOnly cookie |\n| Refresh | None | Automatic |\n| PKCE | No | Yes |\n\nExpiry time: $t_{exp} = t_0 + 3600$\n\n```chart\n{"data":{"values":[{"day":"Mon","fails":12},{"day":"Tue","fails":7},{"day":"Wed","fails":15},{"day":"Thu","fails":4},{"day":"Fri","fails":2}]},"mark":{"type":"bar","cornerRadiusEnd":3},"encoding":{"x":{"field":"day","type":"nominal","title":"Day","sort":null},"y":{"field":"fails","type":"quantitative","title":"Failed logins"}},"height":160}\n```' }] }),
+  t(3, { type: 'assistant_message', message_id: 'm1', blocks: [{ kind: 'text', text: 'See [the README](README.md), src/workspace.ts, or [a missing file](docs/moved.md).\n\nHere is the current **OAuth login flow**:\n\n```mermaid\nsequenceDiagram\n  participant U as User\n  participant A as App\n  participant G as Google\n  U->>A: Click "Sign in"\n  A->>G: Redirect /authorize\n  G-->>A: code\n  A->>G: Exchange code for token\n  G-->>A: access_token\n  A-->>U: Home page\n```\n\n| Step | Current | After fix |\n|---|---|---|\n| Token storage | localStorage | httpOnly cookie |\n| Refresh | None | Automatic |\n| PKCE | No | Yes |\n\nExpiry time: $t_{exp} = t_0 + 3600$\n\n```chart\n{"data":{"values":[{"day":"Mon","fails":12},{"day":"Tue","fails":7},{"day":"Wed","fails":15},{"day":"Thu","fails":4},{"day":"Fri","fails":2}]},"mark":{"type":"bar","cornerRadiusEnd":3},"encoding":{"x":{"field":"day","type":"nominal","title":"Day","sort":null},"y":{"field":"fails","type":"quantitative","title":"Failed logins"}},"height":160}\n```' }] }),
   t(4, { type: 'tool_use', tool_use_id: 'u1', tool: 'Bash', input: { command: 'pnpm test auth', description: 'Run auth tests' } }),
   t(5, { type: 'tool_result', tool_use_id: 'u1', is_error: false, content: '✓ auth/login.test.ts (6 tests)\n✓ auth/token.test.ts (4 tests)\n\nTest Files  2 passed' }),
   t(6, { type: 'tool_use', tool_use_id: 'u2', tool: 'Edit', input: { file_path: 'README.md', old_string: '## Sign-in\nTokens are stored in localStorage.', new_string: '## Sign-in\nTokens are stored in an httpOnly cookie.\nAutomatic refresh and PKCE.' } }),
@@ -70,6 +75,10 @@ export function installDevMock() {
           if (pr) pr.name = a.name;
           return pr ? { ...pr } : null;
         }
+        case 'workspace_terminal_list':
+          return [];
+        case 'workspace_terminal_create':
+          throw new Error('Terminal requires the desktop app.');
         case 'workspace_list':
           return WS.filter((w) => (!a.projectId || w.project_id === a.projectId) && (a.includeArchived || !w.archived_at)).map((w) => ({ ...w }));
         case 'workspace_rename': {
@@ -78,17 +87,16 @@ export function installDevMock() {
           setTimeout(() => emit('workspace:changed', {}), 0);
           return w;
         }
+        case 'workspace_delete':
         case 'workspace_archive': {
           const w = WS.find((x) => x.id === a.id);
-          if (w) (w as { archived_at: number | null }).archived_at = Date.now();
+          if (w) {
+            const workspace: { archived_at: number | null; deleted_at?: number } = w;
+            workspace.archived_at = Date.now();
+            if (cmd === 'workspace_delete') workspace.deleted_at = workspace.archived_at;
+          }
           setTimeout(() => emit('workspace:changed', {}), 0);
-          return w;
-        }
-        case 'workspace_delete': {
-          const i = WS.findIndex((x) => x.id === a.id);
-          if (i >= 0) WS.splice(i, 1);
-          setTimeout(() => emit('workspace:changed', {}), 0);
-          return null;
+          return cmd === 'workspace_delete' ? null : w;
         }
         case 'workspace_dirty_check': {
           const w = WS.find((x) => x.id === a.id);
@@ -126,19 +134,53 @@ export function installDevMock() {
             { terminal: 't7', title: 'reviewer', state: 'live', status: 'working', kind: null, progress: 60, children: [] },
             { terminal: 't9', title: 'tester', state: 'finished', status: null, kind: null, progress: null, children: [] },
           ] };
-        case 'task_list':
-          return [{ terminal: 't3', command: 'pnpm dev', state: 'live', exit_code: null, created_ms: now - 3e5 }, { terminal: 't4', command: 'cargo test', state: 'finished', exit_code: 0, created_ms: now - 9e5 }];
         case 'terminal_read':
           return '── herdsman-agent · claude · ~/herdsman\n› Draw the login flow…\n⏺ Bash pnpm test auth\n⏺ Edit README.md\n? Awaiting approval: Edit';
         case 'project_files_list':
-          if (a.path === '') return [
-            { name: 'src', path: 'src', directory: true },
-            { name: 'README.md', path: 'README.md', directory: false },
-          ];
-          if (a.path === 'src') return [{ name: 'workspace.ts', path: 'src/workspace.ts', directory: false }];
-          return [];
+          return SAMPLE_FILES.filter(({ path }) => path.slice(0, Math.max(0, path.lastIndexOf('/'))) === a.path);
+        case 'project_files_search': {
+          const query = a.query.trim().toLowerCase();
+          return query ? SAMPLE_FILES.filter(({ directory, path }) => !directory && path.toLowerCase().includes(query)) : [];
+        }
         case 'project_file_read':
           return { text: fileContents.get(JSON.stringify([a.projectId, a.path])) ?? sampleFile(a.path), writable: true };
+        case 'session_file_exists':
+        case 'session_file_read': {
+          const session = SESSIONS.find(({ id }) => id === a.sessionId);
+          const workspace = WS.find(({ id }) => id === session?.workspace_id);
+          if (!workspace) throw new Error('Workspace unavailable.');
+          const target = new URL(a.path, `file://${workspace.work_dir}/`).pathname;
+          if (!target.startsWith(`${workspace.work_dir}/`)) {
+            if (cmd === 'session_file_exists') return false;
+            throw new Error('The file is outside this workspace.');
+          }
+          const relative = decodeURIComponent(target.slice(workspace.work_dir.length + 1));
+          const exists = SAMPLE_FILES.some(({ path, directory }) => path === relative && !directory);
+          if (cmd === 'session_file_exists') return exists;
+          if (!exists) {
+            throw new Error('The file could not be found.');
+          }
+          const writable = workspace.dir_kind === 'project';
+          const projectId = workspace.project_id;
+          return {
+            projectId,
+            path: writable ? relative : `${workspace.work_dir}/${relative}`,
+            document: { text: fileContents.get(JSON.stringify([projectId, relative])) ?? sampleFile(relative), writable },
+          };
+        }
+        case 'absolute_file_read':
+          return { text: sampleFile(a.path), writable: false };
+        case 'absolute_files_search': {
+          const folder = '/tmp/example';
+          const path = `${folder}/notes.txt`;
+          if (a.path === folder || a.path === `${folder}/` ||
+              (a.path.startsWith(`${folder}/`) && 'notes.txt'.includes(a.path.slice(folder.length + 1).toLowerCase()))) {
+            return [{ name: 'notes.txt', path, directory: false }];
+          }
+          return [];
+        }
+        case 'codex_threads':
+          return [];
         case 'project_file_save': {
           const key = JSON.stringify([a.projectId, a.path]);
           if ((fileContents.get(key) ?? sampleFile(a.path)) !== a.baseline) {
@@ -156,7 +198,7 @@ export function installDevMock() {
         case 'file_diff':
           return '@@ -1 +1 @@\n-# Agent workspace\n+# Herdsman';
         case 'git_branches':
-          return { is_repo: true, branches: ['main', 'develop'], current: 'main' };
+          return { is_repo: true, branches: ['main', 'develop'], checked_out: ['main'], default_branch: 'main', current: 'main' };
         case 'plugin:webview|set_webview_zoom':
           throw new Error('Native webview zoom is unavailable in the browser preview');
         case 'search': {

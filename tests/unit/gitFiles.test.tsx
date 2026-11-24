@@ -166,3 +166,19 @@ it('groups the current workspace changes and keeps the same diff when switching 
   act(() => useUiStore.setState({ rightTab: 'files' }));
   expect(toggle().getAttribute('aria-pressed')).toBe('true');
 });
+
+it('restores the Agents tab when an older preference selected Tasks', async () => {
+  const stored = JSON.parse(localStorage.getItem('herdsman-ui')!);
+  localStorage.setItem('herdsman-ui', JSON.stringify({
+    ...stored,
+    state: { ...stored.state, rightTab: 'tasks' },
+  }));
+  await useUiStore.persist.rehydrate();
+  expect(useUiStore.getState().rightTab).toBe('agents');
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+  client.setQueryData(qk.projects, [{ id: 'p1', name: 'Project' }]);
+  render(<QueryClientProvider client={client}><RightPanel /></QueryClientProvider>);
+  expect(screen.getByRole('tab', { name: 'Agents', selected: true })).toBeTruthy();
+  expect(screen.queryByRole('tab', { name: 'Tasks' })).toBeNull();
+});

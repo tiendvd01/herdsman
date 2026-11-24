@@ -67,7 +67,7 @@ export function ModelSwitcher({ session, disabled }: { session: Session; disable
   }, [open, hasList, session.id]);
 
   function pick(o: ModelOption) {
-    if (isCurrent(o) || change.isPending) return;
+    if (change.isPending) return;
     change.mutate(o.value);
   }
 

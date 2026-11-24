@@ -30,6 +30,7 @@ interface FileState {
   closeDiff: (id: string) => void;
   active: Record<string, string | undefined>;
   open: (project: Project, path: string, name: string) => Promise<void>;
+  openSessionFile: (sessionId: string, path: string, isCurrent: () => boolean) => Promise<void>;
   activate: (projectId: string, id?: string) => void;
   edit: (id: string, draft: string) => void;
   save: (id: string) => Promise<void>;
@@ -74,16 +75,33 @@ export const useFileStore = create<FileState>((set, get) => {
       set((state) => ({ tabs: [...state.tabs, tab] }));
       const settle = (patch: Partial<FileTab>) => update(id, (file) => file === tab ? { ...file, ...patch } : file);
       try {
-        const document = await api.projectFileRead(projectId, path);
+        const document = path.startsWith('/')
+          ? await api.absoluteFileRead(path)
+          : await api.projectFileRead(projectId, path);
         settle({ document, draft: document.text });
       } catch (error) {
         settle({ loadError: errMsg(error) });
       }
     },
+    openSessionFile: async (sessionId, reference, isCurrent) => {
+      const { projectId, path, document } = await api.sessionFileRead(sessionId, reference);
+      if (!isCurrent()) return;
+      const id = JSON.stringify([projectId, path]);
+      const tab = { id, projectId, path, name: path.slice(path.lastIndexOf('/') + 1), document, draft: document.text };
+      set((state) => {
+        const active = { ...state.active, [projectId]: id };
+        const existing = state.tabs.find((file) => file.id === id);
+        if (existing?.document) return { active };
+        const tabs = existing
+          ? state.tabs.map((file) => file === existing ? tab : file)
+          : [...state.tabs, tab];
+        return { active, tabs };
+      });
+    },
     edit: (id, draft) => update(id, (file) => ({ ...file, draft })),
     save: async (id) => {
       const file = get().tabs.find((item) => item.id === id);
-      if (!file?.document || !isDirty(file) || file.saving || file.draft === undefined) return;
+      if (!file?.document?.writable || !isDirty(file) || file.saving || file.draft === undefined) return;
       const { draft, document } = file;
       update(id, (item) => ({ ...item, saving: true }));
       try {

@@ -116,6 +116,15 @@ impl Hc {
         self.call(&["server".into(), "status".into()]).await.is_ok()
     }
 
+    /// Synchronous metadata probes run without creating an agent terminal.
+    pub async fn exec_metadata(&self, cwd: &str, argv: &[String]) -> AppResult<std::process::Output> {
+        let mut cmd = Command::new(&self.bin);
+        cmd.args(["exec", "--timeout", "35", "--cwd", cwd, "--"])
+            .args(argv)
+            .kill_on_drop(true);
+        Ok(cmd.output().await?)
+    }
+
     /// `hc run --bg`: chạy một chương trình sống độc lập với app.
     pub async fn run(&self, argv: &[String], cwd: &str, labels: &[(&str, String)]) -> AppResult<Terminal> {
         let mut args: Vec<String> = vec!["run".into(), "--bg".into(), "--no-parent".into(), "--outlive-parent".into(), "--no-notify".into()];

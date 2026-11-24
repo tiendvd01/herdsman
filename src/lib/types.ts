@@ -1,7 +1,7 @@
 // Kiểu dữ liệu khớp backend Rust (src-tauri/src/store.rs, commands.rs) và AgentEvent (contracts/sidecar-socket.md).
 
 export type SessionStatus = 'idle' | 'working' | 'blocked' | 'done' | 'error';
-export type PermissionMode = 'ask' | 'accept_edits' | 'auto' | 'bypass';
+export type PermissionMode = 'ask' | 'accept_edits' | 'auto' | 'bypass' | 'custom';
 export type Engine = 'claude' | 'codex' | 'echo';
 
 export interface Project {
@@ -22,6 +22,7 @@ export interface Workspace {
   branch: string | null;
   base_branch: string | null;
   archived_at: number | null;
+  deleted_at?: number | null;
   worktree_removed: boolean;
   created_at: number;
 }
@@ -37,6 +38,7 @@ export interface Session {
   model: string | null;
   engine_session_id: string | null;
   last_seen_seq: number;
+  completion_seq?: number;
   pinned_tab: boolean;
   created_at: number;
   updated_at: number;
@@ -93,14 +95,6 @@ export interface RunningRef {
   title: string;
 }
 
-export interface TaskRef {
-  terminal: string;
-  command: string;
-  state: 'live' | 'finished';
-  exit_code: number | null;
-  created_ms: number | null;
-}
-
 export interface AgentNode {
   terminal: string;
   title: string;
@@ -119,6 +113,8 @@ export interface ChangedFile {
 export interface BranchInfo {
   is_repo: boolean;
   branches: string[];
+  checked_out: string[];
+  default_branch: string | null;
   current: string | null;
 }
 

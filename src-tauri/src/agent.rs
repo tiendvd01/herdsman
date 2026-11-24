@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::SystemTime;
 use std::fs::File;
-use std::io::{BufRead, BufReader as FileReader};
+use std::io::{BufRead, BufReader as FileReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -20,6 +20,39 @@ use tokio::net::UnixStream;
 pub const PROTO: u64 = 1;
 
 /// Chạy sidecar `herdsman-agent` trong một terminal hc (contracts/hc-integration.md).
+fn codex_binary() -> AppResult<PathBuf> {
+    if let Some(path) = std::env::var_os("HERDSMAN_CODEX") {
+        return Ok(PathBuf::from(path));
+    }
+    crate::hc::which_in_login_shell("codex").ok_or_else(|| {
+        AppError::new("codex_missing", "Install the Codex CLI, then run codex login.")
+    })
+}
+
+pub async fn codex_probe(st: &AppState, cwd: &str, action: &str, thread_id: Option<&str>) -> AppResult<Value> {
+    let node = st.node.as_ref().ok_or_else(|| AppError::new("node_missing", "Install Node.js to run Codex in Herdsman."))?;
+    let binary = codex_binary()?;
+    let script = st.sidecar.with_file_name("engines").join("codex.mjs");
+    let mut args = vec![
+        node.to_string_lossy().into_owned(),
+        script.to_string_lossy().into_owned(),
+        binary.to_string_lossy().into_owned(),
+        cwd.to_owned(),
+        action.to_owned(),
+    ];
+    if let Some(id) = thread_id {
+        args.push(id.to_owned());
+    }
+    let output = st.hc()?.exec_metadata(cwd, &args).await?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr);
+        let message = message.lines().last().filter(|line| !line.is_empty())
+            .unwrap_or("Codex is unavailable. Check the installed CLI and run codex login.");
+        return Err(AppError::new("codex_unavailable", message));
+    }
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
 pub async fn spawn_sidecar(st: &AppState, s: &Session, ws: &Workspace) -> AppResult<Terminal> {
     let hc = st.hc()?;
     let node = st
@@ -40,6 +73,13 @@ pub async fn spawn_sidecar(st: &AppState, s: &Session, ws: &Workspace) -> AppRes
         "--data-dir".into(),
         st.data_dir.to_string_lossy().into(),
     ];
+    if s.engine == "codex" {
+        let codex = codex_binary()?;
+        argv.extend(["--codex-binary".into(), codex.to_string_lossy().into()]);
+        if let Some(model) = &s.model {
+            argv.extend(["--model".into(), model.clone()]);
+        }
+    }
     if let ("claude", Some(model)) = (s.engine.as_str(), &s.model) {
         argv.extend(["--model".into(), model.clone()]);
         if s.engine_session_id.is_none() {
@@ -125,6 +165,17 @@ pub fn close_view(st: &AppState, sid: &str) {
     if let Some(h) = st.views.lock().remove(sid) {
         h.abort();
     }
+}
+
+pub fn open_saved_history(st: Arc<AppState>, sid: String) {
+    close_view(&st, &sid);
+    let state = st.clone();
+    let id = sid.clone();
+    let task = tokio::spawn(async move {
+        emit_saved_history(&state, &id).await;
+        state.emit("session:events", json!({"session_id": id, "events": [], "closed": true}));
+    });
+    st.views.lock().insert(sid, task.abort_handle());
 }
 
 // A stopped agent has no socket. The transcript is still available on disk.
@@ -216,7 +267,14 @@ fn persist_events(st: &AppState, sid: &str, events: &[Value]) {
                 let state = ev.get("state").and_then(|s| s.as_str()).unwrap_or("idle");
                 if store::session_set_status(&db, sid, state).unwrap_or(false) {
                     let kind = ev.get("kind").cloned().unwrap_or(Value::Null);
-                    st.emit("status:changed", json!({"session_id": sid, "workspace_id": session.workspace_id, "state": state, "kind": kind}));
+                    let mut status = json!({"session_id": sid, "workspace_id": session.workspace_id, "state": state, "kind": kind});
+                    if state == "idle" && kind.as_str() == Some("turn_complete") {
+                        if let Some((seq, ts)) = completed_turn(&st.session_dir(sid).join("events.ndjson")) {
+                            status["completion_seq"] = json!(seq);
+                            status["completion_ts"] = json!(ts);
+                        }
+                    }
+                    st.emit("status:changed", status);
                 }
             }
             "engine_session" => {
@@ -405,16 +463,20 @@ pub fn backfill_index(st: &AppState) {
         Err(_) => return,
     };
     for s in sessions {
-        let path = st.session_dir(&s.id).join("events.ndjson");
-        let Ok(text) = std::fs::read_to_string(&path) else { continue };
-        let events: Vec<Value> = text
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .filter(|e| e.get("seq").and_then(|s| s.as_i64()).unwrap_or(0) > s.indexed_seq)
-            .collect();
-        if !events.is_empty() {
-            persist_events(st, &s.id, &events);
-        }
+        backfill_session_index(st, &s);
+    }
+}
+
+pub(crate) fn backfill_session_index(st: &AppState, session: &Session) {
+    let path = st.session_dir(&session.id).join("events.ndjson");
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let events: Vec<Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| event.get("seq").and_then(Value::as_i64).unwrap_or(0) > session.indexed_seq)
+        .collect();
+    if !events.is_empty() {
+        persist_events(st, &session.id, &events);
     }
 }
 
@@ -436,6 +498,42 @@ fn derive_status(t: &Terminal) -> &'static str {
     }
 }
 
+// Some hc versions omit the kind on idle statuses. Read the latest turn from the
+// sidecar log, starting at the tail so long conversations usually cost one read.
+pub(crate) fn completed_turn(log: &Path) -> Option<(u64, i64)> {
+    let read_tail = || -> std::io::Result<Option<(u64, i64)>> {
+        let mut file = File::open(log)?;
+        let end = file.metadata()?.len();
+        let mut size = 8192;
+        loop {
+            let start = end.saturating_sub(size);
+            file.seek(SeekFrom::Start(start))?;
+            let mut bytes = vec![0; (end - start) as usize];
+            file.read_exact(&mut bytes)?;
+            let lines = if start == 0 {
+                &bytes[..]
+            } else {
+                bytes.iter().position(|byte| *byte == b'\n').map_or(&[][..], |i| &bytes[i + 1..])
+            };
+            for line in lines.rsplit(|byte| *byte == b'\n') {
+                let Ok(event) = serde_json::from_slice::<Value>(line) else { continue };
+                match event["type"].as_str() {
+                    Some("turn_end") if event["interrupted"] != true && event["is_error"] != true => {
+                        return Ok(event["seq"].as_u64().zip(event["ts"].as_i64()));
+                    }
+                    Some("turn_end" | "user_message" | "session_started") => return Ok(None),
+                    _ => {}
+                }
+            }
+            if start == 0 {
+                return Ok(None);
+            }
+            size = size.saturating_mul(2);
+        }
+    };
+    read_tail().ok().flatten()
+}
+
 fn reconcile(st: &AppState, t: &Terminal) {
     match t.label("herdsman.kind") {
         Some("session") => {
@@ -450,13 +548,25 @@ fn reconcile(st: &AppState, t: &Terminal) {
                 let _ = store::session_set_terminal(&db, sid, Some(&t.address));
             }
             let state = derive_status(t);
-            if store::session_set_status(&db, sid, state).unwrap_or(false) {
-                let kind = t.status.as_ref().and_then(|s| s.kind.clone());
-                st.emit("status:changed", json!({"session_id": sid, "workspace_id": s.workspace_id, "state": state, "kind": kind}));
+            let changed = store::session_set_status(&db, sid, state).unwrap_or(false);
+            drop(db);
+            // The idle kind can change when a fast turn is missed or after reconnecting.
+            if changed || state == "idle" {
+                let mut kind = t.status.as_ref().and_then(|s| s.kind.as_deref());
+                let completion = if state == "idle" {
+                    completed_turn(&st.session_dir(sid).join("events.ndjson"))
+                } else {
+                    None
+                };
+                if completion.is_some() && kind.is_none() {
+                    kind = Some("turn_complete");
+                }
+                let mut event = json!({"session_id": sid, "workspace_id": s.workspace_id, "state": state, "kind": kind});
+                if let Some((seq, ts)) = completion {
+                    event["completion"] = json!({"seq": seq, "ts": ts, "title": s.title});
+                }
+                st.emit("status:changed", event);
             }
-        }
-        Some("task") => {
-            st.emit("tasks:changed", json!({"project_id": t.label("herdsman.project")}));
         }
         _ => {}
     }
@@ -516,9 +626,11 @@ pub async fn watch_hc(st: Arc<AppState>) {
             }
             let Some(addr) = term else { continue };
             if ty == "removed" {
-                st.terminals.lock().remove(&addr);
+                let removed = st.terminals.lock().remove(&addr);
+                if let Some(t) = removed.filter(|t| t.label("herdsman.kind") == Some("terminal")) {
+                    st.emit("terminals:changed", json!({"workspace_id": t.label("herdsman.workspace")}));
+                }
                 st.emit("agents:changed", json!({"terminal": addr}));
-                st.emit("tasks:changed", json!({}));
                 continue;
             }
             if ty == "output" || ty == "foreground" || ty == "title" {
@@ -526,6 +638,9 @@ pub async fn watch_hc(st: Arc<AppState>) {
             }
             if let Ok(t) = hc.get(&addr).await {
                 st.terminals.lock().insert(addr.clone(), t.clone());
+                if t.label("herdsman.kind") == Some("terminal") && matches!(ty.as_str(), "created" | "finished" | "lost" | "restarted" | "labels") {
+                    st.emit("terminals:changed", json!({"workspace_id": t.label("herdsman.workspace")}));
+                }
                 reconcile(&st, &t);
             }
         }
@@ -547,6 +662,24 @@ mod tests {
         let ev = json!({"type": "tool_use", "tool": "Bash", "input": {"command": "ls -la"}});
         assert_eq!(index_text(&ev).unwrap().1, "Bash ls -la");
         assert!(index_text(&json!({"type": "delta", "text": "a"})).is_none());
+    }
+
+    #[test]
+    fn completion_from_legacy_idle_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("events.ndjson");
+        let idle = json!({"type": "status", "state": "idle"});
+        for (event, expected) in [
+            (json!({"type": "turn_end", "seq": 2, "ts": 100, "is_error": false, "interrupted": false}), Some((2, 100))),
+            (json!({"type": "turn_end", "seq": 2, "ts": 100, "is_error": true}), None),
+            (json!({"type": "turn_end", "seq": 2, "ts": 100, "interrupted": true}), None),
+            (json!({"type": "user_message", "text": "x".repeat(9000)}), None),
+            (json!({"type": "session_started"}), None),
+        ] {
+            let previous_turn = json!({"type": "turn_end", "seq": 1, "ts": 99});
+            std::fs::write(&log, format!("{previous_turn}\n{event}\n{idle}\n")).unwrap();
+            assert_eq!(completed_turn(&log), expected);
+        }
     }
 
     #[test]

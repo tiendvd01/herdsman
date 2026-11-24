@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // herdsman-agent: một session agent, chạy trong terminal của hc (không phải tiến trình con của app).
-// Usage: node src/index.mjs --session <sid> --cwd <dir> --engine claude|echo
-//          [--permission-mode ask|accept_edits|auto|bypass] [--model <m>] [--data-dir <dir>]
+// Usage: node src/index.mjs --session <sid> --cwd <dir> --engine claude|codex|echo
+//          [--permission-mode ask|accept_edits|auto|bypass|custom] [--model <m>] [--data-dir <dir>]
 import path from 'node:path';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +13,7 @@ import { reportStatus } from './osc.mjs';
 import { printEvent } from './screen.mjs';
 import { listenStdin } from './stdin.mjs';
 import { createClaudeEngine } from './engines/claude.mjs';
+import { createCodexEngine } from './engines/codex.mjs';
 import { createEchoEngine } from './engines/echo.mjs';
 
 const { values: args } = parseArgs({
@@ -20,6 +21,7 @@ const { values: args } = parseArgs({
     session: { type: 'string' },
     cwd: { type: 'string' },
     engine: { type: 'string', default: 'claude' },
+    'codex-binary': { type: 'string' },
     'permission-mode': { type: 'string', default: 'ask' },
     model: { type: 'string' },
     'inherited-model': { type: 'boolean', default: false },
@@ -34,6 +36,7 @@ if (!args.session || !args.cwd) {
 }
 
 const MODES = new Set(['ask', 'accept_edits', 'auto', 'bypass']);
+if (args.engine === 'codex') MODES.add('custom');
 const dataDir = args['data-dir'] || process.env.HERDSMAN_DATA_DIR || path.join(os.homedir(), 'Library/Application Support/app.herdsman');
 const sid = args.session;
 const sessionDir = path.join(dataDir, 'sessions', sid);
@@ -76,10 +79,24 @@ function saveMeta(patch) {
   for (const id of open.keys()) log.append('permission_resolved', { id, decision: 'cancelled', by: 'restart' });
 }
 
-function requestPermission(tool, input, extra = {}) {
+function requestPermission(tool, input, extra = {}, signal) {
   const id = `perm_${log.seq + 1}`;
   return new Promise((resolve) => {
-    pending.set(id, resolve);
+    const cancel = () => {
+      if (!pending.delete(id)) return;
+      emit('permission_resolved', { id, decision: 'cancelled', by: 'engine' });
+      if (pending.size === 0) setStatus('working');
+      resolve({ decision: 'deny' });
+    };
+    if (signal?.aborted) {
+      resolve({ decision: 'deny' });
+      return;
+    }
+    signal?.addEventListener('abort', cancel, { once: true });
+    pending.set(id, (result) => {
+      signal?.removeEventListener('abort', cancel);
+      resolve(result);
+    });
     emit('permission_request', { id, tool, input, cwd: args.cwd, ...extra });
     setStatus('blocked', 'permission');
   });
@@ -114,11 +131,22 @@ const ctx = {
   onInitialModelSettled() {
     if (meta.inherited_model) saveMeta({ inherited_model: false });
   },
-  onTurnState(state) {
-    if (pending.size === 0) setStatus(state);
+  onTurnState(state, kind) {
+    if (pending.size === 0) setStatus(state, kind);
   },
 };
-const engine = args.engine === 'echo' ? createEchoEngine(ctx) : createClaudeEngine(ctx);
+const codexEvents = args.engine === 'codex' ? log.readFrom(0) : [];
+const engine = args.engine === 'codex'
+  ? createCodexEngine({
+      ...ctx,
+      codexBinary: args['codex-binary'] || 'codex',
+      recordedCodexItems: codexEvents.flatMap((event) => [event.codex_item_id, event.message_id].filter(Boolean)),
+      recordedCodexTurns: codexEvents.map((event) => event.codex_turn_id).filter(Boolean),
+      codexHistoryImported: codexEvents.some((event) => event.type === 'codex_history_imported'),
+      unusedCodexThread: codexEvents.some((event) => event.type === 'session_started' && !event.resumed)
+        && !codexEvents.some((event) => event.type === 'user_message'),
+    })
+  : args.engine === 'echo' ? createEchoEngine(ctx) : createClaudeEngine(ctx);
 
 function submitPrompt(text, images = [], source = 'app') {
   const stored = [];
@@ -181,8 +209,8 @@ async function onCommand(cmd) {
     }
     case 'set_permission_mode':
       if (!MODES.has(cmd.mode)) throw Object.assign(new Error('invalid mode'), { code: 'bad_mode' });
+      await engine.setPermissionMode(cmd.mode);
       mode = cmd.mode;
-      await engine.setPermissionMode(mode);
       saveMeta({ permission_mode: mode });
       emit('permission_mode_changed', { mode });
       return;

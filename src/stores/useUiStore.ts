@@ -1,7 +1,7 @@
 // UI selection (open project/workspace/session, panels, theme); remembers the latest choice.
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { SessionStatus } from '@/lib/types';
+import type { Session, SessionStatus } from '@/lib/types';
 import { clampWidth, COMPOSER, LEFT, RIGHT } from '@/lib/layout';
 import { DEFAULT_FONT } from '@/lib/fonts';
 import { clampContentStep, clampZoom, CONTENT_STEP, nextZoom, normalizeCodeFontSize, ZOOM_DEFAULT } from '@/lib/uiZoom';
@@ -9,13 +9,22 @@ import { clampContentStep, clampZoom, CONTENT_STEP, nextZoom, normalizeCodeFontS
 export type Theme = 'system' | 'light' | 'dark';
 /** Spec 016: theme ids picked for Light and for Dark (built-in `light`/`paper`/`dark` or a custom theme file name). */
 export const isThemeId = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 64;
-export type RightTab = 'agents' | 'tasks' | 'files' | 'project-files' | 'log';
+export type RightTab = 'agents' | 'files' | 'project-files' | 'log';
+
+interface LiveStatus {
+  state: SessionStatus;
+  kind?: string | null;
+  workspace_id?: string;
+  completionSeq?: number;
+  completionTs?: number;
+}
 
 interface UiState {
   projectId: string | null;
   workspaceId: string | null;
   sessionByWorkspace: Record<string, string>;
   recentWorkspaceIds: string[];
+  reopenedWorkspaceIds: string[];
   tempTabs: Record<string, string[]>; // finished sessions reopened from history (temporary tabs)
   collapsed: Record<string, boolean>;
   rightTab: RightTab;
@@ -35,13 +44,18 @@ interface UiState {
   uiFont: string; // Settings → Appearance, spec 010
   codeFont: string;
   codeFontSize: number | null;
-  statuses: Record<string, { state: SessionStatus; kind?: string | null; workspace_id?: string }>;
+  completionNotifications: boolean;
+  completionSound: boolean;
+  statuses: Record<string, LiveStatus>;
+  viewedCompletions: Record<string, string>;
   // Transient dialogs (not persisted)
   cmdOpen: boolean;
   addProjectOpen: boolean;
   newWorkspaceFor: string | null;
   settingsOpen: boolean;
   selectWorkspace: (projectId: string, workspaceId: string | null) => void;
+  reopenWorkspace: (projectId: string, workspaceId: string) => void;
+  hideReopenedWorkspace: (workspaceId: string) => void;
   selectSession: (workspaceId: string, sessionId: string | null) => void;
   addTempTab: (workspaceId: string, sessionId: string) => void;
   removeTempTab: (workspaceId: string, sessionId: string) => void;
@@ -60,6 +74,8 @@ interface UiState {
   setUiFont: (id: string) => void;
   setCodeFont: (id: string) => void;
   setCodeFontSize: (size: number | null) => void;
+  setCompletionNotifications: (enabled: boolean) => void;
+  setCompletionSound: (enabled: boolean) => void;
   setSettingsOpen: (o: boolean) => void;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -67,7 +83,8 @@ interface UiState {
   contentBigger: () => void;
   contentSmaller: () => void;
   contentReset: () => void;
-  setStatus: (sid: string, s: { state: SessionStatus; kind?: string | null; workspace_id?: string }) => void;
+  setStatus: (sid: string, status: LiveStatus) => void;
+  acknowledgeCompletion: (session: Session) => void;
   setCmdOpen: (o: boolean) => void;
   setAddProjectOpen: (o: boolean) => void;
   setNewWorkspaceFor: (projectId: string | null) => void;
@@ -75,11 +92,12 @@ interface UiState {
 
 export const useUiStore = create<UiState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       projectId: null,
       workspaceId: null,
       sessionByWorkspace: {},
       recentWorkspaceIds: [],
+      reopenedWorkspaceIds: [],
       tempTabs: {},
       collapsed: {},
       rightTab: 'agents',
@@ -98,7 +116,10 @@ export const useUiStore = create<UiState>()(
       uiFont: DEFAULT_FONT.ui,
       codeFont: DEFAULT_FONT.code,
       codeFontSize: null,
+      completionNotifications: true,
+      completionSound: true,
       statuses: {},
+      viewedCompletions: {},
       cmdOpen: false,
       addProjectOpen: false,
       newWorkspaceFor: null,
@@ -109,6 +130,18 @@ export const useUiStore = create<UiState>()(
         recentWorkspaceIds: workspaceId
           ? [workspaceId, ...s.recentWorkspaceIds.filter((id) => id !== workspaceId)].slice(0, 10)
           : s.recentWorkspaceIds,
+      })),
+      reopenWorkspace: (projectId, workspaceId) => {
+        get().selectWorkspace(projectId, workspaceId);
+        set((s) => ({
+          collapsed: { ...s.collapsed, [projectId]: false },
+          reopenedWorkspaceIds: s.reopenedWorkspaceIds.includes(workspaceId)
+            ? s.reopenedWorkspaceIds
+            : [...s.reopenedWorkspaceIds, workspaceId],
+        }));
+      },
+      hideReopenedWorkspace: (workspaceId) => set((s) => ({
+        reopenedWorkspaceIds: s.reopenedWorkspaceIds.filter((id) => id !== workspaceId),
       })),
       selectSession: (workspaceId, sessionId) =>
         set((s) => {
@@ -139,6 +172,8 @@ export const useUiStore = create<UiState>()(
       setUiFont: (uiFont) => set({ uiFont }),
       setCodeFont: (codeFont) => set({ codeFont }),
       setCodeFontSize: (size) => set({ codeFontSize: normalizeCodeFontSize(size) }),
+      setCompletionNotifications: (completionNotifications) => set({ completionNotifications }),
+      setCompletionSound: (completionSound) => set({ completionSound }),
       setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
       zoomIn: () => set((s) => ({ zoom: nextZoom(s.zoom, 1), zoomFlash: { kind: 'zoom', at: Date.now() } })),
       zoomOut: () => set((s) => ({ zoom: nextZoom(s.zoom, -1), zoomFlash: { kind: 'zoom', at: Date.now() } })),
@@ -146,7 +181,18 @@ export const useUiStore = create<UiState>()(
       contentBigger: () => set((s) => ({ contentStep: clampContentStep(s.contentStep + 1), zoomFlash: { kind: 'text', at: Date.now() } })),
       contentSmaller: () => set((s) => ({ contentStep: clampContentStep(s.contentStep - 1), zoomFlash: { kind: 'text', at: Date.now() } })),
       contentReset: () => set({ contentStep: CONTENT_STEP.def, zoomFlash: { kind: 'text', at: Date.now() } }),
-      setStatus: (sid, st) => set((s) => ({ statuses: { ...s.statuses, [sid]: st } })),
+      setStatus: (sid, status) => set((s) => {
+        const previousSeq = s.statuses[sid]?.completionSeq;
+        if (previousSeq !== undefined && status.completionSeq !== undefined && status.completionSeq < previousSeq) {
+          return s;
+        }
+        return { statuses: { ...s.statuses, [sid]: status } };
+      }),
+      acknowledgeCompletion: (session) => set((s) => {
+        const key = completionKey(session, s.statuses[session.id]);
+        if (key === undefined || s.viewedCompletions[session.id] === key) return s;
+        return { viewedCompletions: { ...s.viewedCompletions, [session.id]: key } };
+      }),
       setCmdOpen: (cmdOpen) => set({ cmdOpen }),
       setAddProjectOpen: (addProjectOpen) => set({ addProjectOpen }),
       setNewWorkspaceFor: (newWorkspaceFor) => set({ newWorkspaceFor }),
@@ -157,14 +203,16 @@ export const useUiStore = create<UiState>()(
       migrate: migrateUi,
       // Saved widths may be stale or corrupt: always clamp them back into range.
       merge: (persisted, current) => {
-        const p = (persisted ?? {}) as Partial<UiState>;
-        return { ...current, ...p, sidebarWidth: clampWidth(p.sidebarWidth, LEFT), rightWidth: clampWidth(p.rightWidth, RIGHT), composerHeight: clampWidth(p.composerHeight, COMPOSER), zoom: clampZoom(p.zoom), contentStep: clampContentStep(p.contentStep), codeFontSize: normalizeCodeFontSize(p.codeFontSize), lightTheme: isThemeId(p.lightTheme) ? p.lightTheme : 'light', darkTheme: isThemeId(p.darkTheme) ? p.darkTheme : 'dark' };
+        const p = (persisted ?? {}) as Partial<Omit<UiState, 'rightTab'>> & { rightTab?: RightTab | 'tasks' };
+        const rightTab = p.rightTab === 'tasks' ? 'agents' : p.rightTab ?? current.rightTab;
+        return { ...current, ...p, rightTab, sidebarWidth: clampWidth(p.sidebarWidth, LEFT), rightWidth: clampWidth(p.rightWidth, RIGHT), composerHeight: clampWidth(p.composerHeight, COMPOSER), zoom: clampZoom(p.zoom), contentStep: clampContentStep(p.contentStep), codeFontSize: normalizeCodeFontSize(p.codeFontSize), lightTheme: isThemeId(p.lightTheme) ? p.lightTheme : 'light', darkTheme: isThemeId(p.darkTheme) ? p.darkTheme : 'dark', completionNotifications: p.completionNotifications !== false, completionSound: p.completionSound !== false };
       },
       partialize: (s) => ({
         projectId: s.projectId,
         workspaceId: s.workspaceId,
         sessionByWorkspace: s.sessionByWorkspace,
         recentWorkspaceIds: s.recentWorkspaceIds,
+        reopenedWorkspaceIds: s.reopenedWorkspaceIds,
         collapsed: s.collapsed,
         rightTab: s.rightTab,
         rightOpen: s.rightOpen,
@@ -180,6 +228,9 @@ export const useUiStore = create<UiState>()(
         uiFont: s.uiFont,
         codeFont: s.codeFont,
         codeFontSize: s.codeFontSize,
+        completionNotifications: s.completionNotifications,
+        completionSound: s.completionSound,
+        viewedCompletions: s.viewedCompletions,
       }),
     },
   ),
@@ -210,4 +261,19 @@ export function migrateUi(persisted: unknown, version: number): Partial<UiState>
     delete p.lightStyle;
   }
   return p as Partial<UiState>;
+}
+
+function completionKey(session: Session, live?: LiveStatus): string | undefined {
+  const status = live?.state ?? session.status;
+  if (status === 'done' && session.ended_at != null) return `ended:${session.ended_at}`;
+  if (status !== 'idle') return;
+  const seq = live ? live.completionSeq : session.completion_seq;
+  if (seq !== undefined) return `turn:${seq}`;
+}
+
+export function sessionTabStatus(session: Session, live?: LiveStatus, viewed?: string): SessionStatus {
+  const key = completionKey(session, live);
+  if (key !== undefined) return key === viewed ? 'idle' : 'done';
+  const status = live?.state ?? session.status;
+  return status === 'idle' && live?.kind === 'turn_complete' ? 'done' : status;
 }

@@ -16,7 +16,7 @@ Mở session, đổi model, duyệt tool, đóng rồi mở lại app khi agent 
 - **FR-006** Bộ chọn model cạnh chế độ quyền hiển thị tên model dễ đọc và các lựa chọn do engine cung cấp, kèm mô tả nếu có. Chỉ cập nhật nhãn trên bộ chọn và header sau khi engine xác nhận. Model áp dụng từ lượt tiếp theo, lưu theo session qua resume. Đổi thất bại giữ model cũ và báo lỗi. Engine chưa hỗ trợ thì vô hiệu hóa điều khiển và giải thích. Bộ chọn có nhãn model hiện tại, mở, chọn và đóng được bằng bàn phím. Ghi lần đổi vào lịch sử sự kiện.
 - **FR-007** Riêng Claude, lần đổi model chủ động thành công được ghi nhớ toàn app cho hội thoại Claude mới ngay từ lượt đầu tiên. Session đã tạo hoặc resume giữ model riêng. Khi chưa có lựa chọn dùng mặc định; nếu model đã lưu không còn khả dụng, thông báo và dùng mặc định nếu có, giữ lựa chọn đã lưu. Model tự báo lúc khởi động và lần đổi thất bại giữ nguyên lựa chọn đã lưu.
 - **FR-008** Composer hiển thị chỉ số dạng chữ cho context của session và hạn mức tài khoản 5 giờ/tuần, số nguyên 0–100%, cập nhật sau mỗi lượt. Cảnh báo từ 80%, nguy hiểm từ 95%, xem thời điểm reset qua hover. Khi thiếu dữ liệu hiện trạng thái trống; ẩn hoặc làm mờ hạn mức nếu nguồn không hỗ trợ và đánh dấu số liệu đã cũ khi làm mới thất bại.
-- **FR-009** Panel Log hiển thị terminal session. Agents hiển thị cây cha → con và trạng thái/tiến độ, giới hạn ở thông tin theo dõi. Tasks cho chạy background task theo project, xem log/trạng thái, dừng và dọn task. Task sống qua đóng app.
+- **FR-009** Panel Log hiển thị terminal session. Agents hiển thị cây cha → con và trạng thái/tiến độ, giới hạn ở thông tin theo dõi.
 
 ## Success Criteria
 

@@ -1,5 +1,11 @@
 <!--
 Sync Impact Report
+- Version change: 1.3.0 → 1.4.0 (MINOR, mở rộng checkout worktree)
+- Modified principles: VI cho phép checkout branch local có sẵn
+- Related documents: BR-001 F11, technical D8, spec 028
+- Templates: không cần sửa
+
+Sync Impact Report
 - Version change: 1.2.0 → 1.3.0 (MINOR, bổ sung chuẩn shadcn/ui cho toàn bộ giao diện)
 - Modified principles: không có
 - Added principles: không có
@@ -86,7 +92,8 @@ của chúng lên chứ không bắt người dùng bỏ công cụ quen thuộc
   session cùng làm một việc, ví dụ một issue) → **Session** (một hội thoại với agent). Session
   MUST thuộc đúng một workspace; workspace MUST thuộc đúng một project.
 - Workspace MUST có đúng một thư mục làm việc dùng chung cho mọi session của nó: thư mục project
-  hoặc một worktree riêng (branch mới từ base branch). Worktree MUST gắn với workspace, không gắn
+  hoặc một worktree riêng (branch mới từ base branch hoặc branch local chưa được checkout).
+  Worktree MUST gắn với workspace, không gắn
   với từng session.
 - MUST NOT thêm khái niệm tổ chức nào khác (space, nhóm lồng nhau, tag thay cấp) khi chưa sửa
   constitution hoặc BR.
@@ -147,4 +154,4 @@ thêm một bước giữa developer và agent.
 - Mỗi lần `/speckit-plan` và review PR MUST kiểm tra tuân thủ; khi BR hoặc Technical Architecture
   đổi phạm vi, MUST rà lại constitution.
 
-**Version**: 1.3.0 | **Ratified**: 2026-11-21 | **Last Amended**: 2026-11-23
+**Version**: 1.4.0 | **Ratified**: 2026-11-21 | **Last Amended**: 2026-11-24

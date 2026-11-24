@@ -15,7 +15,8 @@ test('subscribe phát lại đúng event seq > from_seq rồi live', async () =>
     await a.subscribe(0);
     a.send({ cmd: 'prompt', text: 'xin chào' });
     await a.waitFor((e) => e.type === 'turn_end');
-    await a.waitFor((e) => e.type === 'status' && e.state === 'idle' && e.seq > 3);
+    const completed = await a.waitFor((e) => e.type === 'status' && e.state === 'idle' && e.seq > 3);
+    assert.equal(completed.kind, 'turn_complete');
     const all = a.events.filter(logged);
     const seqs = all.map((e) => e.seq);
     assert.deepEqual(seqs, [...seqs].sort((x, y) => x - y), 'seq tăng dần');

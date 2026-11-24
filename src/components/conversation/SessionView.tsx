@@ -22,6 +22,7 @@ export function SessionView({ session, ws }: { session: Session; ws: Workspace }
   const [resuming, setResuming] = useState(false);
   const [nonce, setNonce] = useState(0);
   const agentName = ENGINE_LABEL[session.engine] ?? 'Agent';
+  const historyOnly = ws.deleted_at != null;
 
   useEffect(() => {
     useSessionStore.getState().reset(session.id);
@@ -52,13 +53,13 @@ export function SessionView({ session, ws }: { session: Session; ws: Workspace }
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {!view?.loaded && !view?.error ? (
-        <div className="flex flex-1 items-center justify-center text-[12px] text-muted-foreground">Connecting to agent…</div>
+        <div className="flex flex-1 items-center justify-center text-[12px] text-muted-foreground">{historyOnly ? 'Loading conversation…' : 'Connecting to agent…'}</div>
       ) : isEmpty ? (
         <EmptySession />
       ) : (
-        <MessageList sessionId={session.id} working={status === 'working'} agentName={agentName} />
+        <MessageList sessionId={session.id} working={!historyOnly && status === 'working'} agentName={agentName} />
       )}
-      {view?.error || needsResume ? (
+      {!historyOnly && (view?.error || needsResume) ? (
         <div className={`${COLUMN} pb-2`}>
           <div role="status" className="flex items-start gap-3 rounded-lg border border-border bg-background py-3 pl-4 pr-2">
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -72,7 +73,7 @@ export function SessionView({ session, ws }: { session: Session; ws: Workspace }
         </div>
       ) : null}
       {view?.pending.map((p) => <PermissionCard key={p.id} sessionId={session.id} req={p} agentName={agentName} />)}
-      <Composer
+      {!historyOnly && <Composer
         session={session}
         status={status}
         mode={view?.mode ?? session.permission_mode}
@@ -80,7 +81,7 @@ export function SessionView({ session, ws }: { session: Session; ws: Workspace }
         onNeedResume={needsResume ? resume : undefined}
         agentName={agentName}
         firstPrompt={!!isEmpty}
-      />
+      />}
     </div>
   );
 }

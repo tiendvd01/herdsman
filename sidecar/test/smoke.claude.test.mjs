@@ -13,6 +13,9 @@ test('Claude Agent SDK trả lời một lượt', { skip: process.env.HERDSMAN_
     c.send({ cmd: 'prompt', text: 'Chỉ trả lời đúng một chữ: OK' });
     const end = await c.waitFor((e) => e.type === 'turn_end' || e.type === 'error', 110000);
     assert.equal(end.type, 'turn_end', JSON.stringify(c.events.filter((e) => e.type === 'error')));
+    const status = await c.waitFor((e) => e.type === 'status' && e.seq > end.seq, 10000);
+    assert.equal(status.state, 'idle');
+    assert.equal(status.kind, 'turn_complete');
     const msg = c.events.find((e) => e.type === 'assistant_message');
     assert.ok(msg, 'có assistant_message');
     assert.match(msg.blocks.map((b) => b.text).join(''), /OK/i);

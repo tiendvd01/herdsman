@@ -8,7 +8,7 @@ const BASE_UI_SCALE = 1.1;
 /** Content text-size offset in px from the default (13px body / 12px code). */
 export const CONTENT_STEP = { min: -2, max: 4, def: 0 } as const;
 export const CONTENT_BASE_PX = 13;
-export const CODE_FONT_SIZE = { min: 10, max: 24 } as const;
+export const CODE_FONT_SIZE = { min: 10, max: 24, base: 12 } as const;
 
 export function normalizeCodeFontSize(size: unknown): number | null {
   if (typeof size !== 'number' || !Number.isFinite(size)) return null;

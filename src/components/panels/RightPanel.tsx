@@ -4,22 +4,20 @@ import { Spinner } from '@/components/ui/spinner';
 import { Empty as EmptyState, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
 import { FileTree } from '@/components/files/FileTree';
 import { TruncatedText } from '@/components/ui/truncated-text';
-// Right side panel: Agents, Background tasks, Files, Git, Log (BR 3.1).
+// Right side panel: Agents, Files, Git, Log (BR 3.1).
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Bot, ChevronDown, ChevronRight, FolderTree, GitBranch, Maximize2, Minimize2, Play, RefreshCw, ScrollText, SquareTerminal } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, FolderTree, GitBranch, Maximize2, Minimize2, RefreshCw, ScrollText } from 'lucide-react';
 import { api, errMsg } from '@/lib/api';
 import { qk, useProjects, useSessions } from '@/lib/queries';
-import type { AgentNode, ChangedFile, SessionStatus, TaskRef } from '@/lib/types';
-import { cn, timeAgo } from '@/lib/utils';
+import type { AgentNode, ChangedFile, SessionStatus } from '@/lib/types';
+import { cn } from '@/lib/utils';
 import { useUiStore, type RightTab } from '@/stores/useUiStore';
 import { RIGHT } from '@/lib/layout';
 import { useLayoutWidths } from '@/lib/useLayoutWidths';
 import { ResizeHandle } from '@/components/layout/ResizeHandle';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { StatusDot, STATUS_LABEL } from '@/components/ui/status-dot';
-import { toast } from '@/components/ui/toast';
 import { filePanelHeader, fileRow, gitStatusMarker, gitStatusPresentation, selectedFileRow } from '@/components/files/fileRows';
 import { materialFileIcon } from '@/components/files/materialFileIcons';
 import { useFileStore } from '@/stores/useFileStore';
@@ -27,7 +25,6 @@ import { useFileStore } from '@/stores/useFileStore';
 const TABS: { id: RightTab; label: string; Icon: typeof Bot }[] = [
   { id: 'project-files', label: 'Files', Icon: FolderTree },
   { id: 'agents', label: 'Agents', Icon: Bot },
-  { id: 'tasks', label: 'Tasks', Icon: SquareTerminal },
   { id: 'files', label: 'Git', Icon: GitBranch },
   { id: 'log', label: 'Log', Icon: ScrollText },
 ];
@@ -76,7 +73,6 @@ export function RightPanel() {
           </Button>
         </div>
         <TabsContent value="agents" className="min-h-0 flex-1 overflow-y-auto">{tab === 'agents' && <AgentsPanel sessionId={sessionId} />}</TabsContent>
-        <TabsContent value="tasks" className="min-h-0 flex-1 overflow-y-auto">{tab === 'tasks' && <TasksPanel projectId={projectId} />}</TabsContent>
         <TabsContent value="files" className="flex min-h-0 flex-1 flex-col overflow-y-auto data-[state=inactive]:hidden">{tab === 'files' && <GitPanel projectId={projectId} workspaceId={workspaceId} />}</TabsContent>
         <TabsContent value="project-files" className="flex min-h-0 flex-1 flex-col overflow-y-auto data-[state=inactive]:hidden">
           {tab === 'project-files' && (
@@ -209,103 +205,6 @@ function AgentRow({ node }: { node: AgentNode }) {
         </div>
       ) : null}
     </div>
-  );
-}
-
-// ── Background tasks (FR-026) ──
-function TasksPanel({ projectId }: { projectId: string | null }) {
-  const qc = useQueryClient();
-  const [cmd, setCmd] = useState('');
-  const [showForm, setShowForm] = useState(false);
-  const [logOf, setLogOf] = useState<string | null>(null);
-  const { data: tasks, isLoading, error } = useQuery({ queryKey: qk.tasks(projectId ?? ''), queryFn: () => api.taskList(projectId!), enabled: !!projectId, refetchInterval: 4000 });
-  const refresh = () => {
-    if (projectId) qc.invalidateQueries({ queryKey: qk.tasks(projectId) });
-  };
-  const act = (p: Promise<unknown>) => p.then(refresh).catch((e) => toast(errMsg(e), 'error'));
-  return (
-    <section aria-label="Background tasks" className="flex flex-col gap-3 p-4">
-      <SectionHead title="Background tasks" desc="Commands running in the background in hc">
-        {projectId ? (
-          <Button variant="outline" size="sm" onClick={() => setShowForm((v) => !v)} aria-expanded={showForm}>
-            <Play className="size-3.5" /> Run command
-          </Button>
-        ) : null}
-      </SectionHead>
-      {!projectId ? <Empty>Pick a project.</Empty> : null}
-      {projectId && showForm ? (
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!cmd.trim()) return;
-            act(api.taskRun(projectId, cmd.trim()).then((t) => setLogOf(t.terminal)));
-            setCmd('');
-            setShowForm(false);
-          }}
-        >
-          <Input className="font-mono text-[12px]" placeholder="pnpm dev, cargo test…" value={cmd} onChange={(e) => setCmd(e.target.value)} aria-label="Background command" autoFocus />
-          <Button type="submit" disabled={!cmd.trim()}>
-            Run
-          </Button>
-        </form>
-      ) : null}
-      {projectId && tasks === undefined ? (isLoading ? <Loading /> : error ? <LoadError error={error} /> : null) : null}
-      {projectId && tasks?.length === 0 ? <Empty>No tasks yet. Tasks run in hc, so they stay alive when you close the app.</Empty> : null}
-      {(tasks?.length ?? 0) ? (
-        <div className="overflow-hidden rounded-lg border border-border">
-          {(tasks ?? []).map((t: TaskRef, i) => {
-            const live = t.state === 'live';
-            return (
-              <div key={t.terminal} className={cn('flex flex-col', i > 0 && 'border-t border-border')}>
-                <div className="flex flex-col gap-1 py-2 pl-3 pr-1.5">
-                  <div className="flex items-center gap-2">
-                    <TruncatedText className="min-w-0 flex-1 truncate font-mono text-[12px]">{t.command}</TruncatedText>
-                    <span
-                      className={cn(
-                        'inline-flex h-5 shrink-0 items-center gap-1.5 rounded-md border px-1.5 text-[11px] font-medium',
-                        live ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-foreground',
-                      )}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={cn('size-1.5 rounded-full', live ? 'bg-primary-foreground hs-pulse' : t.exit_code === 0 ? 'bg-st-done' : 'bg-st-error')}
-                      />
-                      {live ? 'running' : `exit ${t.exit_code ?? '?'}`}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-1.5">
-                    <TruncatedText className="truncate text-xs text-muted-foreground">
-                      <span className="font-mono">{t.terminal}</span>
-                      {t.created_ms ? ` · ${timeAgo(t.created_ms)}` : ''}
-                    </TruncatedText>
-                    <span className="flex gap-0.5">
-                      <Button variant="ghost" size="xs" onClick={() => setLogOf(logOf === t.terminal ? null : t.terminal)} aria-expanded={logOf === t.terminal}>
-                        Log
-                      </Button>
-                      {live ? (
-                        <Button variant="ghost" size="xs" onClick={() => act(api.taskKill(t.terminal))}>
-                          Kill
-                        </Button>
-                      ) : (
-                        <Button variant="ghost" size="xs" onClick={() => act(api.taskRemove(t.terminal))}>
-                          Remove
-                        </Button>
-                      )}
-                    </span>
-                  </div>
-                </div>
-                {logOf === t.terminal ? (
-                  <div className="px-2 pb-2">
-                    <TerminalView terminal={t.terminal} height={240} />
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-    </section>
   );
 }
 

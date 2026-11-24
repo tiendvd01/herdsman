@@ -21,6 +21,7 @@ export async function createSession(qc: QueryClient, workspaceId: string, engine
   try {
     const s = await createWorkspaceSession(qc, workspaceId, engine);
     useUiStore.getState().selectSession(workspaceId, s.id);
+    return s;
   } catch (e) {
     toast(errMsg(e), 'error');
   }
@@ -36,7 +37,7 @@ export async function openClaudeConversation(qc: QueryClient, hit: ClaudeHit) {
     const s = await api.claudeOpen(hit.claude_session_id, hit.cwd, hit.workspace_id);
     qc.setQueryData<Session[]>(qk.sessions(s.workspace_id), (old) => (old ? [...old.filter((x) => x.id !== s.id), s] : [s]));
     const ui = useUiStore.getState();
-    ui.selectWorkspace(hit.project_id, s.workspace_id);
+    ui.reopenWorkspace(hit.project_id, s.workspace_id);
     if (s.status === 'done') ui.addTempTab(s.workspace_id, s.id);
     ui.selectSession(s.workspace_id, s.id);
     qc.invalidateQueries({ queryKey: qk.sessions(s.workspace_id) });

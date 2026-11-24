@@ -20,12 +20,39 @@ pub async fn is_repo(dir: &Path) -> bool {
 }
 
 pub async fn branches(dir: &Path) -> AppResult<Vec<String>> {
-    let out = git(dir, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]).await?;
-    Ok(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+    Ok(branches_with_checkouts(dir).await?.0)
+}
+
+pub async fn branches_with_checkouts(dir: &Path) -> AppResult<(Vec<String>, Vec<String>)> {
+    let out = git(dir, &[
+        "for-each-ref", "--format=%(refname:lstrip=2)%09%(if)%(worktreepath)%(then)1%(else)0%(end)", "refs/heads",
+    ]).await?;
+    let mut branches = Vec::new();
+    let mut checked_out = Vec::new();
+    for (branch, occupied) in out.lines().filter_map(|line| line.split_once('\t')) {
+        branches.push(branch.to_owned());
+        if occupied == "1" {
+            checked_out.push(branch.to_owned());
+        }
+    }
+    Ok((branches, checked_out))
 }
 
 pub async fn current_branch(dir: &Path) -> Option<String> {
-    git(dir, &["rev-parse", "--abbrev-ref", "HEAD"]).await.ok().map(|s| s.trim().to_string())
+    let reference = git(dir, &["symbolic-ref", "--quiet", "HEAD"]).await.ok()?;
+    reference.trim_end().strip_prefix("refs/heads/").map(str::to_owned)
+}
+
+pub async fn default_branch(dir: &Path, branches: &[String]) -> Option<String> {
+    let remote_head = git(dir, &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).await.ok();
+    let origin_default = remote_head.as_deref().and_then(|name| name.trim_end().strip_prefix("refs/remotes/origin/"));
+    for candidate in [origin_default, Some("main"), Some("master")].into_iter().flatten() {
+        if branches.iter().any(|branch| branch == candidate) {
+            return Some(candidate.to_owned());
+        }
+    }
+    current_branch(dir).await
+        .filter(|current| branches.contains(current))
 }
 
 pub fn slug(s: &str) -> String {
@@ -64,9 +91,38 @@ pub async fn worktree_add(project: &Path, path: &Path, branch: &str, base: &str)
     if path.exists() {
         return Err(AppError::new("worktree_failed", format!("Folder {} already exists", path.display())));
     }
-    git(project, &["worktree", "add", "-b", branch, &path.to_string_lossy(), base])
+    let base_ref = format!("refs/heads/{base}");
+    git(project, &["worktree", "add", "-b", branch, &path.to_string_lossy(), &base_ref])
         .await
         .map_err(|e| AppError::new("worktree_failed", e.message))?;
+    Ok(())
+}
+
+pub async fn worktree_add_existing(project: &Path, path: &Path, branch: &str) -> AppResult<()> {
+    // Git checks branch occupancy before registering the checkout.
+    static CHECKOUT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _checkout = CHECKOUT.lock().await;
+    let (branches, checked_out) = branches_with_checkouts(project).await?;
+    let unavailable = || AppError::new("branch_unavailable", format!("Branch '{branch}' is no longer available"));
+    if !branches.iter().any(|name| name == branch) {
+        return Err(unavailable());
+    }
+    if checked_out.iter().any(|name| name == branch) {
+        return Err(AppError::new("branch_checked_out", format!("Branch '{branch}' is already checked out")));
+    }
+    if path.exists() {
+        return Err(AppError::new("worktree_failed", format!("Folder {} already exists", path.display())));
+    }
+    git(project, &["worktree", "add", "--no-guess-remote", "--", &path.to_string_lossy(), branch])
+        .await
+        .map_err(|e| AppError::new("worktree_failed", e.message))?;
+
+    // If the branch vanished during creation, Git can resolve the name as another ref.
+    let head = git(path, &["symbolic-ref", "--quiet", "HEAD"]).await.ok();
+    if head.as_deref().map(str::trim_end) != Some(format!("refs/heads/{branch}").as_str()) {
+        worktree_remove(project, path, false).await?;
+        return Err(unavailable());
+    }
     Ok(())
 }
 
@@ -218,6 +274,65 @@ mod tests {
             vec![("M".into(), "main.ts".into())],
         );
         assert!(project_changed_files(worktrees.path()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn default_branch_prefers_origin_head_then_main_over_current_checkout() {
+        let repo = init_repo().await;
+        let root = repo.path();
+        git(root, &["branch", "trunk"]).await.unwrap();
+        git(root, &["switch", "-c", "topic"]).await.unwrap();
+        std::fs::write(root.join("README.md"), "topic only").unwrap();
+        git(root, &["commit", "-am", "topic work"]).await.unwrap();
+        let branches = branches(root).await.unwrap();
+        assert_eq!(default_branch(root, &branches).await.as_deref(), Some("main"));
+
+        git(root, &["update-ref", "refs/remotes/origin/trunk", "refs/heads/trunk"]).await.unwrap();
+        git(root, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"]).await.unwrap();
+        let base = default_branch(root, &branches).await.unwrap();
+        assert_eq!(base, "trunk");
+        git(root, &["tag", "trunk", "topic"]).await.unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let worktree = folder.path().join("new");
+        worktree_add(root, &worktree, "new", &base).await.unwrap();
+        assert_eq!(std::fs::read_to_string(worktree.join("README.md")).unwrap(), "hello\n");
+        assert_eq!(current_branch(root).await.as_deref(), Some("topic"));
+    }
+
+    #[tokio::test]
+    async fn worktree_existing_branch_keeps_branch_and_rejects_unavailable_refs() {
+        let repo = init_repo().await;
+        let root = repo.path();
+        let worktrees = tempfile::tempdir().unwrap();
+        let path = worktrees.path().join("existing");
+        git(root, &["switch", "-c", "feature/login"]).await.unwrap();
+        std::fs::write(root.join("README.md"), "existing branch content").unwrap();
+        git(root, &["commit", "-am", "feature work"]).await.unwrap();
+        git(root, &["switch", "main"]).await.unwrap();
+        git(root, &["tag", "tag-only"]).await.unwrap();
+        git(root, &["tag", "feature/login"]).await.unwrap();
+        let (branches, checked_out) = branches_with_checkouts(root).await.unwrap();
+        assert_eq!(branches, ["feature/login", "main"]);
+        assert_eq!(checked_out, ["main"]);
+
+        worktree_add_existing(root, &path, "feature/login").await.unwrap();
+        assert_eq!(current_branch(&path).await.as_deref(), Some("feature/login"));
+        assert_eq!(std::fs::read_to_string(path.join("README.md")).unwrap(), "existing branch content");
+        assert_eq!(current_branch(root).await.as_deref(), Some("main"));
+        assert_eq!(std::fs::read_to_string(root.join("README.md")).unwrap(), "hello\n");
+        assert_eq!(branches_with_checkouts(root).await.unwrap().1, ["feature/login", "main"]);
+        let other = worktrees.path().join("other");
+        for branch in ["main", "feature/login", "tag-only", "missing"] {
+            assert!(worktree_add_existing(root, &other, branch).await.is_err());
+            assert!(!other.exists());
+        }
+        worktree_remove(root, &path, false).await.unwrap();
+        assert_eq!(branches_with_checkouts(root).await.unwrap().1, ["main"]);
+        let (first, second) = tokio::join!(
+            worktree_add_existing(root, &path, "feature/login"),
+            worktree_add_existing(root, &other, "feature/login"),
+        );
+        assert_ne!(first.is_ok(), second.is_ok());
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@ function fixture(t, initialModel, respond) {
   const events = [];
   const requests = [];
   const changes = [];
+  const states = [];
   let notify;
   let configured;
   const engine = createClaudeEngine({
@@ -22,7 +23,7 @@ function fixture(t, initialModel, respond) {
     onEngineSession: (id, model) => events.push({ type: 'engine_session', model }),
     onInitialModelSettled: () => {},
     onModelFallback: (model) => events.push({ type: 'model_fallback', model }),
-    onTurnState: () => {},
+    onTurnState: (state, kind) => states.push({ state, kind }),
     emit: (type, data) => {
       events.push({ ...data, type });
       notify?.();
@@ -50,6 +51,7 @@ function fixture(t, initialModel, respond) {
     events,
     requests,
     changes,
+    states,
     get configured() { return configured; },
     waitForTurns(count) {
       return new Promise((resolve) => {
@@ -68,6 +70,7 @@ test('Claude uses the inherited model before submitting the first prompt', { tim
   await s.waitForTurns(1);
   assert.equal(s.configured, 'sonnet');
   assert.deepEqual(s.changes, []);
+  assert.deepEqual(s.states, [{ state: 'idle', kind: 'turn_complete' }]);
   assert.equal(s.events.find((event) => event.type === 'turn_end').model, 'claude-sonnet');
 });
 
@@ -93,6 +96,7 @@ test('Claude never retries after a tool call or a non-model failure', { timeout:
     assert.deepEqual(s.requests, ['first']);
     assert.deepEqual(s.changes, []);
     assert.equal(s.events.find((event) => event.type === 'turn_end').is_error, true);
+    assert.deepEqual(s.states, [{ state: 'error', kind: undefined }]);
   }
 });
 

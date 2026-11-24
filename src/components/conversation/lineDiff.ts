@@ -28,6 +28,15 @@ export function lineDiff(before: string, after: string): DiffLine[] {
 /** Diff dựng từ input của tool sửa file; null nếu tool không sửa file. */
 export function toolDiff(tool: string, input: Record<string, unknown>): { file: string; lines: DiffLine[] } | null {
   const file = String(input.file_path ?? input.path ?? '');
+  if (tool === 'Edit' && typeof input.unified_diff === 'string') {
+    const lines: DiffLine[] = input.unified_diff.split('\n').map((line) => {
+      if (/^(---|\+\+\+) /.test(line)) return { kind: 'ctx', text: line };
+      if (line.startsWith('+')) return { kind: 'add', text: line.slice(1) };
+      if (line.startsWith('-')) return { kind: 'del', text: line.slice(1) };
+      return { kind: 'ctx', text: line };
+    });
+    return { file, lines };
+  }
   if (tool === 'Edit' && typeof input.old_string === 'string') return { file, lines: lineDiff(input.old_string, String(input.new_string ?? '')) };
   if (tool === 'Write' && typeof input.content === 'string') return { file, lines: input.content.split('\n').map((t) => ({ kind: 'add', text: t })) };
   if (tool === 'MultiEdit' && Array.isArray(input.edits)) {

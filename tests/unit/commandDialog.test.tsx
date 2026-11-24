@@ -3,12 +3,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandDialog } from '@/components/command/CommandDialog';
+import { Sidebar } from '@/components/layout/Sidebar';
 import { api } from '@/lib/api';
 import type { SearchHit, Session, Workspace } from '@/lib/types';
 import { useUiStore } from '@/stores/useUiStore';
 
 vi.mock('@/lib/api', () => ({
   api: {
+    appInfo: vi.fn(),
     projectList: vi.fn(),
     workspaceList: vi.fn(),
     sessionHistory: vi.fn(async () => []),
@@ -43,27 +45,33 @@ const hits: SearchHit[] = workspaces.map((w) => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(api.appInfo).mockResolvedValue({ hc_connected: true } as Awaited<ReturnType<typeof api.appInfo>>);
   vi.mocked(api.projectList).mockResolvedValue(projects);
-  vi.mocked(api.workspaceList).mockResolvedValue(workspaces);
+  vi.mocked(api.workspaceList).mockImplementation(async (projectId, includeArchived) =>
+    workspaces.filter((w) => (!projectId || w.project_id === projectId) && (includeArchived || w.archived_at == null)));
   vi.mocked(api.sessionHistory).mockResolvedValue([]);
   vi.mocked(api.search).mockImplementation(async (_, ws, project) =>
     hits.filter((h) => (!ws || ws === h.workspace_id) && (!project || project === h.project_id)));
   vi.mocked(api.claudeSearch).mockResolvedValue([]);
   useUiStore.setState({
     cmdOpen: false, settingsOpen: false, sidebarOpen: true, rightOpen: true,
-    projectId: 'p1', workspaceId: 'w1', recentWorkspaceIds: [], sessionByWorkspace: {}, tempTabs: {},
+    projectId: 'p1', workspaceId: 'w1', recentWorkspaceIds: [], reopenedWorkspaceIds: [],
+    collapsed: { p1: true }, sessionByWorkspace: {}, tempTabs: {},
   });
 });
 
-function openPalette() {
-  render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><CommandDialog /></TooltipProvider></QueryClientProvider>);
+function openPalette(showSidebar = false) {
+  render(<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+    {showSidebar && <Sidebar />}
+    <CommandDialog />
+  </TooltipProvider></QueryClientProvider>);
   fireEvent.keyDown(window, { key: 'k', metaKey: true });
   return screen.getByRole('combobox', { name: 'Search sessions, projects or commands' });
 }
 
 describe('CommandDialog', () => {
   it('retains the query through scope changes and opens an archived session', async () => {
-    const input = openPalette();
+    const input = openPalette(true);
     expect(await screen.findByText('Recent workspaces')).toBeTruthy();
     const scope = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Session scope' });
     expect(scope.value).toBe('workspace');
@@ -80,6 +88,12 @@ describe('CommandDialog', () => {
     fireEvent.click(screen.getByText('Session w2'));
     await waitFor(() => expect(useUiStore.getState().tempTabs.w2).toEqual(['s-w2']));
     expect(useUiStore.getState().workspaceId).toBe('w2');
+    expect(useUiStore.getState().reopenedWorkspaceIds).toContain('w2');
+    expect(useUiStore.getState().collapsed.p1).toBe(false);
+    const reopened = screen.getByRole('button', { name: /^Project folder\s*Archived$/ });
+    expect(reopened.getAttribute('aria-current')).toBe('page');
+    act(() => useUiStore.getState().selectWorkspace('p1', 'w1'));
+    expect(screen.getByRole('button', { name: /^Project folder\s*Archived$/ })).toBe(reopened);
   });
 
   it('keeps category results separate and activates the highlighted action', async () => {

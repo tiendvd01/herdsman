@@ -154,7 +154,27 @@ async fn session_survives_app_restart_and_permission_flow() {
     agent::command(&st2, &s.id, json!({"cmd": "permission_response", "id": req["id"], "decision": "allow"})).await.unwrap();
     let res = wait_for(&data_dir, &s.id, |e| e["type"] == "tool_result", 10).await;
     assert_eq!(res["is_error"], false);
-    wait_for(&data_dir, &s.id, |e| e["type"] == "turn_end", 10).await;
+    let turn = wait_for(&data_dir, &s.id, |e| e["type"] == "turn_end", 10).await;
+
+    // A completed turn reaches the UI while the terminal is still live.
+    let watcher = tokio::spawn(agent::watch_hc(st2.clone()));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if env2.events.lock().iter().any(|(name, event)| {
+                name == "status:changed"
+                    && event["session_id"] == s.id.as_str()
+                    && event["state"] == "idle"
+                    && event["kind"] == "turn_complete"
+                    && event["completion"]["seq"] == turn["seq"]
+                    && event["completion"]["ts"] == turn["ts"]
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }).await.expect("completed turn should reach the app through hc");
+    watcher.abort();
+    assert_eq!(hcc.get(&term.address).await.unwrap().state, "live");
 
     // Chỉ mục tìm kiếm được cập nhật từ luồng view
     tokio::time::sleep(Duration::from_millis(300)).await;

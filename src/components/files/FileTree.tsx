@@ -2,11 +2,12 @@ import { fileRow, gitStatusMarker, gitStatusPresentation, selectedFileRow } from
 import { materialFileIcon } from './materialFileIcons';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
-import { AlertCircle, ChevronRight, Folder } from 'lucide-react';
+import { AlertCircle, ChevronRight, Folder, Search, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { TruncatedText } from '@/components/ui/truncated-text';
 import { api, errMsg, type ProjectFileEntry } from '@/lib/api';
@@ -23,6 +24,27 @@ interface Row extends ProjectFileEntry {
 export function FileTree({ project }: { project: Project }) {
   const [expanded, setExpanded] = useState<string[]>([]);
   const [focused, setFocused] = useState('');
+  const [searchFocused, setSearchFocused] = useState('');
+  const [searchText, setSearchText] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInput = useRef<HTMLInputElement>(null);
+  const input = searchText.trimStart();
+  const absolute = input.startsWith('/');
+  const query = absolute ? input : input.trimEnd();
+  const searching = query !== '';
+  const searchReady = searching && query === searchQuery;
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchQuery(query), 150);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+  const search = useQuery({
+    queryKey: ['projectFilesSearch', project.id, searchQuery],
+    queryFn: () => searchQuery.startsWith('/')
+      ? api.absoluteFilesSearch(searchQuery)
+      : api.projectFilesSearch(project.id, searchQuery),
+    enabled: searchReady,
+    retry: false,
+  });
   const active = useFileStore((state) => state.active[project.id]);
   const activePath = useFileStore((state) => state.tabs.find((file) => file.id === active)?.path);
   const { data: changes } = useQuery({
@@ -48,9 +70,15 @@ export function FileTree({ project }: { project: Project }) {
       if (entry.directory && expandedPaths.has(entry.path)) append(entry.path, depth + 1);
     }
   }
-  append('', 0);
+  if (!searching) {
+    append('', 0);
+  } else if (searchReady && search.isSuccess) {
+    for (const entry of search.data) rows.push({ ...entry, depth: 0, parent: '' });
+  }
   const host = useRef<HTMLDivElement>(null);
-  const focusIndex = Math.max(0, rows.findIndex((row) => row.path === focused));
+  const focusPath = searching ? searchFocused : focused;
+  const focusRow = searching ? setSearchFocused : setFocused;
+  const focusIndex = Math.max(0, rows.findIndex((row) => row.path === focusPath));
   const list = useVirtualizer({
     count: rows.length,
     getScrollElement: () => host.current,
@@ -69,9 +97,12 @@ export function FileTree({ project }: { project: Project }) {
   }
 
   function select(row: Row) {
-    setFocused(row.path);
-    if (row.directory) toggle(row);
-    else void useFileStore.getState().open(project, row.path, row.name);
+    focusRow(row.path);
+    if (row.directory) {
+      toggle(row);
+      return;
+    }
+    void useFileStore.getState().open(project, tabPath(row.path), row.name);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -97,18 +128,75 @@ export function FileTree({ project }: { project: Project }) {
     }
     event.preventDefault();
     next = Math.min(rows.length - 1, Math.max(0, next));
-    setFocused(rows[next].path);
+    focusRow(rows[next].path);
     list.scrollToIndex(next);
+  }
+
+  function clearSearch() {
+    setSearchText('');
+    setSearchQuery('');
+    setSearchFocused('');
+    searchInput.current?.focus();
+  }
+
+  function tabPath(path: string) {
+    if (!path.startsWith('/')) return path;
+    const prefix = `${project.path.replace(/\/+$/, '')}/`;
+    const relative = path.startsWith(prefix) ? path.slice(prefix.length) : '';
+    const inProject = relative && relative.split('/').every((part) => part && part !== '.' && part !== '..');
+    return inProject ? relative : path;
   }
 
   const root = queries[0];
   return (
     <>
-      {root.isPending ? <p role="status" className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground"><Spinner className="text-muted-foreground" label="Loading" />Loading files…</p> : null}
-      {root.error ? <Alert variant="destructive"><AlertCircle /><AlertDescription>{errMsg(root.error)}</AlertDescription></Alert> : null}
-      {root.data?.length === 0 ? <Empty><EmptyHeader><EmptyMedia><Folder /></EmptyMedia><EmptyDescription>This project has no files.</EmptyDescription></EmptyHeader></Empty> : null}
+      <div className="mb-2 flex shrink-0 items-center gap-1">
+        <Input ref={searchInput} className="min-w-0" aria-label="Search files" placeholder="Search files…" value={searchText}
+          onChange={(event) => {
+            setSearchText(event.target.value);
+            setSearchFocused('');
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && searchText) {
+              event.preventDefault();
+              event.stopPropagation();
+              clearSearch();
+            } else if (event.key === 'Enter' && absolute && rows.length > 0 && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              select(rows[0]);
+            }
+          }} />
+        {searchText && <Button type="button" variant="ghost" size="icon-sm" aria-label="Clear file search" onClick={clearSearch}>
+          <X data-icon="inline-start" />
+        </Button>}
+      </div>
+      {searching ? (
+        <>
+          {!searchReady || search.isPending || (search.isError && search.isFetching) ? (
+            <p role="status" className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+              <Spinner label="Searching" />Searching files…
+            </p>
+          ) : search.isError ? (
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertDescription className="flex flex-col items-start gap-2">
+                {errMsg(search.error)}
+                <Button type="button" size="sm" variant="outline" onClick={() => void search.refetch()}>Retry search</Button>
+              </AlertDescription>
+            </Alert>
+          ) : rows.length === 0 ? (
+            <Empty role="status"><EmptyHeader><EmptyMedia><Search /></EmptyMedia><EmptyDescription>No matching files.</EmptyDescription></EmptyHeader></Empty>
+          ) : null}
+        </>
+      ) : (
+        <>
+          {root.isPending ? <p role="status" className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground"><Spinner className="text-muted-foreground" label="Loading" />Loading files…</p> : null}
+          {root.error ? <Alert variant="destructive"><AlertCircle /><AlertDescription>{errMsg(root.error)}</AlertDescription></Alert> : null}
+          {root.data?.length === 0 ? <Empty><EmptyHeader><EmptyMedia><Folder /></EmptyMedia><EmptyDescription>This project has no files.</EmptyDescription></EmptyHeader></Empty> : null}
+        </>
+      )}
       {rows.length > 0 ? (
-        <div ref={host} role="tree" aria-label="Project files" aria-activedescendant={`file-tree-${focusIndex}`}
+        <div ref={host} role="tree" aria-label={searching ? 'File search results' : 'Project files'} aria-activedescendant={`file-tree-${focusIndex}`}
           tabIndex={0} onKeyDown={onKeyDown} className="group/tree min-h-0 flex-1 overflow-auto rounded-md outline-none">
           <div style={{ height: list.getTotalSize() }} className="relative">
             {list.getVirtualItems().map(({ index, start, size }) => {
@@ -117,19 +205,23 @@ export function FileTree({ project }: { project: Project }) {
               const query = byPath.get(row.path);
               const status = row.directory ? undefined : statuses.get(row.path);
               const change = status ? gitStatusPresentation(status) : undefined;
+              const directoryPath = searching ? row.path.slice(0, row.path.lastIndexOf('/') + 1) : '';
+              const rowLabel = searching ? row.path : row.name;
+              const selected = !row.directory && activePath === tabPath(row.path);
               return (
                 <Button variant="ghost" size="xs" tabIndex={-1} key={row.path} id={`file-tree-${index}`} role="treeitem"
                   aria-level={row.depth + 1} aria-expanded={row.directory ? open : undefined}
-                  aria-selected={row.directory ? undefined : activePath === row.path}
-                  aria-label={change ? `${row.name}, Git status: ${change.label}` : undefined}
+                  aria-selected={row.directory ? undefined : selected}
+                  aria-label={change ? `${rowLabel}, Git status: ${change.label}` : searching ? rowLabel : undefined}
                   onClick={() => { host.current?.focus({ preventScroll: true }); select(row); }}
                   style={{ top: start, height: size - 2, paddingLeft: 8 + row.depth * 14 }}
                   className={cn('absolute inset-x-0', fileRow,
-                    activePath === row.path && selectedFileRow,
+                    selected && selectedFileRow,
                     focusIndex === index && 'group-focus-visible/tree:border-ring')}>
-                  {row.directory ? <ChevronRight className={cn('shrink-0 text-muted-foreground', open && 'rotate-90')} /> : <span className="size-4 shrink-0" />}
+                  {row.directory ? <ChevronRight className={cn('shrink-0 text-muted-foreground', open && 'rotate-90')} /> : !searching && <span className="size-4 shrink-0" />}
                   <img src={materialFileIcon(row.name, row.directory)} alt="" data-icon="inline-start" className="size-4 shrink-0" />
-                  <TruncatedText className={cn('min-w-0 flex-1 truncate text-left', change?.className)}>{row.name}</TruncatedText>
+                  <TruncatedText className={cn('min-w-0 truncate text-left', directoryPath ? 'max-w-[55%]' : 'flex-1', change?.className)}>{row.name}</TruncatedText>
+                  {directoryPath && <TruncatedText className="min-w-0 flex-1 truncate text-left text-muted-foreground">{directoryPath}</TruncatedText>}
                   {change ? <span aria-hidden="true" className={cn(gitStatusMarker, change.className)}>{change.marker}</span> : null}
                   {query?.isPending ? <Spinner label="Loading folder" className="text-muted-foreground" /> : null}
                   {query?.error ? <span role="img" aria-label={errMsg(query.error)} title={errMsg(query.error)} className="text-destructive">!</span> : null}

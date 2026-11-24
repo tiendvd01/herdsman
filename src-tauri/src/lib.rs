@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod commands;
 mod project_files;
+mod workspace_terminal;
 pub mod error;
 pub mod git;
 pub mod claude_history;
@@ -95,6 +96,38 @@ fn set_dock_icon() {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn request_notification_permission() {
+    use block2::RcBlock;
+    use objc2_foundation::NSError;
+    use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
+
+    // An unbundled tauri dev binary has no notification identity of its own.
+    let Ok(executable) = std::env::current_exe() else { return };
+    if executable.ancestors().nth(3).and_then(|p| p.extension())
+        != Some(std::ffi::OsStr::new("app"))
+    {
+        return;
+    }
+
+    let on_result = RcBlock::new(|_, error: *mut NSError| {
+        if !error.is_null() {
+            eprintln!("[herdsman] macOS notification authorization request failed");
+        }
+    });
+    UNUserNotificationCenter::currentNotificationCenter()
+        .requestAuthorizationWithOptions_completionHandler(
+            UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
+            &on_result,
+        );
+}
+
+#[tauri::command]
+fn notifications_request_permission() {
+    #[cfg(target_os = "macos")]
+    request_notification_permission();
+}
+
 #[tauri::command]
 fn exit_after_file_review(app: tauri::AppHandle) {
     app.exit(0);
@@ -129,6 +162,8 @@ pub fn run() {
                 hc_version: Mutex::new(None),
             });
             install_zoom_menu(app)?;
+            #[cfg(target_os = "macos")]
+            request_notification_permission();
             app.manage(st.clone());
             let st_watch = st.clone();
             tauri::async_runtime::spawn(async move { agent::watch_hc(st_watch).await });
@@ -137,9 +172,18 @@ pub fn run() {
             tauri::async_runtime::spawn(agent::watch_claude_titles(st));
             Ok(())
         })
+        .manage(workspace_terminal::Viewers::default())
         .invoke_handler(tauri::generate_handler![
+            workspace_terminal::workspace_terminal_create,
+            workspace_terminal::workspace_terminal_list,
+            workspace_terminal::workspace_terminal_stop,
+            workspace_terminal::workspace_terminal_attach,
+            workspace_terminal::workspace_terminal_input,
+            workspace_terminal::workspace_terminal_resize,
+            workspace_terminal::workspace_terminal_detach,
             commands::app_info,
             commands::font_families,
+            commands::terminal_font_data,
             commands::theme_files,
             commands::settings_get,
             commands::settings_set,
@@ -176,18 +220,23 @@ pub fn run() {
             commands::search,
             commands::claude_search,
             commands::claude_open,
+            commands::codex_threads,
+            commands::codex_open,
             commands::terminal_read,
-            commands::task_run,
-            commands::task_list,
-            commands::task_kill,
-            commands::task_remove,
             commands::agent_tree,
             commands::files_changed,
             commands::project_files_changed,
             commands::file_diff,
             commands::project_files_list,
+            commands::project_files_search,
             commands::project_file_read,
+            commands::session_file_read,
+            commands::session_file_exists,
+            commands::absolute_file_read,
+            commands::absolute_files_search,
             commands::project_file_save,
+            commands::project_markdown_download,
+            notifications_request_permission,
             exit_after_file_review,
         ])
         .build(tauri::generate_context!())

@@ -10,17 +10,26 @@ import { toast } from '@/components/ui/toast';
 import { useQueryClient } from '@tanstack/react-query';
 import { qk } from '@/lib/queries';
 
-export const MODES: Record<PermissionMode, { label: string; desc: string }> = {
+export const MODES: Record<Exclude<PermissionMode, 'custom'>, { label: string; desc: string }> = {
   ask: { label: 'Ask before editing', desc: 'Every tool that needs permission waits for your approval' },
   accept_edits: { label: 'Auto-accept edits', desc: 'File edits in the working directory go through; shell commands still ask' },
   auto: { label: 'Auto mode', desc: 'A safety classifier approves routine actions and only asks for risky ones' },
   bypass: { label: 'Bypass all approvals', desc: "The agent runs every tool without asking — only use this when you're sure" },
 };
 
+const CODEX_MODES = {
+  auto: { label: 'Ask for approval', desc: 'Codex can write inside the workspace and asks when it needs more access.' },
+  accept_edits: { label: 'Approve for me', desc: 'Codex automatically reviews requests for additional access.' },
+  bypass: { label: 'Full access', desc: 'Codex can edit files and run commands outside the workspace without asking.' },
+  custom: { label: 'Custom (config.toml)', desc: 'Use the approval and sandbox settings from your Codex configuration.' },
+};
+
 export function ModeSwitcher({ session, mode }: { session: Session; mode: PermissionMode }) {
   const qc = useQueryClient();
   const [confirm, setConfirm] = useState(false);
-  const cur = MODES[mode];
+  const isCodex = session.engine === 'codex';
+  const modes: Partial<Record<PermissionMode, (typeof MODES)['ask']>> = isCodex ? CODEX_MODES : MODES;
+  const cur = modes[mode] ?? (isCodex ? { label: 'Read-only' } : MODES.ask);
 
   async function setMode(m: PermissionMode, confirmBypass = false) {
     try {
@@ -42,8 +51,7 @@ export function ModeSwitcher({ session, mode }: { session: Session; mode: Permis
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" className="w-80">
-          {(Object.keys(MODES) as PermissionMode[]).map((m) => {
-            const { label, desc } = MODES[m];
+          {(Object.entries(modes) as [PermissionMode, (typeof MODES)['ask']][]).map(([m, { label, desc }]) => {
             return (
               <DropdownMenuItem key={m} onSelect={() => (m === 'bypass' ? setConfirm(true) : setMode(m))} className="items-start">
                 <Check className={m === mode ? 'mt-0.5' : 'mt-0.5 invisible'} />
@@ -60,8 +68,8 @@ export function ModeSwitcher({ session, mode }: { session: Session; mode: Permis
         open={confirm}
         onOpenChange={setConfirm}
         destructive
-        title="Turn on “Bypass all approvals”?"
-        description="The agent will edit files and run shell commands without asking you. The session tab shows a warning badge until you switch modes."
+        title={isCodex ? 'Turn on “Full access”?' : 'Turn on “Bypass all approvals”?'}
+        description={`The agent can edit files and run shell commands without asking. This becomes the default for new ${isCodex ? 'Codex' : 'Claude'} sessions until you change modes.`}
         confirmLabel="Turn on"
         onConfirm={async () => {
           await setMode('bypass', true);

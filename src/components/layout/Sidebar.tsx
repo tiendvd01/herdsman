@@ -43,7 +43,7 @@ export function Sidebar() {
           <div data-tauri-drag-region className="-mx-2 h-11 shrink-0 select-none" />
 
           <div data-tauri-drag-region className="flex shrink-0 select-none items-center gap-1.5 px-2 pb-1">
-            <img src={appearance === 'dark' ? darkIconUrl : lightIconUrl} alt="" className="pointer-events-none size-14 rounded-md" />
+            <img src={appearance === 'dark' ? darkIconUrl : lightIconUrl} alt="" className="pointer-events-none size-10 rounded-md" />
             <span className="pointer-events-none text-[14px] font-semibold tracking-tight text-foreground">Herdsman</span>
           </div>
 
@@ -99,7 +99,9 @@ function ProjectNode({ project }: { project: Project }) {
   const selectedProject = useUiStore((s) => s.projectId === project.id);
   const selectedWs = useUiStore((s) => s.workspaceId);
   const statuses = useUiStore((s) => s.statuses);
-  const { data: workspaces = [] } = useWorkspaces(project.id);
+  const reopenedWorkspaceIds = useUiStore((s) => s.reopenedWorkspaceIds);
+  const { data: projectWorkspaces = [] } = useWorkspaces(project.id, true);
+  const workspaces = projectWorkspaces.filter((w) => w.archived_at == null || reopenedWorkspaceIds.includes(w.id));
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const qc = useQueryClient();
@@ -163,7 +165,7 @@ function ProjectNode({ project }: { project: Project }) {
         <ul className="mb-1.5 ml-[15px] mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
           {workspaces.length === 0 ? <li className="px-2 py-1.5 text-xs text-muted-foreground">No workspaces yet</li> : null}
           {workspaces.map((w) => {
-            const mine = Object.values(statuses).filter((s) => s.workspace_id === w.id);
+            const mine = w.archived_at == null ? Object.values(statuses).filter((s) => s.workspace_id === w.id) : [];
             const needs = mine.some((s) => s.state === 'blocked' || s.state === 'error');
             const running = mine.some((s) => s.state === 'working');
             const on = selectedWs === w.id;
