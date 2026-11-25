@@ -17,16 +17,16 @@ You **MUST** consider the user input before proceeding (if not empty). The user 
 ## Prerequisites
 
 1. Verify a spec-kit project exists by checking for `.specify/` directory
-2. Identify the current feature by checking for an active feature branch (pattern: `###-feature-name` or `YYYYMMDD-HHMMSS-feature-name`)
-3. If no feature branch is detected, look for the most recently modified `specs/*/spec.md`
+2. Use the requested spec path or the active feature path in `.specify/feature.json` when available. Otherwise, check for an active feature branch (pattern: `###-feature-name` or `YYYYMMDD-HHMMSS-feature-name`)
+3. If no feature is resolved, look for the most recently modified the module feature specs listed in `specs/README.md`
 4. If no spec.md is found, inform the user and suggest running `/speckit.specify` first
 
 ## Outline
 
 1. **Locate the spec**: Find the current feature's spec.md:
-   - Check git branch name for feature number/prefix
-   - Map to `specs/{branch-name}/spec.md`
-   - If not on a feature branch, prompt the user to select from available specs in `specs/*/spec.md`
+   - Resolve the requested or active spec path first
+   - Otherwise, match the branch name to a feature directory inside the modules listed in `specs/README.md`
+   - If no feature is resolved, prompt the user to select from available specs in the module feature specs listed in `specs/README.md`
 
 2. **Read current artifacts**: Load the following files from the feature directory:
    - **Required**: `spec.md` (the specification to refine)

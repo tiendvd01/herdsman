@@ -6,6 +6,7 @@ JSON_MODE=false
 DRY_RUN=false
 ALLOW_EXISTING=false
 SHORT_NAME=""
+MODULE=""
 BRANCH_NUMBER=""
 USE_TIMESTAMP=false
 NUMBER_EXPLICIT=false
@@ -19,6 +20,14 @@ while [ $i -le $# ]; do
             ;;
         --dry-run)
             DRY_RUN=true
+            ;;
+        --module)
+            i=$((i + 1))
+            MODULE="${!i}"
+            if ! [[ "$MODULE" =~ ^[a-z][a-z0-9-]*$ ]]; then
+                echo 'Error: --module requires a module name' >&2
+                exit 1
+            fi
             ;;
         --allow-existing-branch)
             ALLOW_EXISTING=true
@@ -57,11 +66,12 @@ while [ $i -le $# ]; do
             USE_TIMESTAMP=true
             ;;
         --help|-h)
-            echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] <feature_description>"
+            echo "Usage: $0 [--json] [--dry-run] [--module <name>] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] <feature_description>"
             echo ""
             echo "Options:"
             echo "  --json              Output in JSON format"
             echo "  --dry-run           Compute feature name and paths without creating directories or files"
+            echo "  --module <name>     Create the feature under an existing specs module"
             echo "  --allow-existing-branch  Reuse an existing feature directory if it already exists"
             echo "  --short-name <name> Provide a custom short name (2-4 words) for the feature"
             echo "  --number N          Prefer a feature number (auto-corrected if its specs prefix exists)"
@@ -83,7 +93,7 @@ done
 
 FEATURE_DESCRIPTION="${ARGS[*]}"
 if [ -z "$FEATURE_DESCRIPTION" ]; then
-    echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] <feature_description>" >&2
+    echo "Usage: $0 [--json] [--dry-run] [--module <name>] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] <feature_description>" >&2
     exit 1
 fi
 
@@ -114,7 +124,7 @@ get_highest_from_specs() {
     local highest=0
 
     if [ -d "$specs_dir" ]; then
-        for dir in "$specs_dir"/*; do
+        for dir in "$specs_dir"/* "$specs_dir"/*/*; do
             [ -d "$dir" ] || continue
             dirname=$(basename "$dir")
             # Match sequential prefixes (>=3 digits), but skip timestamp dirs.
@@ -138,7 +148,7 @@ spec_prefix_exists() {
     local specs_dir="$1"
     local feature_num="$2"
 
-    for spec_path in "$specs_dir/${feature_num}-"*; do
+    for spec_path in "$specs_dir/${feature_num}-"* "$specs_dir"/*/"${feature_num}-"*; do
         [ -d "$spec_path" ] && return 0
     done
     return 1
@@ -277,6 +287,14 @@ REPO_ROOT=$(get_repo_root) || exit 1
 cd "$REPO_ROOT"
 
 SPECS_DIR="$REPO_ROOT/specs"
+FEATURE_PARENT="$SPECS_DIR"
+if [ -n "$MODULE" ]; then
+    FEATURE_PARENT="$SPECS_DIR/$MODULE"
+    if [[ ! -d "$FEATURE_PARENT" || "$MODULE" == archive || "$MODULE" == business-requirement ]]; then
+        echo "Error: Unknown specs module '$MODULE'" >&2
+        exit 1
+    fi
+fi
 if [ "$DRY_RUN" != true ]; then
     mkdir -p "$SPECS_DIR"
 fi
@@ -386,7 +404,7 @@ else
     if [ "$NUMBER_EXPLICIT" = true ]; then
         SPEC_CONFLICT=false
         REQUESTED_BRANCH_NAME=$(fit_branch_name "$FEATURE_NUM" "$BRANCH_SUFFIX")
-        REQUESTED_DIR="$SPECS_DIR/$REQUESTED_BRANCH_NAME"
+        REQUESTED_DIR="$FEATURE_PARENT/$REQUESTED_BRANCH_NAME"
         if [ "$ALLOW_EXISTING" != true ] || [ ! -d "$REQUESTED_DIR" ]; then
             spec_prefix_exists "$SPECS_DIR" "$FEATURE_NUM" && SPEC_CONFLICT=true
         fi
@@ -420,7 +438,7 @@ if [ "$BRANCH_NAME" != "$ORIGINAL_BRANCH_NAME" ]; then
     >&2 echo "[specify] Truncated to: $BRANCH_NAME ($(branch_byte_count "$BRANCH_NAME") bytes)"
 fi
 
-FEATURE_DIR="$SPECS_DIR/$BRANCH_NAME"
+FEATURE_DIR="$FEATURE_PARENT/$BRANCH_NAME"
 SPEC_FILE="$FEATURE_DIR/spec.md"
 
 if [ "$DRY_RUN" != true ]; then
