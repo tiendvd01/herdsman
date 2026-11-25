@@ -2,6 +2,7 @@
 // Fakes the backend with @tauri-apps/api/mocks and sample data; never loaded in a build.
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
+import type { Workspace } from './types';
 
 const now = Date.now();
 const P = { id: 'p1', name: 'herdsman', path: '/Users/dev/herdsman', sort: 1, created_at: now, missing: false };
@@ -11,7 +12,7 @@ const SAMPLE_FILES = [
   { name: 'README.md', path: 'README.md', directory: false },
   { name: 'workspace.ts', path: 'src/workspace.ts', directory: false },
 ];
-const WS = [
+const WS: Workspace[] = [
   { id: 'w1', project_id: 'p1', name: 'Fix login OAuth', dir_kind: 'worktree', work_dir: '/Users/dev/.herdsman-worktrees/herdsman/fix-login', branch: 'herdsman/fix-login', base_branch: 'main', archived_at: null, worktree_removed: false, created_at: now },
   { id: 'w2', project_id: 'p1', name: 'Refactor store', dir_kind: 'project', work_dir: P.path, branch: null, base_branch: null, archived_at: null, worktree_removed: false, created_at: now - 5e6 },
   { id: 'w3', project_id: 'p2', name: 'Add rate limiting', dir_kind: 'project', work_dir: P2.path, branch: null, base_branch: null, archived_at: null, worktree_removed: false, created_at: now - 9e6 },
@@ -70,6 +71,10 @@ export function installDevMock() {
           return { hc_connected: true, hc_version: 'hc 0.1.21', hc_path: '/usr/local/bin/hc', node_path: '/usr/local/bin/node', data_dir: '~' };
         case 'project_list':
           return [{ ...P }, { ...P2 }];
+        case 'project_skill_catalog':
+          return { sources: [{ id: 'shared', path: '~/herdsman/skills', available: true }], skills: [], enabled: [] };
+        case 'project_skill_change':
+          throw new Error('Managing skill sources requires the desktop app.');
         case 'project_rename': {
           const pr = [P, P2].find((x) => x.id === a.id);
           if (pr) pr.name = a.name;
@@ -91,9 +96,8 @@ export function installDevMock() {
         case 'workspace_archive': {
           const w = WS.find((x) => x.id === a.id);
           if (w) {
-            const workspace: { archived_at: number | null; deleted_at?: number } = w;
-            workspace.archived_at = Date.now();
-            if (cmd === 'workspace_delete') workspace.deleted_at = workspace.archived_at;
+            w.archived_at = Date.now();
+            if (cmd === 'workspace_delete') w.deleted_at = w.archived_at;
           }
           setTimeout(() => emit('workspace:changed', {}), 0);
           return cmd === 'workspace_delete' ? null : w;
@@ -104,6 +108,11 @@ export function installDevMock() {
         }
         case 'session_history':
           return SESSIONS.filter((s) => s.workspace_id === a.workspaceId);
+        case 'session_set_pinned': {
+          const session = SESSIONS.find((entry) => entry.id === a.id);
+          if (session) session.pinned_tab = (args as { pinned: boolean }).pinned;
+          return null;
+        }
         case 'session_get':
           return SESSIONS.find((s) => s.id === a.id);
         case 'session_open':
@@ -193,8 +202,22 @@ export function installDevMock() {
           return a.projectId === P.id
             ? [{ status: 'M', path: 'README.md' }, { status: '??', path: 'src/workspace.ts' }]
             : [];
+        case 'git_history':
+          return { commits: [
+            { id: '1', short_id: '23abcde', subject: 'Merge workspace changes', parents: ['2', '3'], branches: [{ name: 'origin/develop', remote: true }] },
+            { id: '2', short_id: '45abcde', subject: 'Refine file tree', parents: ['4'], branches: [{ name: 'develop', remote: false }] },
+            { id: '3', short_id: '67abcde', subject: 'Update README', parents: ['4'] },
+            { id: '4', short_id: '89abcde', subject: 'Initial commit', parents: [] },
+          ], truncated: false };
         case 'files_changed':
           return [{ status: 'M', path: 'README.md' }, { status: '??', path: 'src/auth/pkce.ts' }];
+        case 'git_commit_changes':
+          return a.commit === '4' ? [] : [
+            { path: 'README.md', status: 'M', original: null },
+            { path: 'src/workspace.ts', status: 'A', original: null },
+          ];
+        case 'git_commit_file_diff':
+          return `@@ -1 +1 @@\n-# Agent workspace\n+# Herdsman at commit ${a.commit}`;
         case 'file_diff':
           return '@@ -1 +1 @@\n-# Agent workspace\n+# Herdsman';
         case 'git_branches':
@@ -208,7 +231,7 @@ export function installDevMock() {
             const project = [P, P2].find((p) => p.id === workspace.project_id)!;
             const excerpt = session.id === 's1' ? LOGIN_PROMPT : '';
             const snippet = excerpt.toLowerCase().includes(query) ? excerpt : '';
-            if ((a.workspaceId && a.workspaceId !== workspace.id) || (a.projectId && a.projectId !== project.id)
+            if ((!query && !workspace.deleted_at) || (a.workspaceId && a.workspaceId !== workspace.id) || (a.projectId && a.projectId !== project.id)
               || (!session.title.toLowerCase().includes(query) && !snippet)) return [];
             return [{
               session_id: session.id, seq: snippet ? 2 : 0, snippet, workspace_id: workspace.id,
@@ -229,7 +252,16 @@ export function installDevMock() {
           }];
         }
         case 'claude_open':
-          return SESSIONS[0];
+          return { session: SESSIONS[0], workspace: WS[0] };
+        case 'session_rehome': {
+          const session = SESSIONS.find((s) => s.id === a.id)!;
+          const previous = WS.find((w) => w.id === session.workspace_id)!;
+          if (previous.deleted_at == null) return { session, workspace: previous };
+          const workspace = { ...previous, id: `ws-${session.id}`, name: session.title, archived_at: null, deleted_at: null };
+          Object.assign(session, { workspace_id: workspace.id, status: 'done' });
+          WS.push(workspace);
+          return { session, workspace };
+        }
         default:
           return null;
       }

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "hc-output",
+  "description": "Read-only terminal output windows",
+  "windows": ["hc-output-*"],
+  "permissions": ["core:webview:allow-set-webview-zoom"]
+}

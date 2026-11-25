@@ -48,6 +48,8 @@ export function AddProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
       const display = name.trim();
       if (display && display !== p.name) p = await api.projectRename(p.id, display);
       qc.invalidateQueries({ queryKey: qk.projects });
+      qc.invalidateQueries({ queryKey: qk.workspaces(p.id) });
+      qc.invalidateQueries({ queryKey: qk.workspaces(p.id, true) });
       useUiStore.getState().selectWorkspace(p.id, null);
       toast(`Added project ${p.name}`);
       onOpenChange(false);

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { toast } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { WorkspaceView } from '@/components/layout/WorkspaceView';
+import { runTabShortcut } from '@/lib/keyboardShortcuts';
 import { api } from '@/lib/api';
 import { qk } from '@/lib/queries';
 import type { Session, SessionStatus } from '@/lib/types';
@@ -56,8 +57,9 @@ describe('closing the last workspace session', () => {
   });
 
   it('lets the user cancel without closing either the session or workspace', () => {
-    renderWorkspace();
-    requestClose();
+    renderWorkspace('working');
+    act(() => runTabShortcut('close-tab'));
+    expect(screen.getByText(/stops the agent/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(api.sessionClose).not.toHaveBeenCalled();
     expect(screen.getByRole('tab')).toBeTruthy();

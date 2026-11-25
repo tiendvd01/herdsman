@@ -7,16 +7,40 @@ import type {
   AppInfo,
   ThemeFile,
   BranchInfo,
+  GitHistory,
   ChangedFile,
   Engine,
   PermissionMode,
   Project,
-  RunningRef,
   SearchHit,
   ClaudeHit,
   Session,
   Workspace,
 } from './types';
+
+export interface ProjectSkillId {
+  source_id: string;
+  directory: string;
+}
+
+export interface ProjectSkillCatalog {
+  sources: { id: string; path: string; available: boolean }[];
+  skills: (ProjectSkillId & {
+    name: string;
+    description: string;
+    path: string;
+    enabled: boolean;
+    native: boolean;
+    global: boolean;
+    reason: string | null;
+  })[];
+  enabled: ProjectSkillId[];
+}
+
+export type ProjectSkillChange =
+  | { kind: 'add'; path: string }
+  | ({ kind: 'set'; enabled: boolean } & ProjectSkillId)
+  | { kind: 'remove'; source_id: string; confirmed: string[] };
 
 export interface ApiError {
   code: string;
@@ -42,6 +66,7 @@ export interface ProjectFileEntry {
   name: string;
   path: string;
   directory: boolean;
+  ignored?: boolean;
 }
 
 export interface ProjectFileDocument {
@@ -96,10 +121,13 @@ export const api = {
   settingsGet: (key: string) => invoke<string | null>('settings_get', { key }),
   settingsSet: (key: string, value: string) => invoke<void>('settings_set', { key, value }),
 
+  projectSkillCatalog: (projectId: string) =>
+    invoke<ProjectSkillCatalog>('project_skill_catalog', { projectId }),
+  projectSkillChange: (projectId: string, change: ProjectSkillChange) =>
+    invoke<void>('project_skill_change', { projectId, change }),
   projectList: () => invoke<Project[]>('project_list'),
   projectAdd: (path: string) => invoke<Project>('project_add', { path }),
   projectRename: (id: string, name: string) => invoke<Project>('project_rename', { id, name }),
-  projectDeletePreview: (id: string) => invoke<RunningRef[]>('project_delete_preview', { id }),
   projectDelete: (id: string) => invoke<void>('project_delete', { id, confirm: true }),
 
   workspaceList: (projectId?: string, includeArchived = false) =>
@@ -147,12 +175,26 @@ export const api = {
     invoke<ClaudeHit[]>('claude_search', { query, ...scope, palette: !!scope }),
   codexThreads: (workspaceId: string) => invoke<{ id: string; name: string }[]>('codex_threads', { workspaceId }),
   codexOpen: (workspaceId: string, threadId: string) => invoke<Session>('codex_open', { workspaceId, threadId }),
-  claudeOpen: (claudeSessionId: string, cwd: string, workspaceId?: string) =>
-    invoke<Session>('claude_open', { claudeSessionId, cwd, workspaceId }),
+  claudeOpen: (claudeSessionId: string, workspaceId?: string) =>
+    invoke<{ workspace: Workspace; session: Session }>('claude_open', { claudeSessionId, workspaceId }),
+  sessionRehome: (id: string) => invoke<{ workspace: Workspace; session: Session }>('session_rehome', { id }),
 
+  hcOutputTarget: (sessionId: string, toolId: string) => invoke<string>('hc_output_target', { sessionId, toolId }),
+  hcOutputOpen: (sessionId: string, toolId: string, target: string) => invoke<void>('hc_output_open', { sessionId, toolId, target }),
+  hcOutputRead: () => invoke<{ terminal: { address: string; name?: string; state: string; exit_code?: number }; text: string; complete: boolean }>('hc_output_read'),
   terminalRead: (terminal: string, lines = 2000) => invoke<string>('terminal_read', { terminal, lines }),
   agentTree: (sessionId: string) => invoke<AgentNode | null>('agent_tree', { sessionId }),
+  gitHistory: (workspaceId: string) => invoke<GitHistory | null>('git_history', { workspaceId }),
+  commitChanges: (workspaceId: string, commit: string) =>
+    invoke<(ChangedFile & { original: string | null })[]>('git_commit_changes', { workspaceId, commit }),
+  commitFileDiff: (workspaceId: string, commit: string, path: string, original?: string) =>
+    invoke<string>('git_commit_file_diff', { workspaceId, commit, path, original }),
   filesChanged: (workspaceId: string) => invoke<ChangedFile[]>('files_changed', { workspaceId }),
   projectFilesChanged: (projectId: string) => invoke<ChangedFile[]>('project_files_changed', { projectId }),
   fileDiff: (workspaceId: string, path: string) => invoke<string>('file_diff', { workspaceId, path }),
+  editorLspOpen: (session: string, projectId: string, workspaceId: string | undefined, path: string, text: string) =>
+    invoke<void>('editor_lsp_open', { session, projectId, workspaceId, path, text }),
+  editorLspHover: (session: string, text: string, line: number, character: number) =>
+    invoke<string | null>('editor_lsp_hover', { session, text, line, character }),
+  editorLspClose: (session: string) => invoke<void>('editor_lsp_close', { session }),
 };

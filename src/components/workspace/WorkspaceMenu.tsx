@@ -24,7 +24,7 @@ export function WorkspaceMenu({ ws, variant = 'header' }: { ws: Workspace; varia
 
   useEffect(() => {
     if (!action) return;
-    setRemoveWt(action === 'delete' && isWt);
+    setRemoveWt(false);
     setDirty(null);
     if (isWt) api.workspaceDirtyCheck(ws.id).then((d) => setDirty(d.files)).catch(() => setDirty([]));
   }, [action, isWt, ws.id]);
@@ -38,7 +38,7 @@ export function WorkspaceMenu({ ws, variant = 'header' }: { ws: Workspace; varia
         toast('Workspace archived. Find it again via history search.');
       } else {
         await api.workspaceDelete(ws.id, removeWt, confirmDirty);
-        toast('Workspace deleted. Session history is available in Search.');
+        toast('Workspace deleted. Find its sessions under All sessions.');
       }
       // Only leave the workspace when it is the one being viewed (spec 002 FR-004/FR-005).
       const ui = useUiStore.getState();
@@ -98,7 +98,7 @@ export function WorkspaceMenu({ ws, variant = 'header' }: { ws: Workspace; varia
         description={
           action === 'archive'
             ? 'The workspace is hidden from the sidebar; its conversation history is kept and still searchable. Running sessions will stop.'
-            : 'The workspace is removed from the sidebar and running sessions will stop. You can still find and open its conversations in Search.'
+            : 'Running sessions will stop. Their conversations will be kept under All sessions.'
         }
         confirmLabel={action === 'archive' ? 'Archive' : 'Delete'}
         onConfirm={run}

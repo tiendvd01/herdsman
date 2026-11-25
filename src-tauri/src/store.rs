@@ -12,6 +12,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0003_drop_issue_ref.sql"),
     include_str!("../migrations/0004_codex_custom_mode.sql"),
     include_str!("../migrations/0005_workspace_history.sql"),
+    include_str!("../migrations/0006_project_skills.sql"),
+    include_str!("../migrations/0007_removed_projects.sql"),
 ];
 
 pub fn now_ms() -> i64 {
@@ -77,7 +79,7 @@ fn project_row(r: &Row) -> rusqlite::Result<Project> {
 }
 
 pub fn project_list(c: &Connection) -> AppResult<Vec<Project>> {
-    let mut st = c.prepare("SELECT id, name, path, sort, created_at FROM projects ORDER BY sort, created_at")?;
+    let mut st = c.prepare("SELECT id, name, path, sort, created_at FROM projects WHERE removed_at IS NULL ORDER BY sort, created_at")?;
     let rows = st.query_map([], project_row)?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -87,8 +89,16 @@ pub fn project_get(c: &Connection, id: &str) -> AppResult<Project> {
 }
 
 pub fn project_add(c: &Connection, name: &str, path: &str) -> AppResult<Project> {
-    let exists: Option<String> = c.query_row("SELECT id FROM projects WHERE path = ?1", [path], |r| r.get(0)).optional()?;
-    if exists.is_some() {
+    let existing: Option<(String, bool)> = c.query_row(
+        "SELECT id, removed_at IS NOT NULL FROM projects WHERE path = ?1",
+        [path],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).optional()?;
+    if let Some((id, removed)) = existing {
+        if removed {
+            c.execute("UPDATE projects SET removed_at = NULL WHERE id = ?1", [&id])?;
+            return project_get(c, &id);
+        }
         return Err(AppError::new("already_exists", "This folder is already a project"));
     }
     let id = new_id();
@@ -106,8 +116,7 @@ pub fn project_rename(c: &Connection, id: &str, name: &str) -> AppResult<Project
 }
 
 pub fn project_delete(c: &Connection, id: &str) -> AppResult<()> {
-    c.execute("DELETE FROM message_fts WHERE project_id = ?1", [id])?;
-    c.execute("DELETE FROM projects WHERE id = ?1", [id])?;
+    c.execute("UPDATE projects SET removed_at = ?2 WHERE id = ?1", params![id, now_ms()])?;
     Ok(())
 }
 
@@ -148,7 +157,7 @@ fn ws_row(r: &Row) -> rusqlite::Result<Workspace> {
 
 pub fn workspace_list(c: &Connection, project_id: Option<&str>, include_archived: bool) -> AppResult<Vec<Workspace>> {
     let sql = format!(
-        "SELECT {WS_COLS} FROM workspaces WHERE (?1 IS NULL OR project_id = ?1) AND (?2 OR archived_at IS NULL) ORDER BY created_at DESC"
+        "SELECT {WS_COLS} FROM workspaces WHERE project_id IN (SELECT id FROM projects WHERE removed_at IS NULL) AND (?1 IS NULL OR project_id = ?1) AND (?2 OR archived_at IS NULL) ORDER BY created_at DESC"
     );
     let mut st = c.prepare(&sql)?;
     let rows = st.query_map(params![project_id, include_archived], ws_row)?.collect::<Result<Vec<_>, _>>()?;
@@ -204,7 +213,7 @@ pub fn workspace_keep_history(c: &Connection, id: &str, removed_worktree: bool) 
     Ok(())
 }
 
-pub fn workspace_delete(c: &Connection, id: &str) -> AppResult<()> {
+pub fn discard_failed_workspace(c: &Connection, id: &str) -> AppResult<()> {
     c.execute("DELETE FROM message_fts WHERE workspace_id = ?1", [id])?;
     c.execute("DELETE FROM workspaces WHERE id = ?1", [id])?;
     Ok(())
@@ -433,7 +442,11 @@ pub fn search(c: &Connection, query: &str, workspace_id: Option<&str>, limit: i6
 pub fn search_sessions(
     c: &Connection, query: &str, project_id: Option<&str>, workspace_id: Option<&str>, limit: i64,
 ) -> AppResult<Vec<SearchHit>> {
-    let Some(q) = fts_query(query) else { return Ok(vec![]) };
+    let browsing = query.trim().is_empty();
+    if browsing && workspace_id.is_some() {
+        return Ok(vec![]);
+    }
+    let Some(q) = fts_query(query).or_else(|| browsing.then(|| r#""""#.to_owned())) else { return Ok(vec![]) };
     let mut st = c.prepare(
         "WITH matches AS MATERIALIZED (
              SELECT session_id, seq, snippet(message_fts, 5, '[[', ']]', '…', 12) AS excerpt, rank
@@ -449,17 +462,18 @@ pub fn search_sessions(
          JOIN workspaces w ON w.id = s.workspace_id
          JOIN projects p ON p.id = w.project_id
          LEFT JOIN best ON best.session_id = s.id
-         WHERE (?2 IS NULL OR p.id = ?2) AND (?3 IS NULL OR w.id = ?3)
+         WHERE p.removed_at IS NULL AND (?2 IS NULL OR p.id = ?2) AND (?3 IS NULL OR w.id = ?3)
+           AND (NOT ?4 OR w.deleted_at IS NOT NULL)
          ORDER BY best.score IS NULL, best.score, s.updated_at DESC, s.id",
     )?;
     let terms: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
-    let mut rows = st.query(params![q, project_id, workspace_id])?;
+    let mut rows = st.query(params![q, project_id, workspace_id, browsing])?;
     let mut hits = Vec::new();
     while (hits.len() as i64) < limit {
         let Some(r) = rows.next()? else { break };
         let title: Option<String> = r.get(8)?;
         let snippet: Option<String> = r.get(2)?;
-        if snippet.is_none() && !title.as_deref().is_some_and(|title| {
+        if !browsing && snippet.is_none() && !title.as_deref().is_some_and(|title| {
             let title = title.to_lowercase();
             terms.iter().all(|term| title.contains(term))
         }) {
@@ -514,6 +528,22 @@ mod tests {
         seed(&c);
         let err = project_add(&c, "again", std::env::temp_dir().to_str().unwrap()).unwrap_err();
         assert_eq!(err.code, "already_exists");
+    }
+
+    #[test]
+    fn removing_and_readding_project_preserves_workspaces_and_sessions() {
+        let c = open_memory().unwrap();
+        let (project, workspace, session) = seed(&c);
+        session_set_status(&c, &session.id, "working").unwrap();
+
+        project_delete(&c, &project.id).unwrap();
+        assert!(project_list(&c).unwrap().is_empty());
+        assert!(workspace_list(&c, Some(&project.id), true).unwrap().is_empty());
+
+        let restored = project_add(&c, &project.name, &project.path).unwrap();
+        assert_eq!(restored.id, project.id);
+        assert_eq!(workspace_list(&c, Some(&restored.id), true).unwrap()[0].id, workspace.id);
+        assert_eq!(session_get(&c, &session.id).unwrap().status, "working");
     }
 
     #[test]
@@ -615,9 +645,9 @@ mod tests {
         assert!(workspace_list(&c, Some(&p.id), false).unwrap().is_empty());
         assert_eq!(search(&c, "OAuth", None, 10).unwrap()[0].session_id, s.id);
         assert!(workspace_set_archived(&c, &w.id, false, None).is_err());
-        workspace_delete(&c, &w.id).unwrap();
-        assert_eq!(search(&c, "OAuth", None, 10).unwrap().len(), 0);
-        assert_eq!(session_all(&c).unwrap().len(), 0, "xoá workspace xoá session");
+        assert_eq!(search_sessions(&c, "", Some(&p.id), None, 10).unwrap()[0].session_id, s.id);
+        assert!(search_sessions(&c, "", None, Some(&w.id), 10).unwrap().is_empty());
+        assert_eq!(session_all(&c).unwrap().len(), 1);
     }
 
     #[test]

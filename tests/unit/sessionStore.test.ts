@@ -75,3 +75,27 @@ describe('applyEvent', () => {
     expect(notices[0]).toMatchObject({ tone: 'info', text: 'Switched model to Sonnet 5.5' });
   });
 });
+
+it('replays shell output by tool use ID without associating it with identical commands', () => {
+  const v = view();
+  const input = { command: 'test backend' };
+  const events = [
+    { seq: 1, type: 'tool_use', tool_use_id: 'a', tool: 'Bash', input, live_shell: true },
+    { seq: 2, type: 'tool_use', tool_use_id: 'b', tool: 'Bash', input, live_shell: true },
+    { seq: 3, type: 'permission_request', tool_use_id: 'b', id: 'p', tool: 'Bash', input, cwd: '/' },
+    { seq: 4, type: 'permission_resolved', id: 'p', decision: 'deny', by: 'user' },
+    { seq: 5, type: 'shell_update', tool_use_id: 'a', status: 'running' },
+    { seq: 6, type: 'shell_update', tool_use_id: 'a', output: 'first line\n', truncated: false },
+    { seq: 7, type: 'shell_update', tool_use_id: 'a', output: 'later tail\n', truncated: true },
+    { seq: 8, type: 'shell_update', tool_use_id: 'a', status: 'interrupted' },
+    { seq: 9, type: 'tool_use', tool_use_id: 'legacy', tool: 'Bash', input },
+    { seq: 10, type: 'tool_result', tool_use_id: 'legacy', is_error: false, content: 'legacy result' },
+  ];
+  for (const event of [...events, events[6]]) applyEvent(v, ev(event));
+  expect(v.items.map((item) => item.kind === 'tool' && item.shell)).toEqual([
+    { output: 'later tail\n', truncated: true, status: 'interrupted' },
+    { permission: 'denied' },
+    undefined,
+  ]);
+  expect(v.items[2]).toMatchObject({ result: { content: 'legacy result' } });
+});

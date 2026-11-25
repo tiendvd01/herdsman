@@ -1,48 +1,28 @@
 // Spec 007: ⌘B / ⌘R toggle the two sidebars — key matching, no default action, no effect while a dialog is open.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { matchSidebarShortcut, installSidebarShortcuts } from '@/lib/sidebarShortcuts';
+import { cleanup, render } from '@testing-library/react';
+import { createElement } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CommandDialog } from '@/components/command/CommandDialog';
+import { IS_MAC } from '@/lib/platform';
+import { matchShortcut } from '@/lib/keyboardShortcuts';
 import { useUiStore } from '@/stores/useUiStore';
 
-const key = (k: string, mods: Partial<KeyboardEventInit> = {}) => ({
-  key: k,
-  code: `Key${k.toUpperCase()}`,
-  metaKey: false,
-  ctrlKey: false,
-  shiftKey: false,
-  altKey: false,
-  repeat: false,
-  ...mods,
-});
-const mac = { isMac: true, dialogOpen: false };
-const other = { isMac: false, dialogOpen: false };
+const modifier = IS_MAC ? { metaKey: true } : { ctrlKey: true };
 
-describe('matchSidebarShortcut', () => {
-  it('maps ⌘B / ⌘R on macOS and Ctrl+B / Ctrl+R elsewhere', () => {
-    expect(matchSidebarShortcut(key('b', { metaKey: true }), mac)).toBe('left');
-    expect(matchSidebarShortcut(key('r', { metaKey: true }), mac)).toBe('right');
-    expect(matchSidebarShortcut(key('b', { ctrlKey: true }), other)).toBe('left');
-    expect(matchSidebarShortcut(key('r', { ctrlKey: true }), other)).toBe('right');
+describe('sidebar bindings', () => {
+  it('matches the physical key and the platform modifier', () => {
+    const match = (code: string, modifiers: KeyboardEventInit) =>
+      matchShortcut(new KeyboardEvent('keydown', { key: 'и', code, ...modifiers }));
+    expect(match('KeyB', modifier)).toBe('sidebar');
+    expect(match('KeyR', modifier)).toBe('side-panel');
+    expect(match('KeyB', {})).toBeUndefined();
+    expect(match('KeyB', { metaKey: true, ctrlKey: true })).toBeUndefined();
+    expect(match('KeyB', { ...modifier, shiftKey: true })).toBeUndefined();
+    expect(match('KeyR', { ...modifier, altKey: true })).toBeUndefined();
   });
-  it('ignores the wrong modifier, extra modifiers, other keys, repeats and open dialogs', () => {
-    expect(matchSidebarShortcut(key('b', { ctrlKey: true }), mac)).toBeNull();
-    expect(matchSidebarShortcut(key('b', { metaKey: true, ctrlKey: true }), mac)).toBeNull();
-    expect(matchSidebarShortcut(key('b', { metaKey: true, shiftKey: true }), mac)).toBeNull();
-    expect(matchSidebarShortcut(key('r', { metaKey: true, altKey: true }), mac)).toBeNull();
-    expect(matchSidebarShortcut(key('k', { metaKey: true }), mac)).toBeNull();
-    expect(matchSidebarShortcut(key('b'), mac)).toBeNull();
-    expect(matchSidebarShortcut(key('b', { metaKey: true, repeat: true }), mac)).toBeNull();
-    expect(matchSidebarShortcut(key('b', { metaKey: true }), { isMac: true, dialogOpen: true })).toBeNull();
-  });
-  it('uses the physical key so non-Latin layouts work', () => {
-    expect(matchSidebarShortcut({ ...key('b', { metaKey: true }), key: 'и' }, mac)).toBe('left');
-  });
-});
-
-describe('installSidebarShortcuts', () => {
-  let uninstall: () => void;
-  // jsdom user agent is not a Mac, so the app-level modifier is Ctrl here.
   const press = (target: EventTarget, k: string, mods: Partial<KeyboardEventInit> = {}) => {
-    const e = new KeyboardEvent('keydown', { key: k, code: `Key${k.toUpperCase()}`, ctrlKey: true, bubbles: true, cancelable: true, ...mods });
+    const e = new KeyboardEvent('keydown', { key: k, code: `Key${k.toUpperCase()}`, ...modifier, bubbles: true, cancelable: true, ...mods });
     target.dispatchEvent(e);
     return e;
   };
@@ -55,10 +35,11 @@ describe('installSidebarShortcuts', () => {
   });
   beforeEach(() => {
     useUiStore.setState({ sidebarOpen: true, rightOpen: true, rightTab: 'log', rightWidth: 500, cmdOpen: false });
-    uninstall = installSidebarShortcuts();
+    render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(CommandDialog)));
   });
+  afterAll(() => vi.unstubAllGlobals());
   afterEach(() => {
-    uninstall();
+    cleanup();
     document.body.innerHTML = '';
   });
 
@@ -73,6 +54,8 @@ describe('installSidebarShortcuts', () => {
     expect(e.defaultPrevented).toBe(true);
     expect(typed).not.toHaveBeenCalled();
     expect(ta.value).toBe('hello');
+    expect(useUiStore.getState().sidebarOpen).toBe(false);
+    press(ta, 'b', { repeat: true });
     expect(useUiStore.getState().sidebarOpen).toBe(false);
     press(ta, 'b');
     expect(useUiStore.getState().sidebarOpen).toBe(true);
@@ -109,7 +92,7 @@ describe('installSidebarShortcuts', () => {
   });
 
   it('moves focus to the composer when the focused column is hidden', () => {
-    document.body.innerHTML = '<aside aria-label="Sidebar"><input id="search" /></aside><main tabindex="-1"><textarea id="composer-s1"></textarea></main>';
+    document.body.insertAdjacentHTML('beforeend', '<aside aria-label="Sidebar"><input id="search" /></aside><main tabindex="-1"><textarea id="composer-s1"></textarea></main>');
     (document.getElementById('search') as HTMLInputElement).focus();
     press(document.activeElement!, 'b');
     expect(document.activeElement?.id).toBe('composer-s1');

@@ -29,6 +29,7 @@
   --color-diff-add-fg: var(--diff-add-fg);
   --color-diff-del-fg: var(--diff-del-fg);
   --color-git-rename-fg: var(--git-rename-fg);
+  --color-git-ignored-fg: var(--git-ignored-fg);
   --color-term-bg: var(--term-bg);
   --color-term-fg: var(--term-fg);
   --color-scrim: var(--scrim);

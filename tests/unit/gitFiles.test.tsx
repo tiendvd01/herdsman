@@ -1,18 +1,24 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { Blob } from 'node:buffer';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RightPanel } from '@/components/panels/RightPanel';
+import { GitHistoryRows } from '@/components/panels/GitHistoryRows';
 import { materialFileIcon } from '@/components/files/materialFileIcons';
 import { WorkspaceView } from '@/components/layout/WorkspaceView';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { runTabShortcut } from '@/lib/keyboardShortcuts';
 import { api } from '@/lib/api';
 import { qk } from '@/lib/queries';
 import { useFileStore } from '@/stores/useFileStore';
 import { useUiStore } from '@/stores/useUiStore';
 
 vi.mock('@/lib/api', () => ({
-  api: { projectList: vi.fn(), filesChanged: vi.fn(), fileDiff: vi.fn() },
+  api: {
+    projectList: vi.fn(), filesChanged: vi.fn(), fileDiff: vi.fn(), gitHistory: vi.fn(async () => null),
+    commitChanges: vi.fn(), commitFileDiff: vi.fn(),
+  },
   errMsg: String,
 }));
 vi.mock('@/components/files/FileEditor', () => ({
@@ -20,6 +26,10 @@ vi.mock('@/components/files/FileEditor', () => ({
 }));
 vi.mock('@/components/conversation/SessionView', () => ({ SessionView: () => null }));
 vi.mock('@/components/history/HistoryPopover', () => ({ HistoryPopover: () => null }));
+
+// Shiki's WASM loader uses Blob.stream, which jsdom does not implement.
+beforeAll(() => vi.stubGlobal('Blob', Blob));
+afterAll(() => vi.unstubAllGlobals());
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -96,11 +106,20 @@ it('keeps the list open and separates diff tabs from other files, workspaces and
   act(() => useUiStore.setState({ workspaceId: 'w1' }));
   fireEvent.click(diffTab(path));
   expect(await screen.findByText('Patch for w1')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: `Close changes for ${path}` }));
+  act(() => runTabShortcut('close-tab'));
   expect(screen.queryByRole('tab', { name: `Changes: ${path}` })).toBeNull();
   fireEvent.click(screen.getByRole('tab', { name: 'main.ts' }));
   expect(screen.getByText('Unsaved draft')).toBeTruthy();
   expect(useFileStore.getState().diffs).toHaveLength(2);
+  act(() => useFileStore.setState(({ tabs }) => ({
+    tabs: tabs.map((tab) => tab.id === fileId
+      ? { ...tab, document: { text: 'Saved', writable: true } }
+      : tab),
+  })));
+  act(() => runTabShortcut('close-tab'));
+  expect(screen.getByRole('dialog', { name: 'Save changes to main.ts?' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(screen.getByRole('tab', { name: /^main\.ts/ })).toBeTruthy();
 });
 
 it('groups the current workspace changes and keeps the same diff when switching views', async () => {
@@ -178,7 +197,135 @@ it('restores the Agents tab when an older preference selected Tasks', async () =
 
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
   client.setQueryData(qk.projects, [{ id: 'p1', name: 'Project' }]);
-  render(<QueryClientProvider client={client}><RightPanel /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><TooltipProvider><RightPanel /></TooltipProvider></QueryClientProvider>);
   expect(screen.getByRole('tab', { name: 'Agents', selected: true })).toBeTruthy();
   expect(screen.queryByRole('tab', { name: 'Tasks' })).toBeNull();
+});
+
+it('draws merge edges, switches history with the workspace, and resizes in both directions', async () => {
+  const height = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(400);
+  const frame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    callback(0);
+    return 1;
+  });
+  try {
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+    client.setQueryData(qk.projects, []);
+    client.setQueryData(qk.files('w1'), []);
+    client.setQueryData(qk.files('w2'), []);
+    client.setQueryData(qk.gitHistory('w1'), { truncated: false, commits: [
+      { id: 'merge', short_id: 'mer', subject: 'Merge topic', parents: ['main', 'topic'],
+        branches: [{ name: 'develop', remote: false }, { name: 'origin/develop', remote: true }] },
+      { id: 'topic', short_id: 'top', subject: 'Topic work', parents: ['main'] },
+      { id: 'main', short_id: 'mai', subject: 'Main work', parents: [] },
+    ] });
+
+    render(<QueryClientProvider client={client}><TooltipProvider><RightPanel /></TooltipProvider></QueryClientProvider>);
+
+    const merge = screen.getByText('Merge topic').closest('li');
+    expect(merge?.textContent).toBe('merMerge topicdeveloporigin/develop');
+    const mergeEdges = [...merge!.querySelectorAll('button svg path')];
+    const [mainColor, topicColor] = mergeEdges.map((path) => path.getAttribute('stroke'));
+    expect(mergeEdges).toHaveLength(2);
+    expect(mainColor).not.toBe(topicColor);
+    const topic = screen.getByText('Topic work').closest('li')!;
+    expect(topic.querySelector('svg circle')?.getAttribute('fill')).toBe(topicColor);
+    expect([...topic.querySelectorAll('svg path')].map((path) => path.getAttribute('stroke')))
+      .toEqual([mainColor, topicColor, mainColor]);
+    const splitter = screen.getByRole('separator', { name: 'Resize Git Graph' });
+    expect(splitter.getAttribute('aria-valuenow')).toBe('200');
+    fireEvent.pointerDown(splitter, { button: 0, clientY: 200, pointerId: 1 });
+    fireEvent.pointerMove(splitter, { clientY: 150, pointerId: 1 });
+    expect(splitter.getAttribute('aria-valuenow')).toBe('250');
+    fireEvent.pointerMove(splitter, { clientY: 240, pointerId: 1 });
+    expect(splitter.getAttribute('aria-valuenow')).toBe('160');
+    fireEvent.pointerUp(splitter, { pointerId: 1 });
+    fireEvent.keyDown(splitter, { key: 'Home' });
+    expect(splitter.getAttribute('aria-valuenow')).toBe('84');
+
+    act(() => useUiStore.setState({ workspaceId: 'w2' }));
+    expect(screen.queryByText('Merge topic')).toBeNull();
+    expect(await screen.findByText('This workspace is not in a Git repository.')).toBeTruthy();
+    expect(splitter.getAttribute('aria-valuenow')).toBe('84');
+  } finally {
+    height.mockRestore();
+    frame.mockRestore();
+  }
+});
+
+it('uses all five graph colors before repeating and retains them on active paths', () => {
+  const parents = ['one', 'two', 'three', 'four', 'five', 'six'];
+  const commits = [
+    { id: 'merge', short_id: 'mer', subject: 'Octopus merge', parents },
+    ...parents.map((id) => ({ id, short_id: id, subject: `Commit ${id}`, parents: ['outside'] })),
+  ];
+  const { container, rerender } = render(<GitHistoryRows commits={commits} projectId="p1" workspaceId="w1" />, { wrapper: TooltipProvider });
+  const colors = [...container.querySelectorAll('li:first-child svg path')].map((path) => path.getAttribute('stroke'));
+  const dots = () => [...container.querySelectorAll('li:not(:first-child) svg circle')].map((dot) => dot.getAttribute('fill'));
+  expect(colors).toHaveLength(6);
+  expect(new Set(colors.slice(0, 5)).size).toBe(5);
+  expect(new Set(colors).size).toBe(5);
+  expect(dots()).toEqual(colors);
+  rerender(<GitHistoryRows commits={commits.map((commit) => ({ ...commit }))} projectId="p1" workspaceId="w1" />);
+  expect(dots()).toEqual(colors);
+});
+
+it('expands one commit and opens independent historical diffs in workspace tabs', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+  const path = 'src/main.ts';
+  client.setQueryData(qk.projects, [{ id: 'p1', name: 'Project' }]);
+  client.setQueryData(qk.workspaces('p1', true), [{ id: 'w1', project_id: 'p1', name: 'One' }]);
+  client.setQueryData(qk.sessions('w1'), []);
+  client.setQueryData(qk.files('w1'), [{ path, status: 'M' }]);
+  client.setQueryData(qk.gitHistory('w1'), { truncated: false, commits: [
+    { id: 'first', short_id: 'aaa', subject: 'Rename file', parents: ['second'] },
+    { id: 'second', short_id: 'bbb', subject: 'Add file', parents: [] },
+  ] });
+  vi.mocked(api.commitChanges).mockImplementation(async (_, id) => [
+    { path, status: id === 'first' ? 'R' : 'A', original: id === 'first' ? 'old.ts' : null },
+  ]);
+  vi.mocked(api.commitFileDiff).mockImplementation(async (_, id) => `+Committed patch ${id}`);
+  vi.mocked(api.fileDiff).mockResolvedValue('+Working patch');
+  render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceView /><RightPanel /></TooltipProvider></QueryClientProvider>);
+
+  const first = screen.getByRole('button', { name: /Rename file/ });
+  const second = screen.getByRole('button', { name: /Add file/ });
+  fireEvent.click(first);
+  const rename = await screen.findByRole('button', { name: /old.ts → src\/main.ts.*Renamed/ });
+  expect(first.getAttribute('aria-expanded')).toBe('true');
+  expect(first.closest('li')?.querySelector('svg line')).toBeTruthy();
+  fireEvent.click(rename);
+  fireEvent.click(rename);
+  expect(screen.getAllByRole('tab', { name: 'Changes: src/main.ts (aaa)' })).toHaveLength(1);
+  expect(await screen.findByText('Committed patch first')).toBeTruthy();
+  expect(api.commitFileDiff).toHaveBeenCalledWith('w1', 'first', path, 'old.ts');
+
+  fireEvent.click(second);
+  expect(first.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(await screen.findByRole('button', { name: /src\/main.ts.*Added/ }));
+  expect(await screen.findByText('Committed patch second')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /src\/main.ts.*Modified/ }));
+  expect(await screen.findByText('Working patch')).toBeTruthy();
+  expect(screen.getAllByRole('tab', { name: /^Changes: src\/main.ts/ })).toHaveLength(3);
+  fireEvent.click(second);
+  expect(screen.queryByRole('list', { name: 'Files changed in bbb' })).toBeNull();
+});
+
+it('highlights the old and new code inside Git diff rows while retaining row colors', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+  const path = 'src/main.ts';
+  client.setQueryData(qk.projects, [{ id: 'p1', name: 'Project' }]);
+  client.setQueryData(qk.workspaces('p1', true), [{ id: 'w1', project_id: 'p1', name: 'One' }]);
+  client.setQueryData(qk.sessions('w1'), []);
+  client.setQueryData(qk.files('w1'), [{ path, status: 'M' }]);
+  vi.mocked(api.fileDiff).mockResolvedValue('@@ -1 +1 @@\n-let x = "old";\n+const x = "new";\n');
+  render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceView /><RightPanel /></TooltipProvider></QueryClientProvider>);
+
+  fireEvent.click(screen.getByRole('button', { name: /src\/main.ts.*Modified/ }));
+  for (const [keyword, rowColor] of [['let', 'bg-diff-del'], ['const', 'bg-diff-add']]) {
+    const token = await screen.findByText(keyword, { exact: true });
+    expect(token.style.getPropertyValue('--patch-light')).toMatch(/^#/);
+    expect(token.style.getPropertyValue('--patch-dark')).toMatch(/^#/);
+    expect(token.parentElement?.classList.contains(rowColor)).toBe(true);
+  }
 });

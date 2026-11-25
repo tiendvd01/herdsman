@@ -2,7 +2,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { subscribeWithSelector } from 'zustand/middleware';
-import type { AgentEvent, ChatAttachment, LimitWindow, PermissionMode, SessionStatus } from '@/lib/types';
+import type { AgentEvent, ChatAttachment, LimitWindow, PermissionMode, SessionStatus, ShellUpdate } from '@/lib/types';
 import { modelLabel } from '@/lib/model';
 
 export type Item =
@@ -15,6 +15,7 @@ export type Item =
       tool: string;
       input: Record<string, unknown>;
       result?: { is_error: boolean; content: string };
+      shell?: ShellUpdate & { permission?: 'waiting' | 'denied' | 'cancelled' };
       steps: number;
       ts: number;
     }
@@ -22,6 +23,7 @@ export type Item =
   | { kind: 'notice'; key: string; tone: 'info' | 'error'; text: string; ts: number };
 
 export interface PermissionReq {
+  tool_use_id?: string;
   id: string;
   tool: string;
   input: Record<string, unknown>;
@@ -79,6 +81,14 @@ export function applyEvent(v: SessionView, ev: AgentEvent) {
     case 'session_started':
       v.mode = ev.permission_mode;
       if (ev.model) v.model = ev.model;
+      if (ev.resumed) {
+        for (const item of v.items) {
+          if (item.kind === 'tool' && item.shell?.status === 'running') {
+            item.shell.status = 'unknown';
+            item.shell.unavailable = true;
+          }
+        }
+      }
       if (ev.resumed && v.items.length) v.items.push({ kind: 'notice', key, tone: 'info', text: 'Agent resumed — the conversation continues.', ts: ev.ts });
       break;
     case 'engine_session':
@@ -119,11 +129,24 @@ export function applyEvent(v: SessionView, ev: AgentEvent) {
         const i = v.toolIndex[ev.parent_tool_use_id];
         const it = i != null ? v.items[i] : undefined;
         if (it?.kind === 'tool') it.steps += 1;
-        break;
+        if (!ev.live_shell) break;
+      } else {
+        v.streaming = null;
       }
-      v.streaming = null;
+      if (v.toolIndex[ev.tool_use_id] != null) break;
       v.toolIndex[ev.tool_use_id] = v.items.length;
-      v.items.push({ kind: 'tool', key, tool_use_id: ev.tool_use_id, tool: ev.tool, input: ev.input, steps: 0, ts: ev.ts });
+      v.items.push({ kind: 'tool', key, tool_use_id: ev.tool_use_id, tool: ev.tool, input: ev.input, ...(ev.live_shell ? { shell: {} } : {}), steps: 0, ts: ev.ts });
+      break;
+    }
+    case 'shell_update': {
+      const { tool_use_id, status, output, truncated, unavailable, background } = ev;
+      const it = v.items[v.toolIndex[tool_use_id]];
+      if (it?.kind !== 'tool' || !it.shell) break;
+      if (status !== undefined) it.shell.status = status;
+      if (output !== undefined) it.shell.output = output;
+      if (truncated !== undefined) it.shell.truncated = truncated;
+      if (unavailable !== undefined) it.shell.unavailable = unavailable;
+      if (background !== undefined) it.shell.background = background;
       break;
     }
     case 'tool_result': {
@@ -132,12 +155,21 @@ export function applyEvent(v: SessionView, ev: AgentEvent) {
       if (it?.kind === 'tool') it.result = { is_error: ev.is_error, content: ev.content };
       break;
     }
-    case 'permission_request':
-      v.pending.push({ id: ev.id, tool: ev.tool, input: ev.input, cwd: ev.cwd, ts: ev.ts });
+    case 'permission_request': {
+      v.pending.push({ id: ev.id, tool: ev.tool, input: ev.input, cwd: ev.cwd, ts: ev.ts, tool_use_id: ev.tool_use_id });
+      const it = ev.tool_use_id ? v.items[v.toolIndex[ev.tool_use_id]] : undefined;
+      if (it?.kind === 'tool' && it.shell) it.shell.permission = 'waiting';
       break;
-    case 'permission_resolved':
+    }
+    case 'permission_resolved': {
+      const toolId = v.pending.find((p) => p.id === ev.id)?.tool_use_id;
+      const it = toolId ? v.items[v.toolIndex[toolId]] : undefined;
+      if (it?.kind === 'tool' && it.shell) {
+        it.shell.permission = ev.decision === 'deny' ? 'denied' : ev.decision === 'cancelled' ? 'cancelled' : undefined;
+      }
       v.pending = v.pending.filter((p) => p.id !== ev.id);
       break;
+    }
     case 'permission_mode_changed':
       v.mode = ev.mode;
       break;
@@ -157,6 +189,9 @@ export function applyEvent(v: SessionView, ev: AgentEvent) {
         cost: ev.cost_usd,
         ts: ev.ts,
       });
+      break;
+    case 'project_skills_warning':
+      v.items.push({ kind: 'notice', key, tone: 'info', text: `Project skills skipped: ${ev.message}`, ts: ev.ts });
       break;
     case 'error':
       v.items.push({ kind: 'notice', key, tone: 'error', text: ev.message, ts: ev.ts });

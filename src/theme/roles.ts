@@ -5,7 +5,7 @@
 // themes that don't list the key get `derive(...)`, themes that do keep their value.
 //
 // Only erasable TypeScript + explicit `.ts` imports: scripts/gen-theme-css.mjs loads this file with plain Node.
-import { mix, withAlpha } from './color.ts';
+import { contrast, mix, withAlpha } from './color.ts';
 
 /** Theme basics every derive rule can build on. */
 export interface Base {
@@ -28,6 +28,20 @@ export interface Role {
 }
 
 const status = (idx: number, dark: string, light: string) => (b: Base) => b.ansi?.[idx] ?? (b.dark ? dark : light);
+
+function ignoredFileForeground(base: Base, color: (key: string) => string): string {
+  const background = color('background');
+  const foreground = color('foreground');
+  const slate = '#737994';
+  if (base.dark) return slate;
+  // Hover blends the accent into the panel background. Check both endpoints.
+  const backgrounds = [background, color('accent')];
+  for (let weight = 12; weight < 100; weight++) {
+    const tinted = mix(slate, foreground, weight);
+    if (backgrounds.every((bg) => contrast(tinted, bg) >= 4.6)) return tinted;
+  }
+  return foreground;
+}
 
 export const ROLES: Role[] = [
   { key: 'background', cssVar: '--background', tailwind: true, derive: (b) => b.background },
@@ -59,6 +73,12 @@ export const ROLES: Role[] = [
   { key: 'diff_add_fg', cssVar: '--diff-add-fg', tailwind: true, derive: (b, c) => mix(c('done'), b.foreground, 30) },
   { key: 'diff_del_fg', cssVar: '--diff-del-fg', tailwind: true, derive: (b, c) => mix(c('error'), b.foreground, 30) },
   { key: 'git_rename_fg', cssVar: '--git-rename-fg', tailwind: true, derive: (b, c) => mix(c('working'), b.foreground, 30) },
+  { key: 'git_ignored_fg', cssVar: '--git-ignored-fg', tailwind: true, derive: ignoredFileForeground },
+  { key: 'git_graph_blue', cssVar: '--git-graph-blue', tailwind: false, derive: (b) => b.dark ? '#60a5fa' : '#2563eb' },
+  { key: 'git_graph_orange', cssVar: '--git-graph-orange', tailwind: false, derive: (b) => b.dark ? '#fbbf24' : '#a6530a' },
+  { key: 'git_graph_green', cssVar: '--git-graph-green', tailwind: false, derive: (b) => b.dark ? '#4ade80' : '#15803d' },
+  { key: 'git_graph_purple', cssVar: '--git-graph-purple', tailwind: false, derive: (b) => b.dark ? '#c084fc' : '#7e22ce' },
+  { key: 'git_graph_red', cssVar: '--git-graph-red', tailwind: false, derive: (b) => b.dark ? '#fb7185' : '#be123c' },
   // The Log (terminal) stays dark in every theme, so these defaults ignore the theme's own background.
   { key: 'term_bg', cssVar: '--term-bg', tailwind: true, derive: () => '#09090b' },
   { key: 'term_fg', cssVar: '--term-fg', tailwind: true, derive: () => '#d4d4d8' },

@@ -17,6 +17,8 @@ vi.mock('@/lib/api', () => ({
     sessionGet: vi.fn(),
     search: vi.fn(),
     claudeSearch: vi.fn(async () => []),
+    claudeOpen: vi.fn(),
+    sessionRehome: vi.fn(),
   },
   errMsg: String,
 }));
@@ -94,6 +96,22 @@ describe('CommandDialog', () => {
     expect(reopened.getAttribute('aria-current')).toBe('page');
     act(() => useUiStore.getState().selectWorkspace('p1', 'w1'));
     expect(screen.getByRole('button', { name: /^Project folder\s*Archived$/ })).toBe(reopened);
+  });
+
+  it('opens a standalone CLI session from All sessions without a search term', async () => {
+    const workspace = { ...workspaces[0], id: 'cli-ws', name: 'CLI conversation' };
+    const session = { id: 'cli-session', workspace_id: workspace.id, status: 'done' } as Session;
+    vi.mocked(api.claudeSearch).mockImplementation(async (_, scope) => scope?.workspaceId ? [] : [{
+      claude_session_id: 'cli-id', cwd: '/cli', title: 'CLI conversation', snippet: '', updated_at: 0,
+      session_id: null, workspace_id: null, workspace_name: null, project_id: null, project_name: null,
+    }]);
+    vi.mocked(api.claudeOpen).mockResolvedValue({ workspace, session });
+    openPalette();
+    const scope = screen.getByRole('combobox', { name: 'Session scope' });
+    fireEvent.change(scope, { target: { value: 'all' } });
+    fireEvent.click(await screen.findByText('CLI conversation'));
+    await waitFor(() => expect(useUiStore.getState().sessionByWorkspace[workspace.id]).toBe(session.id));
+    expect(api.claudeOpen).toHaveBeenCalledWith('cli-id', undefined);
   });
 
   it('keeps category results separate and activates the highlighted action', async () => {

@@ -1,7 +1,8 @@
 // Spec 006: zoom steps, content text size, shortcut matching and the v1 → v2 migration.
 import { describe, expect, it, vi } from 'vitest';
 import { applyZoom, clampContentStep, clampZoom, currentZoomFactor, formatZoom, nextZoom, zoomAtLimit, ZOOM_STEPS } from '@/lib/uiZoom';
-import { matchZoomShortcut } from '@/lib/zoomShortcuts';
+import { matchShortcut } from '@/lib/keyboardShortcuts';
+import { IS_MAC } from '@/lib/platform';
 import { migrateUi, useUiStore } from '@/stores/useUiStore';
 
 const { setZoom } = vi.hoisted(() => ({ setZoom: vi.fn() }));
@@ -40,17 +41,9 @@ describe('rendered UI zoom', () => {
   });
 });
 
-const key = (code: string, mods: Partial<KeyboardEventInit> = {}) => ({
-  key: '',
-  code,
-  metaKey: false,
-  ctrlKey: false,
-  altKey: false,
-  shiftKey: false,
-  ...mods,
-});
-const mac = { isMac: true };
-const other = { isMac: false };
+const modifier = IS_MAC ? { metaKey: true } : { ctrlKey: true };
+const otherModifier = IS_MAC ? { ctrlKey: true } : { metaKey: true };
+const key = (code: string, mods: KeyboardEventInit = {}) => new KeyboardEvent('keydown', { code, ...mods });
 
 describe('clampZoom / nextZoom', () => {
   it('snaps to the nearest step and defaults bad values to 1', () => {
@@ -83,33 +76,25 @@ describe('clampContentStep', () => {
   });
 });
 
-describe('matchZoomShortcut', () => {
-  it('maps ⌘= / ⌘+ / ⌘− / ⌘0 to zoom on macOS', () => {
-    expect(matchZoomShortcut(key('Equal', { metaKey: true }), mac)).toBe('in');
-    expect(matchZoomShortcut(key('Equal', { metaKey: true, shiftKey: true }), mac)).toBe('in');
-    expect(matchZoomShortcut(key('NumpadAdd', { metaKey: true }), mac)).toBe('in');
-    expect(matchZoomShortcut(key('Minus', { metaKey: true }), mac)).toBe('out');
-    expect(matchZoomShortcut(key('Digit0', { metaKey: true }), mac)).toBe('reset');
+describe('zoom bindings', () => {
+  it.each([['Equal', 'in'], ['NumpadAdd', 'in'], ['Minus', 'out'], ['NumpadSubtract', 'out'], ['Digit0', 'reset'], ['Numpad0', 'reset']])(
+    'maps %s to %s with the platform modifier',
+    (code, action) => {
+      expect(matchShortcut(key(code, modifier))).toBe(action);
+      expect(matchShortcut(key(code, { ...modifier, altKey: true }))).toBe(`text-${action}`);
+    },
+  );
+
+  it('preserves shifted plus and accepts events without a physical key code', () => {
+    expect(matchShortcut(key('Equal', { ...modifier, shiftKey: true }))).toBe('in');
+    expect(matchShortcut(key('', { ...modifier, shiftKey: true, key: '+' }))).toBe('in');
   });
-  it('maps ⌥⌘ to the content text size', () => {
-    expect(matchZoomShortcut(key('Equal', { metaKey: true, altKey: true }), mac)).toBe('text-in');
-    expect(matchZoomShortcut(key('Minus', { metaKey: true, altKey: true }), mac)).toBe('text-out');
-    expect(matchZoomShortcut(key('Digit0', { metaKey: true, altKey: true }), mac)).toBe('text-reset');
-  });
-  it('uses Ctrl / Alt off macOS', () => {
-    expect(matchZoomShortcut(key('Equal', { ctrlKey: true }), other)).toBe('in');
-    expect(matchZoomShortcut(key('Minus', { ctrlKey: true, altKey: true }), other)).toBe('text-out');
-    expect(matchZoomShortcut(key('Equal', { metaKey: true }), other)).toBeNull();
-  });
-  it('ignores other keys and modifiers', () => {
-    expect(matchZoomShortcut(key('Equal'), mac)).toBeNull();
-    expect(matchZoomShortcut(key('Equal', { ctrlKey: true }), mac)).toBeNull();
-    expect(matchZoomShortcut(key('Equal', { metaKey: true, ctrlKey: true }), mac)).toBeNull();
-    expect(matchZoomShortcut(key('Minus', { metaKey: true, shiftKey: true }), mac)).toBeNull();
-    expect(matchZoomShortcut(key('KeyB', { metaKey: true }), mac)).toBeNull();
-  });
-  it('falls back to `key` when `code` is missing', () => {
-    expect(matchZoomShortcut({ ...key('', { metaKey: true }), key: '+' }, mac)).toBe('in');
+
+  it('ignores extra or incorrect modifiers', () => {
+    expect(matchShortcut(key('Equal'))).toBeUndefined();
+    expect(matchShortcut(key('Equal', otherModifier))).toBeUndefined();
+    expect(matchShortcut(key('Equal', { ...modifier, ...otherModifier }))).toBeUndefined();
+    expect(matchShortcut(key('Minus', { ...modifier, shiftKey: true }))).toBeUndefined();
   });
 });
 

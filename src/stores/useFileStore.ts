@@ -4,6 +4,7 @@ import type { Project } from '@/lib/types';
 
 export interface FileTab {
   id: string;
+  openedId?: string;
   projectId: string;
   path: string;
   name: string;
@@ -15,10 +16,12 @@ export interface FileTab {
 
 export interface DiffTab {
   id: string;
+  openedId?: string;
   projectId: string;
   workspaceId: string;
   path: string;
   name: string;
+  commit?: { id: string; shortId: string; original?: string };
 }
 
 export const isDirty = (file: FileTab) => file.document !== undefined && file.draft !== file.document.text;
@@ -26,7 +29,7 @@ export const isDirty = (file: FileTab) => file.document !== undefined && file.dr
 interface FileState {
   tabs: FileTab[];
   diffs: DiffTab[];
-  openDiff: (projectId: string, workspaceId: string, path: string) => void;
+  openDiff: (projectId: string, workspaceId: string, path: string, commit?: DiffTab['commit']) => void;
   closeDiff: (id: string) => void;
   active: Record<string, string | undefined>;
   open: (project: Project, path: string, name: string) => Promise<void>;
@@ -45,9 +48,9 @@ export const useFileStore = create<FileState>((set, get) => {
   return {
     tabs: [],
     diffs: [],
-    openDiff: (projectId, workspaceId, path) => set((state) => {
-      const id = JSON.stringify(['diff', workspaceId, path]);
-      const tab = { id, projectId, workspaceId, path, name: path.slice(path.lastIndexOf('/') + 1) };
+    openDiff: (projectId, workspaceId, path, commit) => set((state) => {
+      const id = JSON.stringify(commit ? ['commit-diff', workspaceId, commit.id, path] : ['diff', workspaceId, path]);
+      const tab = { id, openedId: crypto.randomUUID(), projectId, workspaceId, path, name: path.slice(path.lastIndexOf('/') + 1), commit };
       return {
         diffs: state.diffs.some((diff) => diff.id === id) ? state.diffs : [...state.diffs, tab],
         active: { ...state.active, [projectId]: id },
@@ -71,7 +74,7 @@ export const useFileStore = create<FileState>((set, get) => {
       const existing = get().tabs.find((file) => file.id === id);
       get().activate(projectId, id);
       if (existing) return;
-      const tab = { id, projectId, path, name };
+      const tab = { id, openedId: crypto.randomUUID(), projectId, path, name };
       set((state) => ({ tabs: [...state.tabs, tab] }));
       const settle = (patch: Partial<FileTab>) => update(id, (file) => file === tab ? { ...file, ...patch } : file);
       try {
@@ -87,11 +90,14 @@ export const useFileStore = create<FileState>((set, get) => {
       const { projectId, path, document } = await api.sessionFileRead(sessionId, reference);
       if (!isCurrent()) return;
       const id = JSON.stringify([projectId, path]);
-      const tab = { id, projectId, path, name: path.slice(path.lastIndexOf('/') + 1), document, draft: document.text };
       set((state) => {
         const active = { ...state.active, [projectId]: id };
         const existing = state.tabs.find((file) => file.id === id);
         if (existing?.document) return { active };
+        const tab = {
+          id, openedId: existing?.openedId ?? crypto.randomUUID(), projectId, path,
+          name: path.slice(path.lastIndexOf('/') + 1), document, draft: document.text,
+        };
         const tabs = existing
           ? state.tabs.map((file) => file === existing ? tab : file)
           : [...state.tabs, tab];

@@ -11,6 +11,7 @@ export const qk = {
   allWorkspaceTerminals: ['workspace-terminals'] as const,
   workspaceTerminals: (workspaceId: string) => ['workspace-terminals', workspaceId] as const,
   agentTree: (sessionId: string) => ['agentTree', sessionId] as const,
+  gitHistory: (workspaceId: string) => ['git-history', workspaceId] as const,
   files: (workspaceId: string) => ['files', workspaceId] as const,
   projectFilesChanged: (projectId: string) => ['files', 'project', projectId] as const,
 };

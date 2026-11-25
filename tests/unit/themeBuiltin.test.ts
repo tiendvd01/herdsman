@@ -4,11 +4,35 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import golden from '../fixtures/theme-golden.json';
 import { builtinThemes } from '@/theme/catalog';
+import { contrast, mix } from '@/theme/color';
 import { contrastReport, cssVars } from '@/theme/resolve';
 
 const byId = (id: string) => builtinThemes().find((t) => t.id === id)!;
 
 describe('built-in themes', () => {
+  it.each(builtinThemes().map((theme) => theme.id))('%s uses the slate Git-ignored foreground', (id) => {
+    const theme = byId(id);
+    const { colors } = theme;
+    expect(contrast(colors.git_ignored_fg, colors.foreground)).toBeGreaterThanOrEqual(1.2);
+    if (theme.appearance === 'dark') {
+      expect(colors.git_ignored_fg).toBe('#737994');
+    } else {
+      for (const background of [colors.background, mix(colors.background, colors.accent, 60), colors.accent]) {
+        expect(contrast(colors.git_ignored_fg, background)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it.each(['light', 'dark'])('%s resolves five distinct Git Graph colors with visible contrast', (id) => {
+    const vars = cssVars(byId(id));
+    const palette = Object.entries(vars).filter(([key]) => key.startsWith('--git-graph-')).map(([, color]) => color);
+    expect(new Set(palette).size).toBe(5);
+    for (const color of palette) {
+      expect(contrast(color, vars['--background'])).toBeGreaterThanOrEqual(3);
+      expect(contrast(color, vars['--surface'])).toBeGreaterThanOrEqual(3);
+    }
+  });
+
   it.each(['light', 'paper', 'dark'] as const)('%s resolves to the pre-016 values', (id) => {
     const vars = cssVars(byId(id));
     const want = golden[id] as Record<string, string>;
@@ -19,11 +43,14 @@ describe('built-in themes', () => {
     }
   });
 
-  it('are light, light and dark', () => {
-    expect(builtinThemes().map((t) => [t.id, t.appearance])).toEqual([['light', 'light'], ['paper', 'light'], ['dark', 'dark']]);
+  it('classifies every built-in theme', () => {
+    expect(builtinThemes().map((t) => [t.id, t.appearance])).toEqual([
+      ['light', 'light'], ['paper', 'light'], ['clear-light', 'light'], ['minimal', 'light'], ['dark', 'dark'],
+      ['catppuccin-frappe', 'dark'], ['one-dark-pro', 'dark'],
+    ]);
   });
 
-  it.each(['paper', 'dark'])('%s has no text/background pair under 4.5:1', (id) => {
+  it.each(['paper', 'clear-light', 'minimal', 'dark', 'catppuccin-frappe', 'one-dark-pro'])('%s has no text/background pair under 4.5:1', (id) => {
     expect(contrastReport(byId(id))).toEqual([]);
   });
 

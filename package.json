@@ -8,6 +8,7 @@
     "dev": "vite",
     "prebuild": "node scripts/gen-theme-css.mjs",
     "build": "tsc --noEmit && vite build",
+    "build:installer": "tauri build --bundles dmg",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",

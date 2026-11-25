@@ -1,14 +1,14 @@
 // Spec 016: custom themes — valid ones join the catalog, bad ones are reported and skipped, nothing breaks.
 import { describe, expect, it } from 'vitest';
-import { buildCatalog, pickTheme, type ThemeFile } from '@/theme/catalog';
+import { buildCatalog, builtinThemes, pickTheme, type ThemeFile } from '@/theme/catalog';
 
 const f = (file: string, body: unknown): ThemeFile => ({ file, text: typeof body === 'string' ? body : JSON.stringify(body) });
 const good = { background: '#fbf7ef', foreground: '#2a2622' };
 
 describe('buildCatalog', () => {
-  it('starts with the three built-ins', () => {
+  it('starts with the built-in themes', () => {
     const c = buildCatalog();
-    expect(c.themes.map((t) => t.id)).toEqual(['light', 'paper', 'dark']);
+    expect(c.themes).toEqual(builtinThemes());
     expect(c.errors).toEqual([]);
   });
 

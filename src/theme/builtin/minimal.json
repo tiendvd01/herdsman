@@ -1,0 +1,28 @@
+{
+  "name": "Minimal",
+  "appearance": "light",
+  "background": "#fcfcfa",
+  "foreground": "#111111",
+  "selection": "#e3e3df",
+  "ansi": [
+    "#111111", "#c4302b", "#1f7a3a", "#9a6a00", "#1f1fd6", "#8a2be2", "#0f6f7a", "#6b6b66",
+    "#8a8a84", "#d9443e", "#2a9a4c", "#b8860b", "#3b3bff", "#a050f0", "#1490a0", "#e3e3df"
+  ],
+  "colors": {
+    "surface": "#fcfcfa",
+    "muted": "#f3f3f0",
+    "muted_foreground": "#55554f",
+    "border": "#dcdcd7",
+    "input": "#cbcbc5",
+    "ring": "#1f1fd6",
+    "primary": "#1f1fd6",
+    "primary_foreground": "#ffffff",
+    "accent": "#e8e8e4",
+    "accent_foreground": "#111111",
+    "code": "#f3f3f0",
+    "blocked": "#c4302b",
+    "idle": "#8a8a84",
+    "term_bg": "#fcfcfa",
+    "term_fg": "#111111"
+  }
+}

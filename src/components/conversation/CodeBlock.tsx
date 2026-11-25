@@ -4,23 +4,15 @@ import { Check, Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/components/ui/toast';
-import type { HighlighterCore } from 'shiki';
+import { loadCodeLanguage } from '@/lib/highlightCode';
 
-let hl: Promise<HighlighterCore> | null = null;
-function highlighter() {
-  hl ??= import('shiki').then((m) => m.createHighlighter({ themes: ['github-light', 'github-dark'], langs: [] }) as Promise<HighlighterCore>);
-  return hl;
-}
 const cache = new Map<string, string>();
 
 async function render(code: string, lang: string) {
   const key = `${lang}\0${code}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const h = await highlighter();
-  const { bundledLanguages } = await import('shiki');
-  const id = lang in bundledLanguages ? lang : 'text';
-  if (id !== 'text' && !h.getLoadedLanguages().includes(id)) await h.loadLanguage(bundledLanguages[id as keyof typeof bundledLanguages]);
+  const { h, id } = await loadCodeLanguage(lang);
   const html = h.codeToHtml(code, { lang: id, themes: { light: 'github-light', dark: 'github-dark' }, defaultColor: 'light' });
   cache.set(key, html);
   return html;

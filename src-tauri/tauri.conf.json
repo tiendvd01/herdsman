@@ -7,6 +7,7 @@
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
+    "beforeBundleCommand": "node scripts/prepare-macos-sidecar.mjs",
     "frontendDist": "../dist"
   },
   "app": {
@@ -41,6 +42,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "files": {
+        "MacOS/herdsman-node": "target/installer-runtime/bin/node",
+        "Resources/codex": "target/installer-codex",
+        "Resources/Codex-LICENSE": "../scripts/Codex-LICENSE",
+        "Resources/node-LICENSE": "target/installer-runtime/LICENSE",
+        "Resources/sidecar/node_modules": "target/installer-sidecar/node_modules"
+      }
+    },
     "resources": {
       "../sidecar/src/": "sidecar/src/",
       "../sidecar/package.json": "sidecar/package.json"

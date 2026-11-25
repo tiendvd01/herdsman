@@ -1,0 +1,99 @@
+- generic [ref=f5e3]:
+  - complementary "Sidebar" [ref=f5e4]:
+    - generic [ref=f5e6]: Herdsman
+    - generic [ref=f5e8]:
+      - generic [ref=f5e9]: Projects
+      - button "Switch project" [ref=f5e10] [cursor=pointer]:
+        - generic [ref=f5e16]:
+          - generic [ref=f5e17]: herdsman
+          - generic [ref=f5e18]: /Users/dev/herdsman
+    - region "Sessions" [ref=f5e22]:
+      - generic [ref=f5e23]:
+        - heading "Sessions" [level=2] [ref=f5e24]
+        - generic [ref=f5e25]: "3"
+      - searchbox "Search sessions" [ref=f5e26]
+      - navigation "Sessions" [ref=f5e27]:
+        - button "Claude Draw the login flow Claude CLI herdsman/fix-login Awaiting approval" [ref=f5e28] [cursor=pointer]:
+          - img "Claude" [ref=f5e30]
+          - generic [ref=f5e32]:
+            - generic [ref=f5e33]: Draw the login flow
+            - generic [ref=f5e34]:
+              - generic [ref=f5e35]: Claude CLI
+              - generic "herdsman/fix-login" [ref=f5e38]
+          - img "Awaiting approval" [ref=f5e39]
+        - button "Claude Write e2e tests herdsman/fix-login Working" [ref=f5e40] [cursor=pointer]:
+          - img "Claude" [ref=f5e42]
+          - generic [ref=f5e44]:
+            - generic [ref=f5e45]: Write e2e tests
+            - generic "herdsman/fix-login" [ref=f5e47]
+          - img "Working" [ref=f5e48]
+        - button "Claude Split the store Idle" [ref=f5e49] [cursor=pointer]:
+          - img "Claude" [ref=f5e51]
+          - generic [ref=f5e53]: Split the store
+          - img "Idle" [ref=f5e55]
+    - generic [ref=f5e56]:
+      - img "Done" [ref=f5e57]
+      - generic [ref=f5e58]: hc connected · Demo
+      - button "Settings" [ref=f5e59] [cursor=pointer]
+    - separator "Resize sidebar" [ref=f5e63]
+  - main [ref=f5e65]:
+    - generic [ref=f5e66]:
+      - button "Collapse sidebar" [ref=f5e67] [cursor=pointer]
+      - navigation "Breadcrumb" [ref=f5e70]:
+        - generic [ref=f5e71]: herdsman
+        - generic [ref=f5e74]: Draw the login flow
+      - button "Hide side panel" [ref=f5e75] [cursor=pointer]
+    - generic [ref=f5e79]:
+      - generic [ref=f5e80]: Connecting to agent…
+      - generic [ref=f5e82]:
+        - generic [ref=f5e83]: Message the agent
+        - textbox "Message the agent" [ref=f5e84]:
+          - /placeholder: Claude is working — your message will be queued…
+        - generic [ref=f5e85]:
+          - generic [ref=f5e86]:
+            - button "Attach image" [ref=f5e87] [cursor=pointer]
+            - button "Expand editor" [ref=f5e90] [cursor=pointer]
+            - button "Slash commands" [ref=f5e96] [cursor=pointer]: /
+            - 'button "Permission mode: Ask before editing" [ref=f5e98] [cursor=pointer]': Ask before editing
+            - 'button "Model: Opus 5.5" [ref=f5e101] [cursor=pointer]':
+              - generic [ref=f5e102]: Opus 5.5
+          - generic [ref=f5e105]:
+            - status "Context usage unavailable" [ref=f5e107]:
+              - generic [ref=f5e108]: Ctx
+              - generic [ref=f5e109]: —
+            - button "Interrupt turn Esc" [ref=f5e110] [cursor=pointer]:
+              - text: Interrupt turn
+              - generic [ref=f5e111]: Esc
+            - button "Send" [disabled]
+  - complementary "Side panel" [ref=f5e112]:
+    - separator "Resize side panel" [ref=f5e113]
+    - generic [ref=f5e115]:
+      - generic [ref=f5e116]:
+        - tablist "Side panel content" [ref=f5e117]:
+          - tab "Files" [ref=f5e118] [cursor=pointer]
+          - tab "Agents" [selected] [ref=f5e124] [cursor=pointer]
+          - tab "Git" [ref=f5e128] [cursor=pointer]
+          - tab "Log" [ref=f5e133] [cursor=pointer]
+        - button "Widen side panel" [ref=f5e137] [cursor=pointer]
+      - tabpanel "Agents" [ref=f5e143]:
+        - region "Agents" [ref=f5e144]:
+          - generic [ref=f5e146]:
+            - heading "Agents" [level=2] [ref=f5e147]
+            - generic [ref=f5e148]: Main session and the sub-agents it delegates to
+          - generic [ref=f5e149]:
+            - img "Awaiting approval" [ref=f5e150]
+            - generic [ref=f5e151]: Draw the login flow
+            - generic [ref=f5e152]: t1
+          - generic [ref=f5e153]:
+            - generic [ref=f5e154]:
+              - generic [ref=f5e155]:
+                - img "Working" [ref=f5e156]
+                - generic [ref=f5e157]: reviewer
+                - generic [ref=f5e158]: 60%
+              - generic [ref=f5e161]: t7
+            - generic [ref=f5e162]:
+              - generic [ref=f5e163]:
+                - img "Done" [ref=f5e164]
+                - generic [ref=f5e165]: tester
+                - generic [ref=f5e166]: Done
+              - generic [ref=f5e169]: t9

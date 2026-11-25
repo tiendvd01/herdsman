@@ -1,5 +1,6 @@
 // Engine Claude: Claude Agent SDK → AgentEvent chuẩn hoá (contracts/sidecar-socket.md).
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { trackClaudeShells } from './claude-shell.mjs';
 
 // Chế độ quyền của Herdsman → permissionMode của SDK (research R2).
 export const MODE_MAP = { ask: 'default', accept_edits: 'acceptEdits', auto: 'auto', bypass: 'bypassPermissions' };
@@ -41,6 +42,7 @@ function toolResultText(content) {
 
 /**
  * @param {{cwd: string, mode: string, model?: string, inheritedModel?: boolean, resumeId?: string,
+ *   projectSkillsPlugin?: string,
  *   emit: (type: string, fields?: object, opts?: {live?: boolean}) => void,
  *   requestPermission: (tool: string, input: object, extra: object) => Promise<{decision: string, updated_input?: object}>,
  *   onEngineSession: (id: string, model?: string) => void,
@@ -102,20 +104,25 @@ export function createClaudeEngine(ctx, runQuery = query) {
       settingSources: ['user', 'project', 'local'],
       canUseTool: async (toolName, toolInput, opts) => {
         if (initial?.prompt) initial.hasOutput = true;
-        const res = await ctx.requestPermission(toolName, toolInput, { tool_use_id: opts?.toolUseID, blocked_path: opts?.blockedPath });
+        const res = await ctx.requestPermission(toolName, toolInput, { tool_use_id: opts?.toolUseID, blocked_path: opts?.blockedPath }, opts?.signal);
         if (res.decision === 'allow') return { behavior: 'allow', updatedInput: res.updated_input ?? toolInput };
         return { behavior: 'deny', message: 'The user denied this request.' };
       },
     };
+    if (ctx.projectSkillsPlugin) {
+      options.plugins = [{ type: 'local', path: ctx.projectSkillsPlugin, skipMcpDiscovery: true }];
+    }
     if (resumeId) options.resume = resumeId;
     if (model) options.model = model;
     if (process.env.HERDSMAN_CLAUDE_PATH) options.pathToClaudeCodeExecutable = process.env.HERDSMAN_CLAUDE_PATH;
     q = runQuery({ prompt: input, options });
     running = true;
-    pump(q).catch((err) => {
+    const shells = trackClaudeShells(q, ctx.emit);
+    pump(q, shells).catch((err) => {
       ctx.emit('error', { code: 'engine', message: String(err?.message || err), recoverable: true });
       ctx.onTurnState('error');
     }).finally(() => {
+      shells.close();
       if (initial?.prompt) {
         // A dead stream cannot receive prompts waiting for the first result.
         if (initial.queued.length) {
@@ -155,7 +162,7 @@ export function createClaudeEngine(ctx, runQuery = query) {
     } catch {}
   }
 
-  async function pump(stream) {
+  async function pump(stream, shells) {
     let currentMessageId = null;
     for await (const msg of stream) {
       switch (msg.type) {
@@ -166,6 +173,12 @@ export function createClaudeEngine(ctx, runQuery = query) {
             ctx.onEngineSession(msg.session_id, msg.model);
           } else if (msg.subtype === 'commands_changed' && Array.isArray(msg.commands)) {
             commands = mapCommands(msg.commands);
+          } else if (msg.subtype === 'task_started') {
+            shells.start(msg);
+          } else if (msg.subtype === 'task_updated') {
+            shells.background(msg);
+          } else if (msg.subtype === 'task_notification') {
+            await shells.finish(msg);
           }
           break;
         case 'stream_event': {
@@ -202,7 +215,7 @@ export function createClaudeEngine(ctx, runQuery = query) {
           }
           for (const b of msg.message?.content ?? []) {
             if (b.type === 'tool_use') {
-              ctx.emit('tool_use', { tool_use_id: b.id, tool: b.name, input: b.input, parent_tool_use_id: msg.parent_tool_use_id ?? null });
+              ctx.emit('tool_use', { tool_use_id: b.id, tool: b.name, input: b.input, ...(b.name === 'Bash' ? { live_shell: true } : {}), parent_tool_use_id: msg.parent_tool_use_id ?? null });
             }
           }
           break;
@@ -232,10 +245,11 @@ export function createClaudeEngine(ctx, runQuery = query) {
         case 'result': {
           if (initial?.prompt && msg.is_error && await retryInitialTurn(stream)) break;
           if (initial?.prompt) finishInitialTurn();
+          const isError = !interrupted && !!msg.is_error;
           const u = msg.usage || {};
           ctx.emit('turn_end', {
             interrupted,
-            is_error: !!msg.is_error,
+            is_error: isError,
             usage: {
               input_tokens: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0),
               output_tokens: u.output_tokens || 0,
@@ -244,10 +258,10 @@ export function createClaudeEngine(ctx, runQuery = query) {
             duration_ms: msg.duration_ms ?? null,
             model: lastTurnModel ?? model ?? undefined,
           });
-          const completed = !interrupted && !msg.is_error;
+          const completed = !interrupted && !isError;
           interrupted = false;
           emitUsageSnapshot(stream);
-          ctx.onTurnState(msg.is_error && msg.subtype !== 'success' ? 'error' : 'idle', completed ? 'turn_complete' : undefined);
+          ctx.onTurnState(isError && msg.subtype !== 'success' ? 'error' : 'idle', completed ? 'turn_complete' : undefined);
           break;
         }
         default:

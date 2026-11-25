@@ -161,76 +161,28 @@ pub fn project_rename(st: St<'_>, id: String, name: String) -> AppResult<Project
     store::project_rename(&st.db.lock(), &id, name)
 }
 
-#[derive(Serialize)]
-pub struct RunningRef {
-    terminal: String,
-    kind: String,
-    session_id: Option<String>,
-    title: String,
-}
-
-async fn running_in_project(st: &AppState, project_id: &str) -> AppResult<Vec<(Terminal, RunningRef)>> {
-    let hc = st.hc()?;
-    let terms = hc.list(&[("herdsman.app", "1"), ("herdsman.project", project_id)], false).await?;
-    let db = st.db.lock();
-    Ok(terms
-        .into_iter()
-        .map(|t| {
-            let kind = t.label("herdsman.kind").unwrap_or("?").to_string();
-            let sid = t.label("herdsman.session").map(|s| s.to_string());
-            let title = match &sid {
-                Some(s) => store::session_get(&db, s).ok().and_then(|s| s.title).unwrap_or_else(|| "Session".into()),
-                None => t.argv.last().cloned().unwrap_or_default(),
-            };
-            let r = RunningRef { terminal: t.address.clone(), kind, session_id: sid, title };
-            (t, r)
-        })
-        .collect())
-}
-
-#[tauri::command]
-pub async fn project_delete_preview(st: St<'_>, id: String) -> AppResult<Vec<RunningRef>> {
-    Ok(running_in_project(&st, &id).await?.into_iter().map(|(_, r)| r).collect())
-}
-
-/// FR-002a: dừng mọi tiến trình đang chạy của project rồi mới bỏ project khỏi app.
 #[tauri::command]
 pub async fn project_delete(st: St<'_>, id: String, confirm: bool) -> AppResult<()> {
-    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
     if !confirm {
         return Err(AppError::new("confirm_required", "Confirmation required"));
     }
-    if st.hc.is_some() {
-        let hc = st.hc()?;
-        let all = hc.list(&[("herdsman.app", "1"), ("herdsman.project", &id)], true).await?;
-        for t in &all {
-            if t.state == "live" {
-                let _ = hc.kill(&t.address).await;
-            }
-        }
-        for t in &all {
-            for _ in 0..25 {
-                match hc.get(&t.address).await {
-                    Ok(x) if x.state == "live" => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
-                    _ => break,
+    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
+    kill_live_terminals(&st, "herdsman.project", &id).await?;
+    store::project_delete(&st.db.lock(), &id)
+}
+
+async fn kill_live_terminals(st: &AppState, label: &str, id: &str) -> AppResult<()> {
+    if let Some(hc) = &st.hc {
+        let terminals = hc.list(&[("herdsman.app", "1"), (label, id)], false).await?;
+        for terminal in terminals {
+            if let Err(error) = hc.kill(&terminal.address).await {
+                if hc.get(&terminal.address).await?.state == "live" {
+                    return Err(error);
                 }
             }
-            let _ = hc.rm(&t.address).await;
         }
     }
-    let sessions: Vec<String> = {
-        let db = st.db.lock();
-        store::workspace_list(&db, Some(&id), true)?
-            .iter()
-            .flat_map(|w| store::session_list(&db, &w.id).unwrap_or_default())
-            .map(|s| s.id)
-            .collect()
-    };
-    for sid in sessions {
-        agent::close_view(&st, &sid);
-        let _ = std::fs::remove_dir_all(st.session_dir(&sid));
-    }
-    store::project_delete(&st.db.lock(), &id)
+    Ok(())
 }
 
 // ───────────────────────────── Workspace (F11) ─────────────────────────────
@@ -329,7 +281,7 @@ pub async fn workspace_create(
         }
     };
     let rollback = |st: &AppState| {
-        let _ = store::workspace_delete(&st.db.lock(), &ws_id);
+        let _ = store::discard_failed_workspace(&st.db.lock(), &ws_id);
     };
     let (ws, session) = match created {
         Ok(x) => x,
@@ -341,8 +293,9 @@ pub async fn workspace_create(
             return Err(e);
         }
     };
-    if let Err(e) = agent::spawn_sidecar(&st, &session, &ws).await {
+    if let Err(e) = agent::spawn_new_sidecar(&st, &session, &ws).await {
         rollback(&st);
+        let _ = std::fs::remove_dir_all(crate::project_skills::plugin_path(&st.session_dir(&session.id)));
         if dir_kind == "worktree" {
             let _ = git::worktree_remove(Path::new(&project.path), Path::new(&work_dir), true).await;
         }
@@ -440,6 +393,7 @@ pub async fn workspace_delete(st: St<'_>, id: String, remove_worktree_dir: bool,
     }
     crate::workspace_terminal::stop_for_workspace(&st, &ws).await?;
     stop_workspace_sessions(&st, &id).await;
+    kill_live_terminals(&st, "herdsman.workspace", &id).await?;
     let sessions = store::session_list(&st.db.lock(), &id)?;
     for s in &sessions {
         if let (Some(t), Some(hc)) = (&s.hc_terminal, &st.hc) {
@@ -452,7 +406,13 @@ pub async fn workspace_delete(st: St<'_>, id: String, remove_worktree_dir: bool,
             agent::backfill_session_index(&state, &session);
         }
     }).await.map_err(|e| AppError::new("index_failed", e.to_string()))?;
-    store::workspace_keep_history(&st.db.lock(), &id, removed)?;
+    {
+        let mut db = st.db.lock();
+        let tx = db.transaction()?;
+        store::workspace_keep_history(&tx, &id, removed)?;
+        tx.execute("UPDATE sessions SET status = 'done', hc_terminal = NULL WHERE workspace_id = ?1", [&id])?;
+        tx.commit()?;
+    }
     st.emit("workspace:changed", json!({"project_id": ws.project_id}));
     Ok(())
 }
@@ -502,6 +462,7 @@ pub async fn session_create(
     permission_mode: Option<String>,
     title: Option<String>,
 ) -> AppResult<Session> {
+    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
     let engine = engine.unwrap_or_else(|| "claude".into());
     check_engine(&engine)?;
     let mode = permission_mode.as_deref();
@@ -525,8 +486,9 @@ pub async fn session_create(
         let s = store::new_conversation_insert(&db, &workspace_id, &engine, mode, title)?;
         (ws, s)
     };
-    if let Err(e) = agent::spawn_sidecar(&st, &s, &ws).await {
+    if let Err(e) = agent::spawn_new_sidecar(&st, &s, &ws).await {
         let _ = st.db.lock().execute("DELETE FROM sessions WHERE id = ?1", [&s.id]);
+        let _ = std::fs::remove_dir_all(crate::project_skills::plugin_path(&st.session_dir(&s.id)));
         return Err(e);
     }
     store::session_get(&st.db.lock(), &s.id)
@@ -534,12 +496,13 @@ pub async fn session_create(
 
 #[tauri::command]
 pub async fn session_open(st: St<'_>, id: String) -> AppResult<()> {
-    let deleted = {
+    let saved = {
         let db = st.db.lock();
         let session = store::session_get(&db, &id)?;
-        store::workspace_get(&db, &session.workspace_id)?.deleted_at.is_some()
+        (session.status == "done" && session.hc_terminal.is_none())
+            || store::workspace_get(&db, &session.workspace_id)?.deleted_at.is_some()
     };
-    if deleted {
+    if saved {
         agent::open_saved_history(st.inner().clone(), id);
         return Ok(());
     }
@@ -688,6 +651,7 @@ pub async fn session_set_model(st: St<'_>, id: String, model: String) -> AppResu
 /// Resume: terminal đã kết thúc/mất → chạy lại sidecar, engine nạp lại transcript gốc; seq nối tiếp.
 #[tauri::command]
 pub async fn session_resume(st: St<'_>, id: String) -> AppResult<Session> {
+    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
     let (s, ws) = {
         let db = st.db.lock();
         let s = store::session_get(&db, &id)?;
@@ -727,6 +691,7 @@ pub async fn session_close(st: St<'_>, id: String) -> AppResult<()> {
 }
 
 pub async fn close_session(st: &AppState, id: &str) -> AppResult<()> {
+    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
     let id = id.to_string();
     let s = store::session_get(&st.db.lock(), &id)?;
     let ws = store::workspace_get(&st.db.lock(), &s.workspace_id)?;
@@ -787,10 +752,6 @@ pub struct ClaudeHitView {
     project_name: Option<String>,
 }
 
-fn workspace_for_cwd(db: &rusqlite::Connection, cwd: &str) -> Option<store::Workspace> {
-    store::workspace_list(db, None, false).ok()?.into_iter().find(|w| w.work_dir == cwd)
-}
-
 /// Tìm trong transcript Claude Code (~/.claude/projects), không phải session hc của app.
 #[tauri::command]
 pub async fn claude_search(
@@ -814,7 +775,7 @@ pub async fn claude_search(
             }
         }
         let locate = |hit: &crate::claude_history::ClaudeHit| {
-            if let Some(sessions) = palette.then(|| sessions_by_engine_id.get(hit.claude_session_id.as_str())).flatten() {
+            if let Some(sessions) = sessions_by_engine_id.get(hit.claude_session_id.as_str()) {
                 // A known conversation belongs to its managed locations, even if its old cwd matches another workspace.
                 let mut candidates = sessions.iter().filter_map(|&session| {
                     let &ws = workspaces_by_id.get(session.workspace_id.as_str())?;
@@ -831,15 +792,16 @@ pub async fn claude_search(
                 return (Some(session), Some(ws), Some(ws.project_id.as_str()));
             }
             let matches = hit.cwd.as_deref().and_then(|cwd| workspaces_by_dir.get(cwd));
-            let ws = matches.and_then(|matches| match matches.as_slice() {
-                [ws] => Some(*ws),
-                [ws, ..] if !palette => Some(*ws),
-                _ => None,
-            });
+            let ws = matches.and_then(|matches| matches.iter().copied().find(|w| {
+                Some(w.id.as_str()) == workspace_id.as_deref()
+                    && project_id.as_deref().is_none_or(|id| id == w.project_id)
+            }));
             let project = ws.map(|w| w.project_id.as_str()).or_else(|| {
-                let matches = matches?;
-                let first = matches.first()?;
-                matches.iter().all(|w| w.project_id == first.project_id).then_some(first.project_id.as_str())
+                if let Some(matches) = matches {
+                    let first = matches.first()?;
+                    return matches.iter().all(|w| w.project_id == first.project_id).then_some(first.project_id.as_str());
+                }
+                projects.iter().find(|p| Some(p.path.as_str()) == hit.cwd.as_deref()).map(|p| p.id.as_str())
             });
             (None, ws, project)
         };
@@ -863,41 +825,123 @@ pub async fn claude_search(
     Ok(hits)
 }
 
-/// Mở một conversation Claude trong Herdsman: dùng lại session đã có, hoặc tạo session mới resume từ transcript.
+/// Open a retained session in a fresh workspace when its original folder still exists.
 #[tauri::command]
-pub async fn claude_open(st: St<'_>, claude_session_id: String, cwd: String, workspace_id: Option<String>) -> AppResult<Session> {
-    let (ws, existing) = {
+pub async fn session_rehome(st: St<'_>, id: String) -> AppResult<CreatedWorkspace> {
+    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
+    let mut db = st.db.lock();
+    let tx = db.transaction()?;
+    let session = store::session_get(&tx, &id)?;
+    let old = store::workspace_get(&tx, &session.workspace_id)?;
+    let workspace = rehome_session(&tx, &session, old)?;
+    let session = store::session_get(&tx, &id)?;
+    tx.commit()?;
+    Ok(CreatedWorkspace { workspace, session })
+}
+
+fn rehome_session(db: &rusqlite::Connection, session: &Session, old: Workspace) -> AppResult<Workspace> {
+    if old.deleted_at.is_none() || !Path::new(&old.work_dir).is_dir() {
+        return Ok(old);
+    }
+    let title = session.title.as_deref().unwrap_or("Untitled session");
+    let workspace = store::workspace_insert(
+        db, &store::new_id(), &old.project_id, Some(title), "project", &old.work_dir, None, None,
+    )?;
+    db.execute(
+        "UPDATE sessions SET workspace_id = ?2, title = COALESCE(title, ?3), status = 'done',
+         hc_terminal = NULL, pinned_tab = 1 WHERE id = ?1",
+        rusqlite::params![session.id, workspace.id, title],
+    )?;
+    db.execute("UPDATE message_fts SET workspace_id = ?2 WHERE session_id = ?1",
+        rusqlite::params![session.id, workspace.id])?;
+    Ok(workspace)
+}
+
+#[tauri::command]
+pub async fn claude_open(st: St<'_>, claude_session_id: String, workspace_id: Option<String>) -> AppResult<CreatedWorkspace> {
+    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
+    let state = st.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let projects = crate::claude_history::claude_dir().map(|dir| dir.join("projects"));
+        import_claude(&state, &claude_session_id, workspace_id.as_deref(), projects.as_deref())
+    }).await.map_err(|e| AppError::new("claude_import_failed", e.to_string()))?
+}
+
+fn import_claude(
+    st: &AppState, id: &str, workspace_id: Option<&str>, projects: Option<&Path>,
+) -> AppResult<CreatedWorkspace> {
+    let existing = {
         let db = st.db.lock();
-        let ws = match workspace_id {
-            Some(id) => Some(store::workspace_get(&db, &id)?).filter(|w| w.work_dir == cwd),
-            None => workspace_for_cwd(&db, &cwd),
+        let linked = store::session_all(&db)?.into_iter()
+            .filter(|s| s.engine == "claude" && s.engine_session_id.as_deref() == Some(id));
+        let mut matches = linked.map(|s| store::workspace_get(&db, &s.workspace_id).map(|w| (s, w)))
+            .collect::<AppResult<Vec<_>>>()?;
+        matches.sort_by_key(|(_, ws)| (Some(ws.id.as_str()) != workspace_id, ws.deleted_at.is_some()));
+        matches.into_iter().next()
+    };
+    if let Some((session, old)) = existing {
+        let mut db = st.db.lock();
+        let tx = db.transaction()?;
+        let workspace = rehome_session(&tx, &session, old)?;
+        let session = store::session_get(&tx, &session.id)?;
+        tx.commit()?;
+        return Ok(CreatedWorkspace { workspace, session });
+    }
+    let path = projects.and_then(|dir| crate::claude_history::session_path(dir, id))
+        .ok_or_else(|| AppError::new("claude_transcript_missing", "Claude Code transcript not found"))?;
+    let hit = crate::claude_history::details(&path)
+        .ok_or_else(|| AppError::new("claude_transcript_empty", "The Claude Code transcript has no conversation"))?;
+    let cwd = hit.cwd.as_deref().ok_or_else(|| AppError::new("claude_cwd_missing", "The transcript has no working folder"))?;
+    if !Path::new(cwd).is_absolute() {
+        return Err(AppError::new("claude_cwd_invalid", "The transcript has an invalid working folder"));
+    }
+    let title = hit.title.as_deref().unwrap_or("Claude conversation");
+
+    let mut db = st.db.lock();
+    let tx = db.transaction()?;
+    let locations = store::workspace_list(&tx, None, true)?;
+    let workspace = locations.iter()
+        .find(|ws| Some(ws.id.as_str()) == workspace_id && ws.deleted_at.is_none() && ws.work_dir == cwd);
+    let workspace = match workspace {
+        Some(ws) => ws.clone(),
+        None => {
+            let matching_project = locations.iter().find(|ws| ws.work_dir == cwd).map(|ws| &ws.project_id);
+            let project = match store::project_list(&tx)?.into_iter()
+                .find(|p| p.path == cwd || Some(&p.id) == matching_project) {
+                Some(project) => project,
+                None => {
+                    let name = Path::new(cwd).file_name().and_then(|n| n.to_str()).unwrap_or(cwd);
+                    store::project_add(&tx, name, cwd)?
+                }
+            };
+            store::workspace_insert(&tx, &store::new_id(), &project.id, Some(title), "project", cwd, None, None)?
         }
-            .ok_or_else(|| AppError::new("no_workspace", "This conversation's folder is not a workspace in Herdsman"))?;
-        let existing = store::session_list(&db, &ws.id)?
-            .into_iter()
-            .find(|s| s.engine_session_id.as_deref() == Some(claude_session_id.as_str()));
-        (ws, existing)
     };
-    if let Some(s) = existing {
-        return Ok(s);
+    let session = store::session_insert(&tx, &workspace.id, "claude", store::DEFAULT_MODE, Some(title))?;
+    let dir = st.session_dir(&session.id);
+    let saved = (|| -> AppResult<Session> {
+        store::session_set_field(&tx, &session.id, "engine_session_id", Some(id))?;
+        store::session_set_status(&tx, &session.id, "done")?;
+        let session = store::session_get(&tx, &session.id)?;
+        std::fs::create_dir_all(&dir)?;
+        let mut events = std::io::BufWriter::new(std::fs::File::create(dir.join("events.ndjson"))?);
+        crate::claude_history::import_messages(&path, &mut events)?;
+        std::io::Write::flush(&mut events)?;
+        std::fs::write(dir.join("meta.json"), json!({"engine_session_id": id}).to_string())?;
+        tx.commit()?;
+        Ok(session)
+    })();
+    drop(db);
+    match saved {
+        Ok(session) => {
+            agent::backfill_session_index(st, &session);
+            Ok(CreatedWorkspace { workspace, session })
+        }
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(dir);
+            Err(error)
+        }
     }
-    if ws.deleted_at.is_some() {
-        return Err(AppError::new("workspace_deleted", "This workspace was deleted"));
-    }
-    let s = {
-        let db = st.db.lock();
-        let s = store::session_insert(&db, &ws.id, "claude", store::DEFAULT_MODE, None)?;
-        store::session_set_field(&db, &s.id, "engine_session_id", Some(&claude_session_id))?;
-        s
-    };
-    let dir = st.session_dir(&s.id);
-    std::fs::create_dir_all(&dir)?;
-    std::fs::write(dir.join("meta.json"), json!({ "engine_session_id": claude_session_id }).to_string())?;
-    if let Err(e) = agent::spawn_sidecar(&st, &s, &ws).await {
-        let _ = st.db.lock().execute("DELETE FROM sessions WHERE id = ?1", [&s.id]);
-        return Err(e);
-    }
-    store::session_get(&st.db.lock(), &s.id)
 }
 
 #[tauri::command]
@@ -908,6 +952,7 @@ pub async fn codex_threads(st: St<'_>, workspace_id: String) -> AppResult<Value>
 
 #[tauri::command]
 pub async fn codex_open(st: St<'_>, workspace_id: String, thread_id: String) -> AppResult<Session> {
+    let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
     let ws = store::workspace_get(&st.db.lock(), &workspace_id)?;
     if ws.deleted_at.is_some() {
         return Err(AppError::new("workspace_deleted", "This workspace was deleted"));
@@ -1029,6 +1074,24 @@ pub async fn files_changed(st: St<'_>, workspace_id: String) -> AppResult<Vec<Ch
 }
 
 #[tauri::command]
+pub async fn git_history(st: St<'_>, workspace_id: String) -> AppResult<Option<git::History>> {
+    let ws = store::workspace_get(&st.db.lock(), &workspace_id)?;
+    git::history(Path::new(&ws.work_dir)).await
+}
+
+#[tauri::command]
+pub async fn git_commit_changes(st: St<'_>, workspace_id: String, commit: String) -> AppResult<Vec<git::Change>> {
+    let ws = store::workspace_get(&st.db.lock(), &workspace_id)?;
+    git::commit_changes(Path::new(&ws.work_dir), &commit).await
+}
+
+#[tauri::command]
+pub async fn git_commit_file_diff(st: St<'_>, workspace_id: String, commit: String, path: String, original: Option<String>) -> AppResult<String> {
+    let ws = store::workspace_get(&st.db.lock(), &workspace_id)?;
+    git::commit_file_diff(Path::new(&ws.work_dir), &commit, &path, original.as_deref()).await
+}
+
+#[tauri::command]
 pub async fn project_files_changed(st: St<'_>, project_id: String) -> AppResult<Vec<ChangedFile>> {
     let project = store::project_get(&st.db.lock(), &project_id)?;
     Ok(git::project_changed_files(Path::new(&project.path)).await?.into_iter()
@@ -1065,6 +1128,50 @@ pub async fn project_file_read(st: St<'_>, project_id: String, path: String) -> 
     let project = store::project_get(&st.db.lock(), &project_id)?;
     tokio::task::spawn_blocking(move || crate::project_files::read(Path::new(&project.path), &path))
         .await.map_err(|error| AppError::new("file_task", error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn editor_lsp_open(
+    st: St<'_>, lsp: State<'_, crate::editor_lsp::EditorLsp>, session: String,
+    project_id: String, workspace_id: Option<String>, path: String, text: String,
+) -> AppResult<()> {
+    let root = {
+        let db = st.db.lock();
+        if Path::new(&path).is_absolute() {
+            let workspace = workspace_id.as_deref().map(|id| store::workspace_get(&db, id)).transpose()?
+                .filter(|workspace| workspace.project_id == project_id)
+                .ok_or_else(|| AppError::new("editor_lsp", "Type hover is unavailable outside this workspace."))?;
+            workspace.work_dir
+        } else {
+            store::project_get(&db, &project_id)?.path
+        }
+    };
+    let (root, file) = tokio::task::spawn_blocking(move || -> AppResult<_> {
+        let root = Path::new(&root).canonicalize()?;
+        let file = if Path::new(&path).is_absolute() {
+            crate::project_files::resolve_workspace(&root, Path::new(&path))?.0
+        } else {
+            crate::project_files::resolve(&root, &path)?
+        };
+        if !file.is_file() {
+            return Err(AppError::new("editor_lsp", "Type hover requires a regular workspace file."));
+        }
+        Ok((root, file))
+    }).await.map_err(|_| AppError::new("editor_lsp", "Could not locate the editor file."))??;
+    lsp.open(session, &root, &file, text).await
+}
+
+#[tauri::command]
+pub async fn editor_lsp_hover(
+    lsp: State<'_, crate::editor_lsp::EditorLsp>, session: String, text: String, line: u32, character: u32,
+) -> AppResult<Option<String>> {
+    lsp.hover(&session, text, line, character).await
+}
+
+#[tauri::command]
+pub async fn editor_lsp_close(lsp: State<'_, crate::editor_lsp::EditorLsp>, session: String) -> AppResult<()> {
+    lsp.close(&session).await;
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -1223,5 +1330,59 @@ mod font_tests {
         eprintln!("font families: {}", f.len());
         assert!(f.iter().any(|n| n == "Menlo"), "Menlo ships with macOS");
         assert!(f.iter().all(|n| !n.starts_with('.')));
+    }
+}
+
+#[cfg(test)]
+mod retained_session_tests {
+    use super::*;
+
+    #[test]
+    fn imports_a_standalone_claude_session_once_with_history() {
+        let root = tempfile::tempdir().unwrap();
+        let projects = root.path().join("claude/projects");
+        let project_dir = projects.join("source");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let id = "01234567-89ab-cdef-0123-456789abcdef";
+        let prompt = json!({"type": "user", "cwd": root.path(), "message": {"content": "Keep this prompt"}});
+        std::fs::write(project_dir.join(format!("{id}.jsonl")), prompt.to_string()).unwrap();
+        let state = AppState::new(
+            Box::new(|_, _| {}), store::open_memory().unwrap(), root.path().join("app"), None, None, "sidecar".into(),
+        );
+        let opened = import_claude(&state, id, None, Some(&projects)).unwrap();
+        assert_eq!(opened.workspace.name.as_deref(), Some("Keep this prompt"));
+        assert_eq!(opened.session.status, "done");
+        assert_eq!(opened.session.engine_session_id.as_deref(), Some(id));
+        let events = std::fs::read_to_string(state.session_dir(&opened.session.id).join("events.ndjson")).unwrap();
+        assert!(events.contains("Keep this prompt"));
+        let reopened = import_claude(&state, id, None, Some(&projects)).unwrap();
+        assert_eq!(reopened.session.id, opened.session.id);
+        assert_eq!(reopened.workspace.id, opened.workspace.id);
+    }
+
+    #[test]
+    fn rehomes_the_same_session_and_moves_its_search_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        let db = store::open_memory().unwrap();
+        let project = store::project_add(&db, "Project", cwd).unwrap();
+        let old = store::workspace_insert(&db, "old", &project.id, None, "project", cwd, None, None).unwrap();
+        let session = store::session_insert(&db, &old.id, "echo", "ask", Some("A conversation")).unwrap();
+        store::index_messages(&db, &[store::IndexItem {
+            session_id: &session.id, workspace_id: &old.id, project_id: &project.id,
+            seq: 1, role: "user", text: "Keep this message",
+        }], &session.id, 1).unwrap();
+
+        store::workspace_keep_history(&db, &old.id, false).unwrap();
+        let old = store::workspace_get(&db, &old.id).unwrap();
+        let workspace = rehome_session(&db, &session, old).unwrap();
+        assert_ne!(workspace.id, session.workspace_id);
+        assert_eq!(workspace.name.as_deref(), session.title.as_deref());
+        let saved = store::session_get(&db, &session.id).unwrap();
+        assert_eq!(saved.workspace_id, workspace.id);
+        assert_eq!(saved.status, "done");
+        assert_eq!(store::search(&db, "message", Some(&workspace.id), 10).unwrap()[0].session_id, session.id);
+        assert!(store::search_sessions(&db, "", None, None, 10).unwrap().is_empty());
+        assert_eq!(rehome_session(&db, &saved, workspace.clone()).unwrap().id, workspace.id);
     }
 }

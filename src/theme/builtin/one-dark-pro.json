@@ -1,0 +1,19 @@
+{
+  "name": "One Dark Pro",
+  "appearance": "dark",
+  "background": "#282c34",
+  "foreground": "#abb2bf",
+  "selection": "#3e4451",
+  "colors": {
+    "surface": "#21252b",
+    "muted_foreground": "#a0a8b7",
+    "primary": "#c678dd",
+    "ring": "#61afef",
+    "working": "#61afef",
+    "error": "#f1848e",
+    "done": "#98c379",
+    "blocked": "#e5c07b",
+    "term_bg": "#282c34",
+    "term_fg": "#abb2bf"
+  }
+}

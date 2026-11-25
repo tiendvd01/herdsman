@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { TruncatedText } from '@/components/ui/truncated-text';
 import { cn } from '@/lib/utils';
 import type { DiffLine } from './lineDiff';
@@ -15,7 +16,10 @@ export function DiffStat({ add, del, className }: { add: number; del: number; cl
 }
 
 /** Line diff. `bare` drops the outer border/header so it can sit inside a card. */
-export function Diff({ file, lines, maxHeight = 360, bare }: { file?: string; lines: DiffLine[]; maxHeight?: number; bare?: boolean }) {
+export function Diff({ file, lines, maxHeight = 360, bare, renderLine }: {
+  file?: string; lines: DiffLine[]; maxHeight?: number; bare?: boolean;
+  renderLine?: (index: number) => ReactNode;
+}) {
   const { add, del } = diffStats(lines);
   return (
     <div className={cn('overflow-hidden', !bare && 'rounded-md border border-border')} data-testid="diff">
@@ -37,7 +41,7 @@ export function Diff({ file, lines, maxHeight = 360, bare }: { file?: string; li
             )}
           >
             <span className="inline-block w-3.5 select-none">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
-            {l.text || ' '}
+            {renderLine?.(i) ?? (l.text || ' ')}
           </div>
         ))}
       </pre>

@@ -20,7 +20,7 @@ export const DEFAULT_DARK = 'dark';
 
 const raw = import.meta.glob('./builtin/*.json', { eager: true, query: '?raw', import: 'default' }) as Record<string, string>;
 
-const BUILTIN: ResolvedTheme[] = ['light', 'paper', 'dark'].map((id) => {
+const BUILTIN: ResolvedTheme[] = ['light', 'paper', 'clear-light', 'minimal', 'dark', 'catppuccin-frappe', 'one-dark-pro'].map((id) => {
   const text = raw[`./builtin/${id}.json`];
   const r = parseThemeFile(`${id}.json`, text, 'builtin');
   if (!r.ok) throw new Error(`built-in theme ${id}: ${r.error.message} (${r.error.field ?? ''})`);

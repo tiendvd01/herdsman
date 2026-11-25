@@ -16,6 +16,7 @@ import { toast } from '@/components/ui/toast';
 import { api, errMsg } from '@/lib/api';
 import { isDirty, useFileStore, type FileTab } from '@/stores/useFileStore';
 import { useQueryClient } from '@tanstack/react-query';
+import { editorHover } from './editorHover';
 
 const fileHighlightStyle = HighlightStyle.define([
   { tag: [tags.keyword, tags.operatorKeyword], color: 'var(--st-working)' },
@@ -50,9 +51,10 @@ async function languageFor(path: string) {
   }
 }
 
-export function FileEditor({ file }: { file: FileTab }) {
+export function FileEditor({ file, workspaceId }: { file: FileTab; workspaceId?: string }) {
   const [preview, setPreview] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [hoverStatus, setHoverStatus] = useState<string | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const qc = useQueryClient();
   const save = useRef<() => void>(() => {});
@@ -84,6 +86,9 @@ export function FileEditor({ file }: { file: FileTab }) {
   useEffect(() => {
     if (!host.current || !ready) return;
     const initial = useFileStore.getState().tabs.find((item) => item.id === file.id)?.draft ?? '';
+    const hover = /\.(?:[cm]?[jt]s|[jt]sx)$/i.test(file.path)
+      ? editorHover(file.projectId, workspaceId, file.path, initial, setHoverStatus)
+      : undefined;
     const lineEnding = initial.includes('\r\n') && !initial.replaceAll('\r\n', '').includes('\n') ? '\r\n' : '\n';
     const language = new Compartment();
     const state = EditorState.create({
@@ -94,7 +99,7 @@ export function FileEditor({ file }: { file: FileTab }) {
         EditorView.editable.of(writable),
         EditorView.contentAttributes.of({ 'aria-label': 'File contents', spellcheck: 'false' }),
         lineNumbers(), highlightActiveLine(), highlightActiveLineGutter(),
-        history(), language.of([]), syntaxHighlighting(fileHighlightStyle),
+        history(), language.of([]), syntaxHighlighting(fileHighlightStyle), hover?.extensions ?? [],
         keymap.of([{ key: 'Mod-s', run: () => { if (writable) save.current(); return true; } }, ...defaultKeymap, ...historyKeymap]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) useFileStore.getState().edit(file.id, update.state.sliceDoc());
@@ -118,15 +123,19 @@ export function FileEditor({ file }: { file: FileTab }) {
     }).catch(() => {});
     return () => {
       disposed = true;
+      hover?.dispose();
       view.destroy();
     };
-  }, [file.id, file.path, ready, writable]);
+  }, [file.id, file.path, file.projectId, workspaceId, ready, writable]);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={file.name}>
       <div className="flex min-h-11 shrink-0 items-center gap-2 border-b border-border bg-surface px-3 text-xs">
         <FileText className="size-4 shrink-0 text-muted-foreground" />
         <TruncatedText className="min-w-0 flex-1 truncate text-muted-foreground">{file.path}</TruncatedText>
+        {hoverStatus && <Badge variant="outline" role="status" title={hoverStatus}>
+          {hoverStatus === 'Starting type hover…' ? hoverStatus : 'Type hover unavailable'}
+        </Badge>}
         {ready && !writable ? <Badge variant="outline">Read-only</Badge> : null}
         {canPreview ? (
           <Button size="xs" variant="outline" onClick={() => setPreview(!preview)}>

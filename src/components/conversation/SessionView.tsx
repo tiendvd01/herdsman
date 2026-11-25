@@ -1,4 +1,4 @@
-// One session: opens the event stream while visible, closes it on leave (the session keeps running in hc).
+// Keep streaming after the tab is first shown, until its panel is removed.
 import { useEffect, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { api, errMsg } from '@/lib/api';
@@ -31,7 +31,7 @@ export function SessionView({ session, ws }: { session: Session; ws: Workspace }
       api.sessionCloseView(session.id).catch(() => {});
       useSessionStore.getState().release(session.id); // free memory; reopening replays from the event log
     };
-  }, [session.id, nonce]);
+  }, [session.id, historyOnly, nonce]);
 
   const needsResume = status === 'error' || (status === 'done' && view?.closed);
 

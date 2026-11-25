@@ -6,6 +6,7 @@ import { AlertCircle, Info, Terminal } from 'lucide-react';
 import { useSessionStore, type Item } from '@/stores/useSessionStore';
 import { api, errMsg } from '@/lib/api';
 import { toast } from '@/components/ui/toast';
+import { Button } from '@/components/ui/button';
 import { useFileStore } from '@/stores/useFileStore';
 import type { ChatAttachment } from '@/lib/types';
 import { ImagePreview, ImageThumbnail, UnavailableImage, type ImageSelection } from './ImagePreview';
@@ -124,6 +125,36 @@ const Row = memo(function Row({ sessionId, index, onSelect, openFile }: {
   );
 });
 
+function SessionToolCard({ item, sessionId }: { item: Extract<Item, { kind: 'tool' }>; sessionId: string }) {
+  const disconnected = useSessionStore((s) => {
+    const session = s.sessions[sessionId];
+    return !!(session?.closed || session?.error);
+  });
+  const command = item.input.command;
+  const eligible = item.tool === 'Bash' && typeof command === 'string' &&
+    /^\s*["']?(?:[^\s"']*\/)?hc["']?\s+(?:run|read|wait|attach)\b/.test(command);
+  const blocked = !!item.shell?.permission;
+  const { data: target, error } = useQuery({
+    queryKey: ['hc-output-target', sessionId, item.tool_use_id, !!item.result, item.shell?.permission],
+    queryFn: eligible && !blocked ? () => api.hcOutputTarget(sessionId, item.tool_use_id) : skipToken,
+    refetchInterval: !blocked && !item.result ? 1000 : false,
+    retry: false,
+  });
+  const action = target && !blocked ? (
+    <Button
+      variant="ghost"
+      size="xs"
+      className="mr-2 shrink-0"
+      onClick={() => void api.hcOutputOpen(sessionId, item.tool_use_id, target).catch((e) => toast(errMsg(e), 'error'))}
+    >
+      Open Output
+    </Button>
+  ) : eligible && error && item.result && !blocked ? (
+    <span className="mr-2 shrink-0 text-xs text-muted-foreground">Output unavailable</span>
+  ) : null;
+  return <ToolCard item={item} disconnected={disconnected} action={action} />;
+}
+
 function ItemView({ item, sessionId, onSelect, openFile }: {
   item: Item;
   sessionId: string;
@@ -177,7 +208,7 @@ function ItemView({ item, sessionId, onSelect, openFile }: {
     case 'tool':
       return (
         <div className="pt-4">
-          <ToolCard item={item} />
+          <SessionToolCard item={item} sessionId={sessionId} />
         </div>
       );
     case 'turn_end':

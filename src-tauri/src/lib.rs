@@ -1,7 +1,10 @@
 pub mod agent;
 pub mod commands;
 mod project_files;
+mod project_skills;
+mod editor_lsp;
 mod workspace_terminal;
+mod hc_output;
 pub mod error;
 pub mod git;
 pub mod claude_history;
@@ -17,24 +20,30 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
-/// Đường dẫn sidecar: biến môi trường → mã nguồn trong repo (dev) → resource đóng gói.
+/// Đường dẫn sidecar: biến môi trường → resource đóng gói → mã nguồn trong repo.
 fn sidecar_entry(app: &tauri::AppHandle) -> PathBuf {
     if let Ok(p) = std::env::var("HERDSMAN_SIDECAR") {
         return PathBuf::from(p);
     }
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sidecar/src/index.mjs");
-    if dev.exists() {
-        return dev.canonicalize().unwrap_or(dev);
+    if let Ok(resources) = app.path().resource_dir() {
+        let bundled = resources.join("sidecar/src/index.mjs");
+        if bundled.is_file() && resources.join("sidecar/node_modules").is_dir() {
+            return bundled;
+        }
     }
-    app.path()
-        .resource_dir()
-        .map(|d| d.join("sidecar/src/index.mjs"))
-        .unwrap_or(dev)
+    dev.canonicalize().unwrap_or(dev)
 }
 
 fn find_node() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("HERDSMAN_NODE") {
         return Some(PathBuf::from(p));
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        let bundled = executable.with_file_name("herdsman-node");
+        if bundled.is_file() {
+            return Some(bundled);
+        }
     }
     if let Some(p) = hc::which_in_login_shell("node") {
         return Some(p);
@@ -42,17 +51,42 @@ fn find_node() -> Option<PathBuf> {
     ["/opt/homebrew/bin/node", "/usr/local/bin/node"].iter().map(PathBuf::from).find(|p| p.exists())
 }
 
-/// Spec 006: View → Zoom In / Zoom Out / Actual Size. The frontend owns the zoom state, so the menu only
-/// emits `ui-zoom` ("in" | "out" | "reset"). Built on the default menu so Edit (copy/paste) keeps working.
-fn install_zoom_menu(app: &tauri::App) -> tauri::Result<()> {
+const ZOOM_MENU_IDS: [&str; 3] = ["zoom_in", "zoom_out", "zoom_reset"];
+const CLOSE_TAB_MENU_ID: &str = "close_tab";
+
+fn install_shortcut_menu(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
     let handle = app.handle();
     let menu = Menu::default(handle)?;
     let items = [
-        MenuItem::with_id(handle, "zoom_in", "Zoom In", true, Some("CmdOrCtrl+="))?,
-        MenuItem::with_id(handle, "zoom_out", "Zoom Out", true, Some("CmdOrCtrl+-"))?,
-        MenuItem::with_id(handle, "zoom_reset", "Actual Size", true, Some("CmdOrCtrl+0"))?,
+        MenuItem::with_id(handle, ZOOM_MENU_IDS[0], "Zoom In", true, Some("CmdOrCtrl+="))?,
+        MenuItem::with_id(handle, ZOOM_MENU_IDS[1], "Zoom Out", true, Some("CmdOrCtrl+-"))?,
+        MenuItem::with_id(handle, ZOOM_MENU_IDS[2], "Actual Size", true, Some("CmdOrCtrl+0"))?,
     ];
+    // The webview handles Close Tab so holding the key cannot repeatedly close tabs.
+    let close_tab = MenuItem::with_id(handle, CLOSE_TAB_MENU_ID, "Close Tab", true, None::<&str>)?;
+    // The default native Close Window accelerator consumes Cmd+W before the webview sees it.
+    for item in menu.items()? {
+        let Some(submenu) = item.as_submenu() else { continue };
+        let title = submenu.text()?;
+        if title != "Window" && title != "File" {
+            continue;
+        }
+        #[cfg(target_os = "macos")]
+        for item in submenu.items()? {
+            if let Some(predefined) = item.as_predefined_menuitem() {
+                let text = predefined.text()?;
+                if text == "Close" || text == "Close Window" {
+                    submenu.remove(predefined)?;
+                }
+            }
+        }
+        let close_menu = if cfg!(target_os = "macos") { "File" } else { "Window" };
+        if title == close_menu {
+            submenu.append(&close_tab)?;
+        }
+    }
+
     let view = menu
         .items()?
         .into_iter()
@@ -76,9 +110,10 @@ fn install_zoom_menu(app: &tauri::App) -> tauri::Result<()> {
             "zoom_in" => "in",
             "zoom_out" => "out",
             "zoom_reset" => "reset",
+            CLOSE_TAB_MENU_ID => "close-tab",
             _ => return,
         };
-        let _ = app.emit("ui-zoom", dir);
+        let _ = app.emit_to("main", "ui-shortcut", dir);
     });
     Ok(())
 }
@@ -129,6 +164,33 @@ fn notifications_request_permission() {
 }
 
 #[tauri::command]
+fn set_shortcut_accelerators(
+    app: tauri::AppHandle,
+    accelerators: [Option<String>; 3],
+    close_tab_label: String,
+) -> Result<(), String> {
+    let menu = app.menu().ok_or_else(|| "Application menu is unavailable".to_owned())?;
+    let mut updated = 0;
+    for item in menu.items().map_err(|error| error.to_string())? {
+        let Some(submenu) = item.as_submenu() else { continue };
+        for item in submenu.items().map_err(|error| error.to_string())? {
+            let Some(item) = item.as_menuitem() else { continue };
+            if item.id().as_ref() == CLOSE_TAB_MENU_ID {
+                item.set_text(format!("Close Tab ({close_tab_label})")).map_err(|error| error.to_string())?;
+                updated += 1;
+            } else if let Some(index) = ZOOM_MENU_IDS.iter().position(|id| *id == item.id().as_ref()) {
+                item.set_accelerator(accelerators[index].as_deref()).map_err(|error| error.to_string())?;
+                updated += 1;
+            }
+        }
+    }
+    if updated != accelerators.len() + 1 {
+        return Err("Keyboard shortcut menu items are unavailable".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn exit_after_file_review(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -161,7 +223,7 @@ pub fn run() {
                 hc_connected: AtomicBool::new(false),
                 hc_version: Mutex::new(None),
             });
-            install_zoom_menu(app)?;
+            install_shortcut_menu(app)?;
             #[cfg(target_os = "macos")]
             request_notification_permission();
             app.manage(st.clone());
@@ -173,6 +235,7 @@ pub fn run() {
             Ok(())
         })
         .manage(workspace_terminal::Viewers::default())
+        .manage(editor_lsp::EditorLsp::default())
         .invoke_handler(tauri::generate_handler![
             workspace_terminal::workspace_terminal_create,
             workspace_terminal::workspace_terminal_list,
@@ -188,9 +251,10 @@ pub fn run() {
             commands::settings_get,
             commands::settings_set,
             commands::project_list,
+            project_skills::project_skill_catalog,
+            project_skills::project_skill_change,
             commands::project_add,
             commands::project_rename,
-            commands::project_delete_preview,
             commands::project_delete,
             commands::workspace_list,
             commands::workspace_create,
@@ -220,16 +284,26 @@ pub fn run() {
             commands::search,
             commands::claude_search,
             commands::claude_open,
+            commands::session_rehome,
             commands::codex_threads,
             commands::codex_open,
             commands::terminal_read,
+            hc_output::hc_output_target,
+            hc_output::hc_output_open,
+            hc_output::hc_output_read,
             commands::agent_tree,
+            commands::git_history,
+            commands::git_commit_changes,
+            commands::git_commit_file_diff,
             commands::files_changed,
             commands::project_files_changed,
             commands::file_diff,
             commands::project_files_list,
             commands::project_files_search,
             commands::project_file_read,
+            commands::editor_lsp_open,
+            commands::editor_lsp_hover,
+            commands::editor_lsp_close,
             commands::session_file_read,
             commands::session_file_exists,
             commands::absolute_file_read,
@@ -238,6 +312,7 @@ pub fn run() {
             commands::project_markdown_download,
             notifications_request_permission,
             exit_after_file_review,
+            set_shortcut_accelerators,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start Herdsman")

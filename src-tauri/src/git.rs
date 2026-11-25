@@ -1,5 +1,6 @@
 //! git worktree qua CLI `git` (research R1): giữ hook, config, credential của người dùng.
 use crate::error::{AppError, AppResult};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -17,6 +18,107 @@ async fn git_output(dir: &Path, args: &[&str], allow_differences: bool) -> AppRe
 
 pub async fn is_repo(dir: &Path) -> bool {
     git(dir, &["rev-parse", "--git-dir"]).await.is_ok()
+}
+
+const HISTORY_LIMIT: usize = 200;
+
+#[derive(serde::Serialize)]
+struct BranchLabel {
+    name: String,
+    remote: bool,
+}
+
+#[derive(serde::Serialize)]
+pub struct Commit {
+    id: String,
+    short_id: String,
+    subject: String,
+    parents: Vec<String>,
+    branches: Vec<BranchLabel>,
+}
+
+#[derive(serde::Serialize)]
+pub struct History {
+    commits: Vec<Commit>,
+    truncated: bool,
+}
+
+pub async fn history(dir: &Path) -> AppResult<Option<History>> {
+    let repo = Command::new("git")
+        .arg("-C").arg(dir)
+        .args(["rev-parse", "--git-dir"])
+        .env("LC_ALL", "C")
+        .output().await?;
+    if !repo.status.success() {
+        let message = String::from_utf8_lossy(&repo.stderr);
+        if message.starts_with("fatal: not a git repository") {
+            return Ok(None);
+        }
+        return Err(AppError::new("git", message.trim()));
+    }
+
+    let head = Command::new("git")
+        .arg("-C").arg(dir)
+        .args(["rev-parse", "--quiet", "--verify", "HEAD"])
+        .output().await?;
+    if head.status.code() == Some(1) && head.stderr.is_empty() {
+        return Ok(Some(History { commits: vec![], truncated: false }));
+    }
+    if !head.status.success() {
+        return Err(AppError::new("git", String::from_utf8_lossy(&head.stderr).trim()));
+    }
+    let head = String::from_utf8_lossy(&head.stdout);
+    let upstream = git(dir, &["rev-parse", "--verify", "@{upstream}^{commit}"]).await.ok();
+    let count = format!("--max-count={}", HISTORY_LIMIT + 1);
+    let mut args = vec![
+        "log", "--topo-order", "--no-show-signature", "--no-notes",
+        "--no-decorate", "--no-color", "-z", "--format=%H%x00%h%x00%P%x00%s",
+        &count, head.trim(),
+    ];
+    if let Some(upstream) = upstream.as_deref() {
+        args.push(upstream.trim());
+    }
+    args.push("--");
+    let refs = git(dir, &[
+        "for-each-ref", "--sort=refname", "--format=%(objectname)%09%(refname)%09%(symref)",
+        "refs/heads", "refs/remotes",
+    ]).await?;
+    let mut branches = HashMap::<&str, Vec<BranchLabel>>::new();
+    for line in refs.lines() {
+        let Some((id, reference)) = line.split_once('\t') else { continue };
+        let Some((reference, symbolic_target)) = reference.split_once('\t') else { continue };
+        if !symbolic_target.is_empty() {
+            continue;
+        }
+        let (name, remote) = if let Some(name) = reference.strip_prefix("refs/heads/") {
+            (name, false)
+        } else if let Some(name) = reference.strip_prefix("refs/remotes/") {
+            (name, true)
+        } else {
+            continue;
+        };
+        branches.entry(id).or_default().push(BranchLabel { name: name.to_owned(), remote });
+    }
+    let log = git(dir, &args).await?;
+    let mut fields = log.split_terminator('\0');
+    let mut commits = Vec::new();
+    while let Some(id) = fields.next() {
+        let (Some(short_id), Some(parents), Some(subject)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            return Err(AppError::new("git", "Could not read commit history."));
+        };
+        commits.push(Commit {
+            id: id.to_owned(),
+            short_id: short_id.to_owned(),
+            subject: subject.to_owned(),
+            parents: parents.split_whitespace().map(str::to_owned).collect(),
+            branches: branches.remove(id).unwrap_or_default(),
+        });
+    }
+    let truncated = commits.len() > HISTORY_LIMIT;
+    commits.truncate(HISTORY_LIMIT);
+    Ok(Some(History { commits, truncated }))
 }
 
 pub async fn branches(dir: &Path) -> AppResult<Vec<String>> {
@@ -149,10 +251,48 @@ pub async fn worktree_remove(project: &Path, path: &Path, force: bool) -> AppRes
     git(project, &args).await.map(|_| ())
 }
 
-struct Change {
+#[derive(serde::Serialize)]
+pub struct Change {
     status: String,
     path: String,
     original: Option<String>,
+}
+
+async fn commit_diff_output(dir: &Path, commit: &str, options: &[&str], paths: &[String]) -> AppResult<String> {
+    if !matches!(commit.len(), 40 | 64) || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(AppError::new("git", "Invalid commit ID."));
+    }
+    let mut args = vec![
+        "diff-tree", "--root", "--diff-merges=first-parent", "-r", "--no-commit-id",
+        "--no-relative", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames",
+    ];
+    args.extend_from_slice(options);
+    args.extend([commit, "--"]);
+    args.extend(paths.iter().map(String::as_str));
+    git(dir, &args).await
+}
+
+pub async fn commit_changes(dir: &Path, commit: &str) -> AppResult<Vec<Change>> {
+    let output = commit_diff_output(dir, commit, &["--name-status", "-z"], &[]).await?;
+    let mut fields = output.split_terminator('\0');
+    let mut changes = Vec::new();
+    let missing_path = || AppError::new("git", "Could not read commit changes.");
+    while let Some(status) = fields.next() {
+        let first_path = fields.next().ok_or_else(missing_path)?;
+        let (status, path, original) = match status.as_bytes().first() {
+            Some(b'R' | b'C') => (&status[..1], fields.next().ok_or_else(missing_path)?, Some(first_path.to_owned())),
+            _ => (status, first_path, None),
+        };
+        changes.push(Change { status: status.to_owned(), path: path.to_owned(), original });
+    }
+    Ok(changes)
+}
+
+pub async fn commit_file_diff(dir: &Path, commit: &str, path: &str, original: Option<&str>) -> AppResult<String> {
+    let paths: Vec<_> = [Some(path), original].into_iter().flatten()
+        .map(|path| format!(":(top,literal){path}"))
+        .collect();
+    commit_diff_output(dir, commit, &["--patch"], &paths).await
 }
 
 async fn changes(dir: &Path) -> AppResult<Vec<Change>> {
@@ -244,6 +384,89 @@ mod tests {
         git(p, &["add", "."]).await.unwrap();
         git(p, &["commit", "-m", "init"]).await.unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn history_reads_worktree_head_and_preserves_merge_parents() {
+        let repo = init_repo().await;
+        let root = repo.path();
+        let empty = tempfile::tempdir().unwrap();
+        assert!(history(empty.path()).await.unwrap().is_none());
+        git(empty.path(), &["init"]).await.unwrap();
+        assert!(history(empty.path()).await.unwrap().unwrap().commits.is_empty());
+
+        git(root, &["switch", "-c", "topic"]).await.unwrap();
+        git(root, &["commit", "--allow-empty", "--allow-empty-message", "-m", ""]).await.unwrap();
+        let topic = git(root, &["rev-parse", "HEAD"]).await.unwrap();
+        git(root, &["switch", "main"]).await.unwrap();
+        git(root, &["merge", "--no-ff", "-m", "Merge topic", "topic"]).await.unwrap();
+
+        let history_main = history(root).await.unwrap().unwrap();
+        assert_eq!(history_main.commits.len(), 3);
+        let merge = &history_main.commits[0];
+        assert_eq!(merge.subject, "Merge topic");
+        assert_eq!(merge.parents.len(), 2);
+        assert_eq!(merge.parents[1], topic.trim());
+        assert!(merge.parents.iter().all(|id| history_main.commits[1..].iter().any(|commit| &commit.id == id)));
+
+        git(root, &["remote", "add", "origin", "."]).await.unwrap();
+        git(root, &["switch", "topic"]).await.unwrap();
+        git(root, &["commit", "--allow-empty", "-m", "Remote work"]).await.unwrap();
+        git(root, &["update-ref", "refs/remotes/origin/main", "HEAD"]).await.unwrap();
+        git(root, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]).await.unwrap();
+        git(root, &["switch", "main"]).await.unwrap();
+        git(root, &["branch", "--set-upstream-to=origin/main"]).await.unwrap();
+
+        let tracked = history(root).await.unwrap().unwrap();
+        let remote_tip = tracked.commits.iter().find(|commit| commit.subject == "Remote work").unwrap();
+        assert!(remote_tip.branches.iter().any(|branch| branch.name == "origin/main" && branch.remote));
+        assert!(!remote_tip.branches.iter().any(|branch| branch.name == "origin/HEAD"));
+        let local_tip = tracked.commits.iter().find(|commit| commit.id == merge.id).unwrap();
+        assert!(local_tip.branches.iter().any(|branch| branch.name == "main" && !branch.remote));
+
+        let worktrees = tempfile::tempdir().unwrap();
+        let detached = worktrees.path().join("detached");
+        git(root, &["worktree", "add", "--detach", detached.to_str().unwrap(), topic.trim()]).await.unwrap();
+        let history_detached = history(&detached).await.unwrap().unwrap();
+        assert_eq!(history_detached.commits.len(), 2);
+        assert_eq!(history_detached.commits[0].id, topic.trim());
+        assert_eq!(history_detached.commits[0].subject, "");
+        assert!(!history_detached.truncated);
+    }
+
+    #[tokio::test]
+    async fn commit_changes_and_patches_use_the_root_or_first_parent() {
+        let repo = init_repo().await;
+        let root = repo.path();
+        let initial = git(root, &["rev-parse", "HEAD"]).await.unwrap();
+        let initial = initial.trim();
+        let added = commit_changes(root, initial).await.unwrap();
+        assert_eq!((&*added[0].status, &*added[0].path), ("A", "README.md"));
+        assert!(commit_file_diff(root, initial, "README.md", None).await.unwrap().contains("+hello"));
+
+        git(root, &["switch", "-c", "topic"]).await.unwrap();
+        let renamed = "read me\t[1].md";
+        git(root, &["mv", "README.md", renamed]).await.unwrap();
+        std::fs::write(root.join("binary"), [0, 255, 11]).unwrap();
+        git(root, &["add", "binary"]).await.unwrap();
+        git(root, &["commit", "-m", "Rename and add binary"]).await.unwrap();
+        git(root, &["switch", "main"]).await.unwrap();
+        std::fs::write(root.join("main-only"), "first parent\n").unwrap();
+        git(root, &["add", "main-only"]).await.unwrap();
+        git(root, &["commit", "-m", "Main only"]).await.unwrap();
+        git(root, &["merge", "--no-ff", "-m", "Merge topic", "topic"]).await.unwrap();
+        let merge = git(root, &["rev-parse", "HEAD"]).await.unwrap();
+        let merge = merge.trim();
+        let changes = commit_changes(root, merge).await.unwrap();
+        assert_eq!(changes.len(), 2);
+        let rename = changes.iter().find(|change| change.path == renamed).unwrap();
+        assert_eq!((&*rename.status, rename.original.as_deref()), ("R", Some("README.md")));
+        std::fs::write(root.join(renamed), "Uncommitted\n").unwrap();
+        let patch = commit_file_diff(root, merge, renamed, rename.original.as_deref()).await.unwrap();
+        assert!(patch.contains("rename from README.md"));
+        assert!(!patch.contains("Uncommitted"));
+        assert!(commit_file_diff(root, merge, "binary", None).await.unwrap().contains("Binary files"));
+        assert!(commit_changes(root, "--all").await.is_err());
     }
 
     #[tokio::test]

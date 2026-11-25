@@ -88,13 +88,6 @@ export interface ThemeFile {
   error?: string | null;
 }
 
-export interface RunningRef {
-  terminal: string;
-  kind: string;
-  session_id: string | null;
-  title: string;
-}
-
 export interface AgentNode {
   terminal: string;
   title: string;
@@ -103,6 +96,19 @@ export interface AgentNode {
   kind: string | null;
   progress: number | null;
   children: AgentNode[];
+}
+
+export interface GitCommit {
+  id: string;
+  short_id: string;
+  subject: string;
+  parents: string[];
+  branches?: { name: string; remote: boolean }[];
+}
+
+export interface GitHistory {
+  commits: GitCommit[];
+  truncated: boolean;
 }
 
 export interface ChangedFile {
@@ -159,6 +165,14 @@ export interface ChatAttachment {
   attachment_id?: string;
 }
 
+export interface ShellUpdate {
+  status?: 'running' | 'success' | 'failed' | 'interrupted' | 'unknown';
+  output?: string;
+  truncated?: boolean;
+  unavailable?: boolean;
+  background?: boolean;
+}
+
 export type AgentEvent = Base &
   (
     | { type: 'session_started'; engine: string; model: string | null; cwd: string; permission_mode: PermissionMode; resumed: boolean }
@@ -166,7 +180,8 @@ export type AgentEvent = Base &
     | { type: 'user_message'; text: string; images?: ChatAttachment[]; source: 'app' | 'hc_send' }
     | { type: 'delta'; message_id: string | null; text: string; parent_tool_use_id?: string | null }
     | { type: 'assistant_message'; message_id: string | null; blocks: { kind: 'text' | 'thinking'; text: string }[]; parent_tool_use_id?: string | null }
-    | { type: 'tool_use'; tool_use_id: string; tool: string; input: Record<string, unknown>; parent_tool_use_id?: string | null }
+    | { type: 'tool_use'; tool_use_id: string; tool: string; input: Record<string, unknown>; parent_tool_use_id?: string | null; live_shell?: boolean }
+    | ({ type: 'shell_update'; tool_use_id: string } & ShellUpdate)
     | { type: 'tool_result'; tool_use_id: string; is_error: boolean; content: string }
     | { type: 'permission_request'; id: string; tool: string; input: Record<string, unknown>; cwd: string; tool_use_id?: string }
     | { type: 'permission_resolved'; id: string; decision: 'allow' | 'deny' | 'cancelled'; by: string }
@@ -176,5 +191,6 @@ export type AgentEvent = Base &
     | { type: 'status'; state: SessionStatus; kind: string | null }
     | { type: 'usage_snapshot'; context_pct: number | null; limits: UsageLimits | null }
     | { type: 'turn_end'; interrupted: boolean; is_error?: boolean; usage?: { input_tokens: number; output_tokens: number }; cost_usd?: number | null; model?: string }
+    | { type: 'project_skills_warning'; message: string }
     | { type: 'error'; code: string; message: string; recoverable: boolean }
   );

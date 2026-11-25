@@ -9,13 +9,10 @@ import { Sidebar } from './Sidebar';
 import { WorkspaceView } from './WorkspaceView';
 import { useEffect } from 'react';
 import { RightPanel } from '@/components/panels/RightPanel';
-import { installSidebarShortcuts } from '@/lib/sidebarShortcuts';
-import { installZoomShortcuts, useZoomEffect } from '@/lib/zoomShortcuts';
+import { useZoomEffect } from '@/lib/zoomShortcuts';
 import { ZoomIndicator } from './ZoomIndicator';
 
 export function AppShell() {
-  useEffect(() => installSidebarShortcuts(), []);
-  useEffect(() => installZoomShortcuts(), []);
   useZoomEffect();
   const fileClose = useFileClose();
   useEffect(() => {

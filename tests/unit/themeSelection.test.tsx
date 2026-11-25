@@ -52,12 +52,21 @@ describe('theme on <html>', () => {
   it('writes the colours and the dark class for the theme in effect', () => {
     renderHook(() => useThemeEffect(), { wrapper });
     expect(html().style.getPropertyValue('--background')).toBe('#ffffff');
+    const lightIgnored = html().style.getPropertyValue('--git-ignored-fg');
+    expect(lightIgnored).toMatch(/^#[\da-f]{6}$/i);
     expect(html().classList.contains('dark')).toBe(false);
     act(() => useUiStore.setState({ lightTheme: 'paper' }));
     expect(html().style.getPropertyValue('--background')).toBe('#f6f1e7');
     act(() => useUiStore.setState({ theme: 'dark' }));
     expect(html().style.getPropertyValue('--background')).toBe('#09090b');
     expect(html().classList.contains('dark')).toBe(true);
+    const darkIgnored = html().style.getPropertyValue('--git-ignored-fg');
+    expect(darkIgnored).toBe('#737994');
+    expect(darkIgnored).not.toBe(lightIgnored);
+    act(() => useUiStore.setState({ darkTheme: 'one-dark-pro' }));
+    expect(html().style.getPropertyValue('--git-ignored-fg')).toBe(darkIgnored);
+    act(() => useUiStore.setState({ theme: 'light', lightTheme: 'light' }));
+    expect(html().style.getPropertyValue('--git-ignored-fg')).toBe(lightIgnored);
   });
 
   it('System + macOS toggle switches Paper ↔ Dark and keeps the choice', () => {
@@ -94,6 +103,17 @@ describe('theme on <html>', () => {
     html().removeAttribute('style');
     bootTheme();
     expect(html().style.getPropertyValue('--background')).toBe('#f6f1e7');
+  });
+
+  it('derives the ignored foreground when restoring an older cached custom theme', () => {
+    useUiStore.setState({ lightTheme: 'sepia' });
+    localStorage.setItem('herdsman-theme-cache', JSON.stringify({ light: {
+      id: 'sepia', name: 'Sepia', appearance: 'light', source: 'custom',
+      colors: { background: '#fbf7ef', foreground: '#2a2622' },
+    } }));
+    bootTheme();
+    expect(html().style.getPropertyValue('--background')).toBe('#fbf7ef');
+    expect(html().style.getPropertyValue('--git-ignored-fg')).toMatch(/^#[\da-f]{6}$/i);
   });
 });
 

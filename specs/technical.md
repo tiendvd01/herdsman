@@ -17,7 +17,7 @@ design: "https://claude.ai/artifact/G5Po8nsNnNB5taxkrSwRkQ"
 | # | Quyết định | Lý do |
 |---|---|---|
 | D1 | **Engine Claude = Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`), không chạy Claude Code dạng TUI | Có stream chính thức (kể cả chữ đang chạy dở), callback `canUseTool` để duyệt quyền, không phải đọc transcript hay đọc màn hình |
-| D2 | **Runtime = `hc` (herdr-core)** | Session sống qua việc tắt app, update và restart. Đã kiểm chứng với `hc` 0.1.21 |
+| D2 | **Runtime = Herdr Core cài trên máy** | Herdsman gọi `hc` và dùng chung daemon với Herdr của cùng user. Session tiếp tục chạy khi đóng hoặc mở lại Herdsman. Phiên bản tối thiểu `hc` 0.1.21 |
 | D3 | **Mỗi session là một tiến trình `herdsman-agent` (sidecar Node) chạy trong một terminal của `hc`** | Sidecar không phải tiến trình con của app, nên tắt app thì agent vẫn chạy (khác Devdy) |
 | D4 | **App ↔ sidecar qua Unix socket + event log** | App mở lại thì nối vào socket, phát lại từ log, rồi nhận stream trực tiếp |
 | D5 | **Engine adapter**: UI chỉ biết `AgentEvent` chuẩn hoá (theo định dạng stream-json của Claude) | Codex (`codex app-server`) dùng chung UI qua adapter, giống cách Devdy đang làm |
@@ -84,6 +84,7 @@ terminal.run {
 }
 ```
 - `node` đóng gói kèm app (Tauri sidecar binary) để không phụ thuộc Node của máy. Agent SDK dùng engine Claude Code có sẵn trong package; có thể trỏ sang `claude` đã cài bằng `pathToClaudeCodeExecutable`.
+- **Project skills (spec 062)**. Khi tạo session Claude, Herdsman lấy cấu hình đã lưu theo `workspace.project_id` và xét skill Claude tự nạp tại `workspace.work_dir`. Skill hợp lệ đã bật được sao chép cùng tài nguyên đi kèm vào một plugin local riêng trong thư mục dữ liệu session. Sidecar đọc `--project-skills-plugin` và truyền cho Claude Agent SDK lúc bắt đầu query. Session đã có plugin giữ bản đã chốt khi resume. Skill bị bỏ qua hiện cảnh báo trong hội thoại. Claude tiếp tục nạp skill native theo thiết lập hiện hành.
 - Label nằm trong `hc`, nên mất DB vẫn dựng lại được danh sách project/workspace/session từ `terminal.list`. Danh sách label đầy đủ: `specs/archive/001-herdsman-use-cases/contracts/hc-integration.md`.
 
 ### 3.2 Bên trong sidecar
@@ -96,6 +97,8 @@ query({ prompt: <AsyncIterable input>, options: {
 |---|---|
 | Hội thoại nhiều lượt | Input dạng async iterable; message mới từ socket được đẩy vào hàng đợi |
 | Event log | Mọi message của SDK được gán `seq` tăng dần, append vào `<app data>/sessions/<sid>/events.ndjson`. `stream_event` (delta chữ) **chỉ gửi trực tiếp, không ghi log** cho nhẹ; message hoàn chỉnh mới được ghi |
+| Output shell Claude | Sidecar đọc phần output mới nhất của task Bash qua SDK trong lúc lệnh chạy. Mỗi cửa sổ output thay đổi và trạng thái task được ghi vào event log để phát lại trên thẻ lệnh. Claude vẫn quản lý việc chạy và duyệt lệnh. |
+| Cửa sổ output hc | Thẻ lệnh Claude mở cửa sổ riêng chỉ đọc của terminal hc đã xác nhận. Cửa sổ lấy output và trạng thái trực tiếp từ hc, gắn với địa chỉ và thời điểm tạo của terminal. Đóng cửa sổ không dừng tiến trình. |
 | Ảnh đính kèm | Sidecar lưu ảnh trong thư mục `<app data>/sessions/<sid>/images/` trước khi append tin nhắn. Log chứa loại ảnh và mã tham chiếu, còn app đọc ảnh theo session khi hiển thị hàng tương ứng. |
 | Socket | `<app data>/sock/<sid>.sock`. Lệnh: `subscribe{from_seq}`, `prompt{text, images}`, `interrupt`, `permission_response{id, decision, updatedInput?}`, `set_model`, `set_permission_mode`, `shutdown` |
 | Chế độ quyền | `permissionMode` theo session: `default` (hỏi mọi lần, mặc định), `acceptEdits` (tự cho phép sửa file trong `cwd`; lệnh shell vẫn hỏi), `bypassPermissions` (không hỏi; UI bắt xác nhận và hiện badge cảnh báo). Đổi lúc chạy bằng `set_permission_mode` |
@@ -129,6 +132,7 @@ workspaces(id, project_id, name NULL,
 sessions(id /*= Claude session id*/, workspace_id, engine, account_id, hc_terminal,
          title, status, permission_mode /*ask|accept_edits|bypass*/, model,
          last_seen_seq, pinned_tab, created_at, updated_at, ended_at)
+project_skills(project_id PRIMARY KEY REFERENCES projects ON DELETE CASCADE, config)
 accounts(id, label, engine, config_dir, uses_api_key)   -- CLAUDE_CONFIG_DIR theo tài khoản
 message_fts USING fts5(session_id, workspace_id, project_id, seq, text)  -- tìm kiếm
 ```
@@ -161,21 +165,24 @@ SQLite FTS5 (`message_fts`) lập chỉ mục cho mỗi message hoàn chỉnh. M
 └───────────────┘└───────────────────────────────────────────────────────┘└─────────────┘
 ```
 - Sidebar: project → workspace (⎇ = worktree, ▢ = thư mục project, chấm vàng = có session chờ).
-- **Codex** dùng bản CLI cục bộ trên máy, đã kiểm tra với 0.171.0. Session chạy App Server trong sidecar thuộc terminal `hc`. Menu workspace có **Codex** để tạo phiên. Sidecar kiểm tra đăng nhập trên App Server của phiên trong lúc tab mở. Hai chế độ quyền là **Ask before editing** (chỉ đọc mặc định) và **Workspace write**. Khi Codex yêu cầu thêm quyền, Herdsman chuyển quyết định của người dùng qua App Server.
+- **Codex** dùng CLI trong DMG macOS. Bản dev tìm CLI trên máy và `HERDSMAN_CODEX` có thể chỉ định CLI cho cả hai bản. Session chạy App Server trong sidecar thuộc terminal `hc`. Menu workspace có **Codex** để tạo phiên. Sidecar kiểm tra đăng nhập trên App Server của phiên trong lúc tab mở. Hai chế độ quyền là **Ask before editing** (chỉ đọc mặc định) và **Workspace write**. Khi Codex yêu cầu thêm quyền, Herdsman chuyển quyết định của người dùng qua App Server.
 
-- **Files** nằm cạnh **Git** ở panel phải và tải cây từ thư mục gốc của project đang chọn. **Git** hiển thị thay đổi của workspace. Tab file dùng CodeMirror 6 để xem và sửa văn bản.
+- **Files** nằm cạnh **Git** ở panel phải và tải cây từ thư mục gốc của project đang chọn. **Git** hiển thị thay đổi của workspace. Tên file và thư mục bị Git ignore trong cây dùng màu riêng của theme. Tab file dùng CodeMirror 6 để xem và sửa văn bản. Hover trên TypeScript và JavaScript dùng TypeScript Language Server cài trên máy, đọc theo bản nháp hiện tại. Khi thiếu server, editor vẫn cho phép sửa và lưu.
+- Tab **Git** đặt **Changes** phía trên **Git Graph** với thanh chia kéo dọc và cuộn độc lập. Git Graph hiển thị tối đa 200 commit gần nhất từ HEAD của workspace và nhánh upstream đã cấu hình, gồm cả quan hệ merge. Tên nhánh local và remote xuất hiện ở cuối dòng commit mà nhánh trỏ tới. Mỗi luồng commit đang hiển thị giữ màu riêng khi còn màu khả dụng trong bảng màu của theme. Bấm commit để mở danh sách file ngay dưới dòng. Chọn file mở tab diff chỉ đọc của commit, dùng parent thứ nhất làm mốc so sánh hoặc cây rỗng cho commit đầu tiên.
 - Đường dẫn tệp trong Rich Conversation mở tab tệp của workspace. Đường dẫn tương đối dùng thư mục làm việc của session, kể cả worktree riêng. Nếu không mở được, hội thoại giữ vị trí đọc và hiển thị lỗi.
 - Tab Markdown có chế độ **Preview** dùng chung bộ hiển thị với Rich Conversation. **Download** mở hộp thoại lưu của hệ điều hành và ghi bản sao của nội dung đang xem, kể cả thay đổi chưa lưu.
 - Ô tìm trong **Files** khớp một phần tên hoặc đường dẫn tương đối, không phân biệt hoa thường. Kết quả bao gồm file trong thư mục đang thu gọn và mở qua cùng luồng tab file. Xóa ô tìm trả về cây với các thư mục đã mở.
 - Đường dẫn tuyệt đối nhập trong **Files** hiện thành một hàng kết quả. Có thể nhấn Enter hoặc chọn hàng file trong kết quả để mở đúng file. File ngoài project mở ở chế độ chỉ đọc.
 - Dán đường dẫn tuyệt đối của thư mục để xem các file trực tiếp trong thư mục đó. Thêm `/<truy vấn>` để lọc trong thư mục và các thư mục con.
-- Hàng tab gồm các terminal của workspace, file đang mở, session chưa xong và session đang xem. Session đã xong mở lại từ lịch sử thành tab tạm.
+- Hàng tab gồm terminal, file đang mở, diff, session chưa xong và session đang xem. Session đã xong mở lại từ lịch sử thành tab tạm.
+- Kéo thả tab, workspace hoặc project để đổi vị trí. Dùng Option/Alt + mũi tên trái/phải trên thanh tab hoặc lên/xuống trong thanh bên để thao tác bằng bàn phím. Thứ tự lưu cục bộ theo từng thanh tab, từng danh sách workspace và danh sách project.
 - **Terminal** chạy shell mặc định trong thư mục làm việc của workspace bằng hc. App tìm lại shell qua label project và workspace. Terminal dùng **Code font** và **Code font size** trong Appearance. xterm.js nhận output và gửi input, resize qua Tauri tới PTY của trình xem `hc attach`. Đổi tab hoặc tắt app kết thúc trình xem. Shell do core giữ cho tới khi thoát hoặc người dùng chọn dừng.
 - **Log** hiển thị màn hình terminal của sidecar (xterm.js qua `terminal.attach`), dùng để debug. Không còn TUI của Claude Code.
 
 ### 5.1b Giao diện (shadcn/ui minimal)
 - Tailwind CSS v4 + shadcn/ui (component copy vào `src/components/ui`), Radix, `lucide-react`.
 - Token màu thang zinc khai báo bằng CSS variables cho Light/Dark (giá trị trong BR 3.2); theme mặc định theo hệ điều hành, đổi bằng nút ở sidebar.
+- Settings → Appearance có thẻ xem trước cho theme sáng, tối và theme tùy chỉnh. Hai nhóm lưu lựa chọn riêng. Catppuccin Frappé và One Dark Pro là theme Dark có sẵn.
 - Font Geist (giao diện) và Geist Mono (code, đường dẫn, branch, log, số liệu) đóng gói kèm app.
 
 ### 5.2 Render hội thoại

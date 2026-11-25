@@ -4,9 +4,10 @@ import { Spinner } from '@/components/ui/spinner';
 import { Empty as EmptyState, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
 import { FileTree } from '@/components/files/FileTree';
 import { TruncatedText } from '@/components/ui/truncated-text';
+import { Tooltip } from '@/components/ui/tooltip';
 // Right side panel: Agents, Files, Git, Log (BR 3.1).
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Bot, ChevronDown, ChevronRight, FolderTree, GitBranch, Maximize2, Minimize2, RefreshCw, ScrollText } from 'lucide-react';
 import { api, errMsg } from '@/lib/api';
 import { qk, useProjects, useSessions } from '@/lib/queries';
@@ -29,7 +30,10 @@ const TABS: { id: RightTab; label: string; Icon: typeof Bot }[] = [
   { id: 'log', label: 'Log', Icon: ScrollText },
 ];
 
+import { GitHistoryRows } from './GitHistoryRows';
+
 export function RightPanel() {
+  const [graphRatio, setGraphRatio] = useState(0.5);
   const tab = useUiStore((s) => s.rightTab);
   const open = useUiStore((s) => s.rightOpen);
   const rightWidth = useUiStore((s) => s.rightWidth);
@@ -57,9 +61,11 @@ export function RightPanel() {
         <div data-tauri-drag-region className="flex min-h-14 items-center justify-between gap-2 border-b border-border px-3 py-2">
           <TabsList aria-label="Side panel content">
             {TABS.map(({ id, label, Icon }) => (
-              <TabsTrigger key={id} value={id} aria-label={label} title={label}>
-                <Icon data-icon="inline-start" />{tab === id ? label : null}
-              </TabsTrigger>
+              <Tooltip key={id} content={label}>
+                <TabsTrigger value={id} aria-label={label} className="w-9 justify-center">
+                  <Icon aria-hidden="true" />
+                </TabsTrigger>
+              </Tooltip>
             ))}
           </TabsList>
           <Button
@@ -73,7 +79,7 @@ export function RightPanel() {
           </Button>
         </div>
         <TabsContent value="agents" className="min-h-0 flex-1 overflow-y-auto">{tab === 'agents' && <AgentsPanel sessionId={sessionId} />}</TabsContent>
-        <TabsContent value="files" className="flex min-h-0 flex-1 flex-col overflow-y-auto data-[state=inactive]:hidden">{tab === 'files' && <GitPanel projectId={projectId} workspaceId={workspaceId} />}</TabsContent>
+        <TabsContent value="files" className="flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">{tab === 'files' && <GitPanel projectId={projectId} workspaceId={workspaceId} graphRatio={graphRatio} setGraphRatio={setGraphRatio} />}</TabsContent>
         <TabsContent value="project-files" className="flex min-h-0 flex-1 flex-col overflow-y-auto data-[state=inactive]:hidden">
           {tab === 'project-files' && (
             <section aria-label="Files" className="flex min-h-0 flex-1 flex-col">
@@ -286,7 +292,75 @@ function ChangedDirectoryRows({ directory, renderFile }: {
   );
 }
 
-function GitPanel({ projectId, workspaceId }: { projectId: string | null; workspaceId: string | null }) {
+function GitPanel({ projectId, workspaceId, graphRatio, setGraphRatio }: {
+  projectId: string | null;
+  workspaceId: string | null;
+  graphRatio: number;
+  setGraphRatio: (ratio: number) => void;
+}) {
+  const panel = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(0);
+  useLayoutEffect(() => {
+    const element = panel.current!;
+    const measure = () => setHeight(element.clientHeight);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const min = Math.min(84, Math.floor(height / 2));
+  const max = height - min;
+  const graphHeight = Math.max(min, Math.min(max, Math.round(height * graphRatio)));
+
+  return (
+    <div ref={panel} className="flex min-h-0 flex-1 flex-col">
+      <ChangesPanel projectId={projectId} workspaceId={workspaceId} />
+      <div className="relative min-h-0 shrink-0 border-t border-border"
+        style={{ height: height ? graphHeight : '50%' }}>
+        <ResizeHandle side="right" orientation="horizontal" label="Resize Git Graph"
+          value={graphHeight} min={min} max={max}
+          onChange={(px) => { if (height) setGraphRatio(px / height); }}
+          onReset={() => setGraphRatio(0.5)}
+        />
+        <GitHistoryPanel key={workspaceId} projectId={projectId} workspaceId={workspaceId} />
+      </div>
+    </div>
+  );
+}
+
+function GitHistoryPanel({ projectId, workspaceId }: { projectId: string | null; workspaceId: string | null }) {
+  const { data, isPending, error } = useQuery({
+    queryKey: qk.gitHistory(workspaceId ?? ''),
+    queryFn: () => api.gitHistory(workspaceId!),
+    enabled: !!workspaceId,
+    refetchInterval: 5000,
+  });
+  return (
+    <section aria-label="Git Graph" className="flex h-full min-h-0 flex-col">
+      <div className={filePanelHeader}>
+        <GitBranch className="size-4 shrink-0 text-muted-foreground" />
+        <h2 className="text-xs font-medium">Git Graph</h2>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
+        {!workspaceId ? <Empty>Select a workspace to view Git history.</Empty>
+          : isPending ? <Loading />
+          : error ? <LoadError error={error} />
+          : data === null ? <Empty>This workspace is not in a Git repository.</Empty>
+          : !data?.commits.length ? <Empty>No commits yet.</Empty>
+          : <>
+            <GitHistoryRows commits={data.commits} projectId={projectId} workspaceId={workspaceId!} />
+            {data.truncated && (
+              <p className="px-2 py-2 text-xs text-muted-foreground">Showing the latest {data.commits.length} commits.</p>
+            )}
+          </>}
+      </div>
+    </section>
+  );
+}
+
+function ChangesPanel({ projectId, workspaceId }: { projectId: string | null; workspaceId: string | null }) {
   const { data: files, refetch, isFetching, isPending, error } = useQuery({
     queryKey: qk.files(workspaceId ?? ''),
     queryFn: () => api.filesChanged(workspaceId!),
@@ -297,7 +371,7 @@ function GitPanel({ projectId, workspaceId }: { projectId: string | null; worksp
   const treeView = useUiStore((state) => state.gitTreeView);
   const toggleTreeView = useUiStore((state) => state.toggleGitTreeView);
   const activePath = useFileStore((state) => state.diffs.find((diff) =>
-    diff.workspaceId === workspaceId && diff.id === state.active[diff.projectId])?.path);
+    !diff.commit && diff.workspaceId === workspaceId && diff.id === state.active[diff.projectId])?.path);
 
   function renderFile({ path, status }: ChangedFile) {
     const name = path.slice(path.lastIndexOf('/') + 1);
@@ -330,6 +404,7 @@ function GitPanel({ projectId, workspaceId }: { projectId: string | null; worksp
           <Button variant="ghost" size="icon-sm" aria-label="Refresh Git changes" disabled={isFetching}
             onClick={() => {
               void refetch();
+              void qc.invalidateQueries({ queryKey: qk.gitHistory(workspaceId) });
               void qc.invalidateQueries({ queryKey: ['diff', workspaceId] });
               if (projectId) void qc.invalidateQueries({ queryKey: qk.projectFilesChanged(projectId) });
             }}>
@@ -337,14 +412,14 @@ function GitPanel({ projectId, workspaceId }: { projectId: string | null; worksp
           </Button>
         ) : null}
       </div>
-      <div className="flex min-h-0 flex-1 flex-col px-2 py-2">
+      <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
         {!workspaceId ? <Empty>Select a workspace to view changes.</Empty>
           : isPending ? <Loading />
           : error ? <LoadError error={error} />
           : files?.length === 0 ? <Empty>No changes yet.</Empty> : null}
         {workspaceId && files && files.length > 0 ? (
           <ul aria-label="Changed files" hidden={Boolean(error)} onKeyDown={navigateChangedFiles}
-            className="min-h-0 overflow-auto rounded-md">
+            className="rounded-md">
             {treeView
               ? <ChangedDirectoryRows key={workspaceId} directory={groupChangedFiles(files)} renderFile={renderFile} />
               : files.map(renderFile)}

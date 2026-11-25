@@ -24,6 +24,14 @@ fn codex_binary() -> AppResult<PathBuf> {
     if let Some(path) = std::env::var_os("HERDSMAN_CODEX") {
         return Ok(PathBuf::from(path));
     }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(contents) = executable.parent().and_then(Path::parent) {
+            let bundled = contents.join("Resources/codex/bin/codex");
+            if bundled.is_file() {
+                return Ok(bundled);
+            }
+        }
+    }
     crate::hc::which_in_login_shell("codex").ok_or_else(|| {
         AppError::new("codex_missing", "Install the Codex CLI, then run codex login.")
     })
@@ -54,6 +62,19 @@ pub async fn codex_probe(st: &AppState, cwd: &str, action: &str, thread_id: Opti
 }
 
 pub async fn spawn_sidecar(st: &AppState, s: &Session, ws: &Workspace) -> AppResult<Terminal> {
+    spawn_with_skills(st, s, ws, Vec::new()).await
+}
+
+pub async fn spawn_new_sidecar(st: &AppState, s: &Session, ws: &Workspace) -> AppResult<Terminal> {
+    let warnings = if s.engine == "claude" {
+        crate::project_skills::prepare(st, ws, &s.id).await
+    } else {
+        Vec::new()
+    };
+    spawn_with_skills(st, s, ws, warnings).await
+}
+
+async fn spawn_with_skills(st: &AppState, s: &Session, ws: &Workspace, warnings: Vec<String>) -> AppResult<Terminal> {
     let hc = st.hc()?;
     let node = st
         .node
@@ -84,6 +105,15 @@ pub async fn spawn_sidecar(st: &AppState, s: &Session, ws: &Workspace) -> AppRes
         argv.extend(["--model".into(), model.clone()]);
         if s.engine_session_id.is_none() {
             argv.push("--inherited-model".into());
+        }
+    }
+    if s.engine == "claude" {
+        let plugin = crate::project_skills::plugin_path(&st.session_dir(&s.id));
+        if plugin.is_dir() {
+            argv.extend(["--project-skills-plugin".into(), plugin.to_string_lossy().into()]);
+        }
+        if !warnings.is_empty() {
+            argv.extend(["--project-skills-warning".into(), warnings.join("\n")]);
         }
     }
     let labels = [
@@ -540,6 +570,11 @@ fn reconcile(st: &AppState, t: &Terminal) {
             let Some(sid) = t.label("herdsman.session") else { return };
             let db = st.db.lock();
             let Ok(s) = store::session_get(&db, sid) else { return };
+            if t.label("herdsman.workspace").is_some_and(|id| id != s.workspace_id)
+                || store::workspace_get(&db, &s.workspace_id).is_ok_and(|w| w.deleted_at.is_some())
+            {
+                return;
+            }
             if s.hc_terminal.as_deref() != Some(t.address.as_str()) {
                 // terminal cũ của session (trước lần resume): bỏ qua
                 if s.hc_terminal.is_some() {

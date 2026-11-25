@@ -1,0 +1,20 @@
+{
+  "name": "Catppuccin Frappé",
+  "appearance": "dark",
+  "background": "#303446",
+  "foreground": "#c6d0f5",
+  "selection": "#414559",
+  "colors": {
+    "surface": "#292c3c",
+    "muted": "#414559",
+    "muted_foreground": "#b5bfe2",
+    "primary": "#ca9ee6",
+    "ring": "#babbf1",
+    "working": "#99b6f4",
+    "error": "#f0a0a2",
+    "done": "#a6d189",
+    "blocked": "#e5c890",
+    "term_bg": "#303446",
+    "term_fg": "#c6d0f5"
+  }
+}

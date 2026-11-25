@@ -1,16 +1,16 @@
 import { TruncatedText } from '@/components/ui/truncated-text';
 // Left sidebar: app header, ⌘K search, projects → workspaces, hc status (BR 3.1, FR-001–003, FR-019).
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ChevronRight, GitBranch, MoreHorizontal, Plus, Search, Settings, Square } from 'lucide-react';
+import { AlertTriangle, Check, ChevronsUpDown, ChevronRight, GitBranch, MoreHorizontal, Plus, Search, Settings, Square } from 'lucide-react';
 import lightIconUrl from '@/assets/herdsman_lightmode.png';
 import darkIconUrl from '@/assets/herdsman_darkmode.png';
 import { useThemeColors } from '@/lib/theme';
 import { api } from '@/lib/api';
-import { qk, useAppInfo, useProjects, useWorkspaces } from '@/lib/queries';
+import { qk, usePaletteWorkspaces, useAppInfo, useProjects, useWorkspaces } from '@/lib/queries';
 import type { Project } from '@/lib/types';
 import { cn } from '@/lib/utils';
-import { IS_MAC } from '@/lib/platform';
+import { effectiveShortcut, shortcutLabel, useShortcutBindings } from '@/lib/keyboardShortcuts';
 import { useUiStore } from '@/stores/useUiStore';
 import { Button, Kbd } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -24,9 +24,18 @@ import { WorkspaceMenu } from '@/components/workspace/WorkspaceMenu';
 import { ResizeHandle } from '@/components/layout/ResizeHandle';
 import { LEFT } from '@/lib/layout';
 import { useLayoutWidths } from '@/lib/useLayoutWidths';
+import { useNavigationOrder } from '@/lib/useNavigationOrder';
+
+const focusDemo = import.meta.env.DEV
+  && new URLSearchParams(location.search).has('mock') && new URLSearchParams(location.search).has('project-focus');
 
 export function Sidebar() {
-  const { data: projects = [] } = useProjects();
+  const paletteKey = effectiveShortcut('palette', useShortcutBindings());
+  const { data: projects = [], isSuccess: projectsLoaded } = useProjects();
+  const projectOrder = useNavigationOrder('projects', projects.map((p) => p.id), 'vertical', projectsLoaded);
+  const projectsById = new Map(projects.map((p) => [p.id, p]));
+  const selectedId = useUiStore((s) => s.projectId);
+  const focusedProject = projectsById.get(selectedId ?? '') ?? projects[0];
   const appearance = useThemeColors().appearance;
   const open = useUiStore((s) => s.sidebarOpen);
   const newWsFor = useUiStore((s) => s.newWorkspaceFor);
@@ -50,14 +59,20 @@ export function Sidebar() {
           <button
             type="button"
             onClick={() => ui().setCmdOpen(true)}
+            aria-keyshortcuts={shortcutLabel(paletteKey, true)}
             className="mx-2 flex h-9 items-center gap-2 rounded-lg border border-input bg-background px-2 text-left text-muted-foreground shadow-xs hover:bg-accent dark:shadow-none"
           >
             <Search className="size-4 shrink-0" />
             <TruncatedText className="flex-1 truncate text-[12px]">Search conversations, commands…</TruncatedText>
-            <Kbd>⌘K</Kbd>
+            <Kbd>{shortcutLabel(paletteKey)}</Kbd>
           </button>
 
-          <div className="flex min-h-0 flex-1 flex-col py-1">
+          {focusDemo && focusedProject ? (
+            <nav className="mx-2 flex min-h-0 flex-1 flex-col overflow-y-auto py-1" aria-label="Project workspaces">
+              <ProjectNode key={focusedProject.id} project={focusedProject} reorder={projectOrder}
+                switcher={<FocusProjectSwitcher project={focusedProject} projects={projects} />} />
+            </nav>
+          ) : <div className="mx-2 flex min-h-0 flex-1 flex-col py-1">
             <div className="flex h-8 shrink-0 items-center justify-between pl-2">
               <span className="text-xs font-medium text-muted-foreground">Projects</span>
               <Tooltip content="New project">
@@ -66,14 +81,14 @@ export function Sidebar() {
                 </Button>
               </Tooltip>
             </div>
-            <nav className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1" aria-label="Projects">
+            <nav data-reorder-scroll className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1" aria-label="Projects">
               {projects.length === 0 ? (
                 <p className="px-2 py-6 text-center text-xs text-muted-foreground">No projects yet. Click + and pick a folder on this machine.</p>
               ) : (
-                projects.map((p) => <ProjectNode key={p.id} project={p} />)
+                projectOrder.order.map((id) => <ProjectNode key={id} project={projectsById.get(id)!} reorder={projectOrder} />)
               )}
             </nav>
-          </div>
+          </div>}
 
           <HcStatus />
           <ResizeHandle
@@ -93,26 +108,71 @@ export function Sidebar() {
   );
 }
 
-function ProjectNode({ project }: { project: Project }) {
+function FocusProjectSwitcher({ project, projects }: { project: Project; projects: Project[] }) {
+  const { data: workspaces } = usePaletteWorkspaces();
+
+  function selectProject(id: string) {
+    const ui = useUiStore.getState();
+    const available = workspaces?.filter((ws) => ws.project_id === id && ws.deleted_at == null
+      && (ws.archived_at == null || ui.reopenedWorkspaceIds.includes(ws.id))) ?? [];
+    const recent = ui.recentWorkspaceIds.find((workspaceId) => available.some((ws) => ws.id === workspaceId));
+    ui.selectWorkspace(id, recent ?? available[0]?.id ?? null);
+  }
+
+  useEffect(() => {
+    if (!workspaces || projects.some(({ id }) => id === useUiStore.getState().projectId)) return;
+    selectProject(project.id);
+  }, [project.id, projects, workspaces]);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" aria-label={`Switch project: ${project.name}`} className="min-w-0 flex-1 justify-between">
+          <TruncatedText className="truncate">{project.name}</TruncatedText>
+          <ChevronsUpDown />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent>
+        {projects.map(({ id, name }) => (
+          <DropdownMenuItem key={id} onSelect={() => { if (id !== project.id) selectProject(id); }}>
+            <span className="flex-1">{name}</span>
+            {id === project.id && <Check aria-label="Current project" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => useUiStore.getState().setAddProjectOpen(true)}><Plus /> New project</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function ProjectNode({ project, reorder, switcher }: {
+  project: Project;
+  reorder: ReturnType<typeof useNavigationOrder>;
+  switcher?: ReactNode;
+}) {
   const collapsed = useUiStore((s) => !!s.collapsed[project.id]);
   const toggle = useUiStore((s) => s.toggleCollapsed);
   const selectedProject = useUiStore((s) => s.projectId === project.id);
   const selectedWs = useUiStore((s) => s.workspaceId);
   const statuses = useUiStore((s) => s.statuses);
   const reopenedWorkspaceIds = useUiStore((s) => s.reopenedWorkspaceIds);
-  const { data: projectWorkspaces = [] } = useWorkspaces(project.id, true);
-  const workspaces = projectWorkspaces.filter((w) => w.archived_at == null || reopenedWorkspaceIds.includes(w.id));
+  const { data: projectWorkspaces = [], isSuccess: workspacesLoaded } = useWorkspaces(project.id, true);
+  const workspaces = projectWorkspaces.filter((w) => w.deleted_at == null && (w.archived_at == null || reopenedWorkspaceIds.includes(w.id)));
+  const workspaceOrder = useNavigationOrder(`workspaces:${project.id}`, workspaces.map((w) => w.id), 'vertical', workspacesLoaded);
+  const workspacesById = new Map(workspaces.map((w) => [w.id, w]));
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const qc = useQueryClient();
 
   return (
     <div className="flex flex-col">
-      <div className="group flex items-center gap-0.5">
-        <button
+      <div {...(switcher ? {} : reorder.row(project.id))} className={cn('group flex items-center gap-0.5 rounded-md hover:bg-accent',
+        selectedProject && 'bg-accent', reorder.indicator)}>
+        {switcher ?? <button
+          {...reorder.item(project.id)}
           type="button"
-          className={cn('flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left hover:bg-accent',
-            selectedProject && 'bg-accent')}
+          className="flex h-9 min-w-0 flex-1 touch-none select-none items-center gap-2 rounded-md px-2 text-left"
           aria-current={selectedProject ? 'true' : undefined}
           onClick={() => {
             if (!selectedProject) {
@@ -131,10 +191,10 @@ function ProjectNode({ project }: { project: Project }) {
               <AlertTriangle className="size-3.5 shrink-0 text-st-blocked" />
             </Tooltip>
           ) : null}
-        </button>
+        </button>}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="muted" size="icon-sm" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100" aria-label="Project options">
+            <Button variant="muted" size="icon-sm" className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100" aria-label="Project options">
               <MoreHorizontal />
             </Button>
           </DropdownMenuTrigger>
@@ -153,6 +213,7 @@ function ProjectNode({ project }: { project: Project }) {
           <Button
             variant="muted"
             size="icon-sm"
+            className="shrink-0"
             onClick={() => useUiStore.getState().setNewWorkspaceFor(project.id)}
             aria-label={`New workspace in ${project.name}`}
             disabled={project.missing}
@@ -161,22 +222,24 @@ function ProjectNode({ project }: { project: Project }) {
           </Button>
         </Tooltip>
       </div>
-      {!collapsed ? (
+      {switcher || !collapsed ? (
         <ul className="mb-1.5 ml-[15px] mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
           {workspaces.length === 0 ? <li className="px-2 py-1.5 text-xs text-muted-foreground">No workspaces yet</li> : null}
-          {workspaces.map((w) => {
+          {workspaceOrder.order.map((id) => {
+            const w = workspacesById.get(id)!;
             const mine = w.archived_at == null ? Object.values(statuses).filter((s) => s.workspace_id === w.id) : [];
             const needs = mine.some((s) => s.state === 'blocked' || s.state === 'error');
             const running = mine.some((s) => s.state === 'working');
             const on = selectedWs === w.id;
             const isWt = w.dir_kind === 'worktree';
             return (
-              <li key={w.id} className={cn('group flex min-h-8 items-center gap-1 rounded-md hover:bg-accent has-[[data-state=open]]:bg-accent', on && 'bg-accent')}>
+              <li key={w.id} {...workspaceOrder.row(w.id)} className={cn(workspaceOrder.indicator, 'group flex min-h-8 items-center gap-1 rounded-md hover:bg-accent has-[[data-state=open]]:bg-accent', on && 'bg-accent')}>
                 <button
+                  {...workspaceOrder.item(w.id)}
                   type="button"
                   aria-current={on ? 'page' : undefined}
                   title={isWt ? `Worktree · ${w.branch ?? w.work_dir}` : 'Project folder'}
-                  className="flex min-w-0 flex-1 items-center gap-2 self-stretch rounded-md pl-2 text-left"
+                  className="flex min-w-0 flex-1 items-center gap-2 self-stretch touch-none select-none rounded-md pl-2 text-left"
                   onClick={() => useUiStore.getState().selectWorkspace(project.id, w.id)}
                 >
                   {running ? (
@@ -211,6 +274,7 @@ function ProjectNode({ project }: { project: Project }) {
 }
 
 function HcStatus() {
+  const settingsKey = effectiveShortcut('settings', useShortcutBindings());
   const { data } = useAppInfo();
   const statuses = useUiStore((s) => s.statuses);
   const ok = data?.hc_connected;
@@ -232,13 +296,13 @@ function HcStatus() {
             <AlertTriangle className="size-3.5 text-st-blocked" aria-label="Node.js not found" />
           </Tooltip>
         ) : null}
-        <Tooltip content={<span className="inline-flex items-center gap-2">Settings <Kbd>{IS_MAC ? '⌘,' : 'Ctrl+,'}</Kbd></span>}>
+        <Tooltip content={<span className="inline-flex items-center gap-2">Settings <Kbd>{shortcutLabel(settingsKey)}</Kbd></span>}>
           <Button
             variant="ghost"
             size="icon-sm"
             className="-mr-1.5 text-muted-foreground"
             aria-label="Settings"
-            aria-keyshortcuts={IS_MAC ? 'Meta+Comma' : 'Control+Comma'}
+            aria-keyshortcuts={shortcutLabel(settingsKey, true)}
             onClick={() => useUiStore.getState().setSettingsOpen(true)}>
             <Settings />
           </Button>

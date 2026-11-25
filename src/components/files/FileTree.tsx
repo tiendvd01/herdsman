@@ -59,6 +59,7 @@ export function FileTree({ project }: { project: Project }) {
     queries: paths.map((path) => ({
       queryKey: ['projectFiles', project.id, path],
       queryFn: () => api.projectFiles(project.id, path),
+      refetchOnMount: 'always' as const,
       retry: false,
     })),
   });
@@ -203,7 +204,8 @@ export function FileTree({ project }: { project: Project }) {
               const row = rows[index];
               const open = expandedPaths.has(row.path);
               const query = byPath.get(row.path);
-              const status = row.directory ? undefined : statuses.get(row.path);
+              const ignored = !searching && row.ignored;
+              const status = row.directory || ignored ? undefined : statuses.get(row.path);
               const change = status ? gitStatusPresentation(status) : undefined;
               const directoryPath = searching ? row.path.slice(0, row.path.lastIndexOf('/') + 1) : '';
               const rowLabel = searching ? row.path : row.name;
@@ -212,7 +214,7 @@ export function FileTree({ project }: { project: Project }) {
                 <Button variant="ghost" size="xs" tabIndex={-1} key={row.path} id={`file-tree-${index}`} role="treeitem"
                   aria-level={row.depth + 1} aria-expanded={row.directory ? open : undefined}
                   aria-selected={row.directory ? undefined : selected}
-                  aria-label={change ? `${rowLabel}, Git status: ${change.label}` : searching ? rowLabel : undefined}
+                  aria-label={ignored ? `${rowLabel}, Git ignored` : change ? `${rowLabel}, Git status: ${change.label}` : searching ? rowLabel : undefined}
                   onClick={() => { host.current?.focus({ preventScroll: true }); select(row); }}
                   style={{ top: start, height: size - 2, paddingLeft: 8 + row.depth * 14 }}
                   className={cn('absolute inset-x-0', fileRow,
@@ -220,7 +222,7 @@ export function FileTree({ project }: { project: Project }) {
                     focusIndex === index && 'group-focus-visible/tree:border-ring')}>
                   {row.directory ? <ChevronRight className={cn('shrink-0 text-muted-foreground', open && 'rotate-90')} /> : !searching && <span className="size-4 shrink-0" />}
                   <img src={materialFileIcon(row.name, row.directory)} alt="" data-icon="inline-start" className="size-4 shrink-0" />
-                  <TruncatedText className={cn('min-w-0 truncate text-left', directoryPath ? 'max-w-[55%]' : 'flex-1', change?.className)}>{row.name}</TruncatedText>
+                  <TruncatedText className={cn('min-w-0 truncate text-left', directoryPath ? 'max-w-[55%]' : 'flex-1', ignored && 'text-git-ignored-fg', change?.className)}>{row.name}</TruncatedText>
                   {directoryPath && <TruncatedText className="min-w-0 flex-1 truncate text-left text-muted-foreground">{directoryPath}</TruncatedText>}
                   {change ? <span aria-hidden="true" className={cn(gitStatusMarker, change.className)}>{change.marker}</span> : null}
                   {query?.isPending ? <Spinner label="Loading folder" className="text-muted-foreground" /> : null}

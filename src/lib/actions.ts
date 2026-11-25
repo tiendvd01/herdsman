@@ -2,7 +2,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { api, errMsg } from './api';
 import { qk } from './queries';
-import type { ClaudeHit, Engine, Session } from './types';
+import type { ClaudeHit, Engine, Session, Workspace } from './types';
 import { useUiStore, type Theme } from '@/stores/useUiStore';
 import { toast } from '@/components/ui/toast';
 
@@ -27,20 +27,31 @@ export async function createSession(qc: QueryClient, workspaceId: string, engine
   }
 }
 
-/** Open a Claude Code conversation found by search: reuse its Herdsman session or resume it in a new one. */
-export async function openClaudeConversation(qc: QueryClient, hit: ClaudeHit) {
-  if (!hit.cwd || !hit.workspace_id || !hit.project_id) {
-    toast('Add this conversation’s folder as a project/workspace to open it here', 'error');
-    return;
+export async function openStoredSession(qc: QueryClient, { workspace, session }: { workspace: Workspace; session: Session }) {
+  const { id, project_id: projectId } = workspace;
+  const ui = useUiStore.getState();
+  qc.setQueryData<Workspace[]>(qk.workspaces(projectId, true), (old) =>
+    [workspace, ...(old ?? []).filter((w) => w.id !== id)]);
+  qc.setQueryData<Session[]>(qk.sessions(id), (old) =>
+    [session, ...(old ?? []).filter((s) => s.id !== session.id)]);
+  if (session.status === 'done') {
+    ui.setStatus(session.id, { state: 'done' });
+    ui.addTempTab(id, session.id);
   }
+  if (workspace.deleted_at != null) ui.selectWorkspace(projectId, id);
+  else ui.reopenWorkspace(projectId, id);
+  ui.selectSession(id, session.id);
+  await Promise.all([
+    qc.invalidateQueries({ queryKey: qk.projects }),
+    qc.invalidateQueries({ queryKey: qk.allWorkspaces }),
+    qc.invalidateQueries({ queryKey: qk.allSessions }),
+    qc.invalidateQueries({ queryKey: ['palette-search'] }),
+  ]);
+}
+
+export async function openClaudeConversation(qc: QueryClient, hit: ClaudeHit) {
   try {
-    const s = await api.claudeOpen(hit.claude_session_id, hit.cwd, hit.workspace_id);
-    qc.setQueryData<Session[]>(qk.sessions(s.workspace_id), (old) => (old ? [...old.filter((x) => x.id !== s.id), s] : [s]));
-    const ui = useUiStore.getState();
-    ui.reopenWorkspace(hit.project_id, s.workspace_id);
-    if (s.status === 'done') ui.addTempTab(s.workspace_id, s.id);
-    ui.selectSession(s.workspace_id, s.id);
-    qc.invalidateQueries({ queryKey: qk.sessions(s.workspace_id) });
+    await openStoredSession(qc, await api.claudeOpen(hit.claude_session_id, hit.workspace_id ?? undefined));
   } catch (e) {
     toast(errMsg(e), 'error');
   }

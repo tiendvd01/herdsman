@@ -1,8 +1,10 @@
 use crate::error::{AppError, AppResult};
 use serde::Serialize;
+use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -12,6 +14,8 @@ pub struct Entry {
     name: String,
     path: String,
     directory: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    ignored: bool,
 }
 
 #[derive(Serialize)]
@@ -20,7 +24,7 @@ pub struct Document {
     pub writable: bool,
 }
 
-fn resolve(root: &Path, relative: &str) -> AppResult<PathBuf> {
+pub(crate) fn resolve(root: &Path, relative: &str) -> AppResult<PathBuf> {
     let mut path = root.canonicalize()?;
     for component in Path::new(relative).components() {
         let Component::Normal(name) = component else {
@@ -47,8 +51,42 @@ fn resolve(root: &Path, relative: &str) -> AppResult<PathBuf> {
 }
 
 pub fn list(root: &Path, relative: &str) -> AppResult<Vec<Entry>> {
+    let directory = resolve(root, relative)?;
+    let mut entries = read_entries(&directory, relative)?;
+    if !entries.is_empty() {
+        // Ignore information is optional, including outside a Git work tree.
+        let _ = mark_ignored(&directory, &mut entries);
+    }
+    Ok(entries)
+}
+
+fn mark_ignored(directory: &Path, entries: &mut [Entry]) -> std::io::Result<()> {
+    // File-backed stdin lets Git read input while its output is being collected.
+    let mut input = tempfile::tempfile()?;
+    for entry in entries.iter() {
+        write!(input, "./{}\0", entry.name)?;
+    }
+    input.rewind()?;
+    let output = Command::new("git")
+        .args(["check-ignore", "-z", "--stdin"])
+        .current_dir(directory)
+        .stdin(Stdio::from(input))
+        .stderr(Stdio::null())
+        .output()?;
+    if output.status.success() {
+        let ignored: HashSet<_> = output.stdout.split(|byte| *byte == 0)
+            .filter_map(|path| path.strip_prefix(b"./"))
+            .collect();
+        for entry in entries {
+            entry.ignored = ignored.contains(entry.name.as_bytes());
+        }
+    }
+    Ok(())
+}
+
+fn read_entries(directory: &Path, relative: &str) -> AppResult<Vec<Entry>> {
     let mut entries = Vec::new();
-    for entry in fs::read_dir(resolve(root, relative)?)? {
+    for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let kind = entry.file_type()?;
         let Some(name) = entry.file_name().into_string().ok() else {
@@ -66,6 +104,7 @@ pub fn list(root: &Path, relative: &str) -> AppResult<Vec<Entry>> {
             name,
             path,
             directory: kind.is_dir(),
+            ignored: false,
         });
     }
     entries.sort_by(|a, b| {
@@ -86,7 +125,7 @@ pub fn search(root: &Path, query: &str) -> AppResult<Vec<Entry>> {
     let mut matches = Vec::new();
     let mut directories = vec![String::new()];
     while let Some(directory) = directories.pop() {
-        for entry in list(root, &directory)? {
+        for entry in read_entries(&resolve(root, &directory)?, &directory)? {
             if entry.directory {
                 directories.push(entry.path);
             } else if entry.path.to_lowercase().contains(&query) {
@@ -112,9 +151,10 @@ pub fn search_absolute(path: &Path) -> AppResult<Vec<Entry>> {
                     .into_owned(),
                 path: path.to_string_lossy().into_owned(),
                 directory: false,
+                ignored: false,
             }]);
         }
-        Ok(metadata) if metadata.is_dir() => (path, list(path, "")?),
+        Ok(metadata) if metadata.is_dir() => (path, read_entries(&resolve(path, "")?, "")?),
         Ok(_) => return Ok(Vec::new()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let Some((parent, name)) = path.parent().zip(path.file_name()) else {
@@ -174,7 +214,7 @@ fn read_document(path: &Path) -> AppResult<Document> {
     })
 }
 
-fn resolve_workspace(root: &Path, path: &Path) -> AppResult<(PathBuf, String)> {
+pub(crate) fn resolve_workspace(root: &Path, path: &Path) -> AppResult<(PathBuf, String)> {
     let root = root.canonicalize()?;
     let path = root.join(path).canonicalize()?;
     let relative = path
@@ -299,6 +339,40 @@ pub fn write_markdown_copy(source: &Path, destination: &Path, text: &str) -> App
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lists_git_ignored_entries_without_filtering_them_from_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            assert!(Command::new("git").args(args).current_dir(root).status().unwrap().success());
+        };
+        git(&["init", "-q"]);
+        fs::write(root.join("tracked.log"), "").unwrap();
+        git(&["add", "--", "tracked.log"]);
+        fs::write(root.join(".gitignore"), "cache/\n*.log\n").unwrap();
+        fs::create_dir(root.join("cache")).unwrap();
+        fs::create_dir(root.join("nested")).unwrap();
+        fs::write(root.join("cache/output.txt"), "").unwrap();
+        fs::write(root.join("nested/.gitignore"), "*.tmp\n!keep.tmp\n").unwrap();
+        for path in ["plain.txt", ":local\nfile.log", "nested/drop.tmp", "nested/keep.tmp"] {
+            fs::write(root.join(path), "").unwrap();
+        }
+
+        let ignored = |folder| {
+            list(root, folder).unwrap().into_iter()
+                .filter(|entry| entry.ignored).map(|entry| entry.name).collect::<Vec<_>>()
+        };
+        assert_eq!(ignored(""), ["cache", ":local\nfile.log"]);
+        assert_eq!(ignored("cache"), ["output.txt"]);
+        assert_eq!(ignored("nested"), ["drop.tmp"]);
+        let matches = search(root, "output").unwrap();
+        assert_eq!(matches.len(), 1);
+        assert!(!matches[0].ignored);
+
+        fs::write(root.join(".gitignore"), "cache/\n").unwrap();
+        assert_eq!(ignored(""), ["cache"]);
+    }
 
     #[test]
     fn reads_workspace_files_with_the_correct_tab_paths() {

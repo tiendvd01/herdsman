@@ -66,10 +66,13 @@ export function connectCodex(binary, cwd, onEvent = () => {}, onExit = () => {})
   return rpc;
 }
 
-async function verifyAccount(rpc) {
+async function verifyAccount(rpc, binary) {
   await rpc.ready;
   const account = await rpc.request('account/read', { refreshToken: false });
-  if (account.requiresOpenaiAuth && !account.account) throw new Error('Sign in with codex login and try again.');
+  if (account.requiresOpenaiAuth && !account.account) {
+    const command = "'" + binary.replaceAll("'", "'\\''") + "' login";
+    throw new Error(`Run ${command} in a terminal to sign in, then try again.`);
+  }
 }
 
 function sameDirectory(left, right) {
@@ -86,7 +89,7 @@ async function readThread(rpc, cwd, threadId, includeTurns) {
 export async function probeCodex(binary, cwd, action, threadId) {
   const rpc = connectCodex(binary, cwd);
   try {
-    await verifyAccount(rpc);
+    await verifyAccount(rpc, binary);
     if (action === 'check') return null;
     if (action === 'read') {
       const thread = await readThread(rpc, cwd, threadId, false);
@@ -228,7 +231,7 @@ export function createCodexEngine(ctx) {
       sandbox,
     };
   };
-  const initialized = verifyAccount(rpc).then(async () => {
+  const initialized = verifyAccount(rpc, ctx.codexBinary).then(async () => {
     const settings = { cwd: ctx.cwd, model };
     const importing = !!threadId && !ctx.codexHistoryImported;
     if (importing) {
@@ -275,7 +278,7 @@ export function createCodexEngine(ctx) {
             // App Server so Codex resolves permissions from its configuration.
             const replacement = connect();
             try {
-              await verifyAccount(replacement);
+              await verifyAccount(replacement, ctx.codexBinary);
               await replacement.request('thread/resume', { cwd: ctx.cwd, threadId, model, excludeTurns: true });
               if (stopped) {
                 replacement.close();

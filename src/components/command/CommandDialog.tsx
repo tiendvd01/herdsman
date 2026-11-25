@@ -5,15 +5,19 @@ import * as D from '@radix-ui/react-dialog';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ALargeSmall, Folder, Folders, FolderPlus, Moon, Paintbrush, PanelLeft, PanelRight, Plus, Search, Settings, SquarePlus, ZoomIn, ZoomOut } from 'lucide-react';
 import { contentPx, formatZoom } from '@/lib/uiZoom';
-import { ZOOM_LABEL } from '@/lib/zoomShortcuts';
+import { isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { effectiveShortcut, matchShortcut, runTabShortcut, shortcutLabel, syncShortcutMenu, tabPositions, useShortcutBindings } from '@/lib/keyboardShortcuts';
+import type { ShortcutId } from '@/lib/keyboardShortcuts';
+import { runZoomAction } from '@/lib/zoomShortcuts';
 import { api, errMsg } from '@/lib/api';
-import { createSession, cycleTheme, openClaudeConversation } from '@/lib/actions';
-import { usePaletteWorkspaces, useProjects, useSessions } from '@/lib/queries';
+import { createSession, cycleTheme, openClaudeConversation, openStoredSession } from '@/lib/actions';
+import { qk, usePaletteWorkspaces, useProjects, useSessions } from '@/lib/queries';
 import type { Workspace } from '@/lib/types';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { useUiStore } from '@/stores/useUiStore';
-import { SHORTCUT_LABEL } from '@/lib/sidebarShortcuts';
+import { isDialogOpen, toggleSidebar } from '@/lib/sidebarShortcuts';
 import { StatusDot } from '@/components/ui/status-dot';
 
 const CATEGORIES = ['All', 'Workspaces', 'Projects', 'Actions', 'Settings'] as const;
@@ -35,26 +39,53 @@ export function CommandDialog() {
   const open = useUiStore((s) => s.cmdOpen);
   const setOpen = useUiStore((s) => s.setCmdOpen);
 
-  // App-wide shortcuts shown in the menu.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.isComposing || e.defaultPrevented || document.querySelector('[data-record-shortcut]')) return;
+      const id = matchShortcut(e);
+      if (!id) return;
       const ui = useUiStore.getState();
-      const k = e.key.toLowerCase();
-      if (k === 'k') ui.setCmdOpen(!ui.cmdOpen);
-      else if (k === 'o' && !e.shiftKey) ui.setAddProjectOpen(true);
-      else if (k === 'n' && !e.shiftKey && ui.projectId) ui.setNewWorkspaceFor(ui.projectId);
-      else if (k === 't' && !e.shiftKey && ui.workspaceId) createSession(qc, ui.workspaceId);
-      else if (k === 'l' && e.shiftKey) cycleTheme();
-      else if (k === ',' && !e.shiftKey) {
-        ui.setCmdOpen(false);
-        ui.setSettingsOpen(true);
-      }
-      else return;
+      const zoom = id === 'in' || id === 'out' || id === 'reset' || id.startsWith('text-');
+      const dialog = isDialogOpen();
+      const insidePalette = ui.cmdOpen && (id === 'palette' || id === 'settings');
+      if (dialog && !insidePalette && !zoom && id !== 'close-tab' && !id.startsWith('tab-')) return;
       e.preventDefault();
+      e.stopPropagation();
+      if ((e.repeat && !zoom) || (dialog && !insidePalette && !zoom)) return;
+      switch (id) {
+        case 'palette': ui.setCmdOpen(!ui.cmdOpen); break;
+        case 'settings': ui.setCmdOpen(false); ui.setSettingsOpen(true); break;
+        case 'add-project': ui.setAddProjectOpen(true); break;
+        case 'new-workspace': if (ui.projectId) ui.setNewWorkspaceFor(ui.projectId); break;
+        case 'new-session': {
+          const workspace = qc.getQueryData<Workspace[]>(qk.workspaces(ui.projectId ?? '', true))?.find((entry) => entry.id === ui.workspaceId);
+          if (ui.workspaceId && !workspace?.archived_at) void createSession(qc, ui.workspaceId);
+          break;
+        }
+        case 'theme': cycleTheme(); break;
+        case 'sidebar': toggleSidebar('left'); break;
+        case 'side-panel': toggleSidebar('right'); break;
+        case 'in': case 'out': case 'reset': case 'text-in': case 'text-out': case 'text-reset':
+          runZoomAction(id);
+          break;
+        default: runTabShortcut(id);
+      }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    let stop: Promise<() => void> | undefined;
+    if (isTauri()) {
+      stop = listen<string>('ui-shortcut', ({ payload }) => {
+        if (document.querySelector('[data-record-shortcut]')) return;
+        if (payload === 'close-tab' && !isDialogOpen()) runTabShortcut(payload);
+        if (payload === 'in' || payload === 'out' || payload === 'reset') runZoomAction(payload);
+      });
+      void stop.catch((error) => toast(errMsg(error), 'error'));
+      void syncShortcutMenu().catch((error) => toast(errMsg(error), 'error'));
+    }
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      void stop?.then((unlisten) => unlisten()).catch(() => {});
+    };
   }, [qc]);
 
   return (
@@ -74,6 +105,8 @@ export function CommandDialog() {
 }
 
 function CommandBody({ close }: { close: () => void }) {
+  const bindings = useShortcutBindings();
+  const hotkey = (id: ShortcutId) => shortcutLabel(effectiveShortcut(id, bindings));
   const qc = useQueryClient();
   const [q, setQ] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -104,7 +137,9 @@ function CommandBody({ close }: { close: () => void }) {
   );
   const query = q.trim();
   const needle = query.toLowerCase();
+  const browseSessions = category === 'All' && !query && !invalidScope && !contextPending;
   const searchEnabled = category === 'All' && !!query && !invalidScope && !contextPending && debounced === query;
+  const browseDetached = browseSessions && selectedScope !== 'workspace';
   const scopedProjectId = selectedScope === 'project' ? project?.id : undefined;
   const scopedWorkspaceId = selectedScope === 'workspace' ? ws?.id : undefined;
 
@@ -118,16 +153,16 @@ function CommandBody({ close }: { close: () => void }) {
   }, [query]);
 
   const managed = useQuery({
-    queryKey: ['palette-search', 'managed', debounced, scopedProjectId, scopedWorkspaceId],
-    queryFn: () => api.search(debounced, scopedWorkspaceId, scopedProjectId),
-    enabled: searchEnabled,
+    queryKey: ['palette-search', 'managed', query, scopedProjectId, scopedWorkspaceId],
+    queryFn: () => api.search(query, scopedWorkspaceId, scopedProjectId),
+    enabled: searchEnabled || browseDetached,
     retry: false,
     gcTime: 0,
   });
   const legacy = useQuery({
-    queryKey: ['palette-search', 'claude', debounced, scopedProjectId, scopedWorkspaceId],
-    queryFn: () => api.claudeSearch(debounced, { workspaceId: scopedWorkspaceId, projectId: scopedProjectId }),
-    enabled: searchEnabled,
+    queryKey: ['palette-search', 'claude', query, scopedProjectId, scopedWorkspaceId],
+    queryFn: () => api.claudeSearch(query, { workspaceId: scopedWorkspaceId, projectId: scopedProjectId }),
+    enabled: searchEnabled || browseSessions,
     retry: false,
     gcTime: 0,
   });
@@ -148,6 +183,10 @@ function CommandBody({ close }: { close: () => void }) {
 
   async function openFoundSession(projectId: string, workspaceId: string, sessionId: string) {
     try {
+      if (workspaces.some((w) => w.id === workspaceId && w.deleted_at != null)) {
+        await openStoredSession(qc, await api.sessionRehome(sessionId));
+        return;
+      }
       const session = await api.sessionGet(sessionId);
       openSession(projectId, workspaceId, sessionId, (statuses[sessionId]?.state ?? session.status) === 'done');
     } catch (error) {
@@ -215,17 +254,19 @@ function CommandBody({ close }: { close: () => void }) {
     }
   }
 
-  const managedHits = searchEnabled ? managed.data ?? [] : [];
+  const managedHits = searchEnabled || browseDetached ? managed.data ?? [] : [];
   for (const hit of managedHits) {
+    const detached = workspaces.some((w) => w.id === hit.workspace_id && w.deleted_at != null);
     entries.push({
       key: 's-' + hit.session_id,
-      group: 'Sessions',
+      group: detached ? 'Sessions without a workspace' : 'Sessions',
       run: () => void openFoundSession(hit.project_id, hit.workspace_id, hit.session_id),
       node: <ResultText title={hit.session_title ?? 'New session'}
-        detail={[location(hit.project_name, hit.workspace_name), hit.workspace_archived && 'Archived', hit.snippet].filter(Boolean).join(' · ')} />,
+        detail={[detached ? hit.project_name : location(hit.project_name, hit.workspace_name), !detached && hit.workspace_archived && 'Archived', hit.snippet].filter(Boolean).join(' · ')} />,
     });
   }
-  for (const hit of searchEnabled ? legacy.data ?? [] : []) {
+  for (const hit of searchEnabled || browseSessions ? legacy.data ?? [] : []) {
+    if (browseSessions && sessions.some((s) => s.engine_session_id === hit.claude_session_id)) continue;
     if (managedHits.some((s) => s.session_id === hit.session_id
       || (!hit.session_id && s.engine_session_id === hit.claude_session_id))) continue;
     const { session_id: sessionId, project_id: foundProject, workspace_id: foundWorkspace } = hit;
@@ -242,20 +283,29 @@ function CommandBody({ close }: { close: () => void }) {
   }
 
   const commands: { label: string; category?: Category; kbd?: string; Icon: typeof Plus; run: () => void; show?: boolean; keywords?: string }[] = [
-    { label: `New workspace in ${project?.name ?? 'project'}`, kbd: '⌘N', Icon: Plus, run: () => project && ui.setNewWorkspaceFor(project.id), show: !!project },
-    { label: 'New session in workspace', kbd: '⌘T', Icon: SquarePlus, run: () => ws && createSession(qc, ws.id), show: !!ws && ws.archived_at === null },
-    { label: 'Add project', kbd: '⌘O', Icon: FolderPlus, run: () => ui.setAddProjectOpen(true) },
-    { label: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', kbd: SHORTCUT_LABEL.left, Icon: PanelLeft, run: () => ui.setSidebarOpen(!sidebarOpen) },
-    { label: rightOpen ? 'Hide side panel' : 'Show side panel', kbd: SHORTCUT_LABEL.right, Icon: PanelRight, run: () => ui.setRightOpen(!rightOpen) },
-    { label: 'Toggle theme', kbd: '⌘⇧L', Icon: Moon, run: cycleTheme },
+    { label: `New workspace in ${project?.name ?? 'project'}`, kbd: hotkey('new-workspace'), Icon: Plus, run: () => project && ui.setNewWorkspaceFor(project.id), show: !!project },
+    { label: 'New session in workspace', kbd: hotkey('new-session'), Icon: SquarePlus, run: () => ws && createSession(qc, ws.id), show: !!ws && ws.archived_at === null },
+    { label: 'Add project', kbd: hotkey('add-project'), Icon: FolderPlus, run: () => ui.setAddProjectOpen(true) },
+    { label: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', kbd: hotkey('sidebar'), Icon: PanelLeft, run: () => ui.setSidebarOpen(!sidebarOpen) },
+    { label: rightOpen ? 'Hide side panel' : 'Show side panel', kbd: hotkey('side-panel'), Icon: PanelRight, run: () => ui.setRightOpen(!rightOpen) },
+    { label: 'Toggle theme', kbd: hotkey('theme'), Icon: Moon, run: cycleTheme },
     // Spec 006: zoom and content text size
-    { label: `Zoom in (${formatZoom(zoom)})`, kbd: ZOOM_LABEL.in, Icon: ZoomIn, run: ui.zoomIn, keywords: 'zoom bigger larger' },
-    { label: `Zoom out (${formatZoom(zoom)})`, kbd: ZOOM_LABEL.out, Icon: ZoomOut, run: ui.zoomOut, keywords: 'zoom smaller' },
-    { label: 'Reset zoom', kbd: ZOOM_LABEL.reset, Icon: ZoomIn, run: ui.zoomReset, keywords: 'zoom actual size 100%' },
-    { label: `Increase text size (${contentPx(contentStep)}px)`, kbd: ZOOM_LABEL['text-in'], Icon: ALargeSmall, run: ui.contentBigger, keywords: 'font text size bigger' },
-    { label: `Decrease text size (${contentPx(contentStep)}px)`, kbd: ZOOM_LABEL['text-out'], Icon: ALargeSmall, run: ui.contentSmaller, keywords: 'font text size smaller' },
-    { label: 'Reset text size', kbd: ZOOM_LABEL['text-reset'], Icon: ALargeSmall, run: ui.contentReset, keywords: 'font text size default' },
-    { label: 'Open settings', category: 'Settings', kbd: '⌘,', Icon: Settings, run: () => ui.setSettingsOpen(true) },
+    { label: `Zoom in (${formatZoom(zoom)})`, kbd: hotkey('in'), Icon: ZoomIn, run: ui.zoomIn, keywords: 'zoom bigger larger' },
+    { label: `Zoom out (${formatZoom(zoom)})`, kbd: hotkey('out'), Icon: ZoomOut, run: ui.zoomOut, keywords: 'zoom smaller' },
+    { label: 'Reset zoom', kbd: hotkey('reset'), Icon: ZoomIn, run: ui.zoomReset, keywords: 'zoom actual size 100%' },
+    { label: `Increase text size (${contentPx(contentStep)}px)`, kbd: hotkey('text-in'), Icon: ALargeSmall, run: ui.contentBigger, keywords: 'font text size bigger' },
+    { label: `Decrease text size (${contentPx(contentStep)}px)`, kbd: hotkey('text-out'), Icon: ALargeSmall, run: ui.contentSmaller, keywords: 'font text size smaller' },
+    { label: 'Reset text size', kbd: hotkey('text-reset'), Icon: ALargeSmall, run: ui.contentReset, keywords: 'font text size default' },
+    { label: 'Open settings', category: 'Settings', kbd: hotkey('settings'), Icon: Settings, run: () => ui.setSettingsOpen(true) },
+    ...tabPositions.map((position) => {
+      const id = `tab-${position}` as const;
+      return { label: `Switch to tab ${position}`, kbd: hotkey(id), Icon: SquarePlus,
+        show: !!document.querySelector('[data-workspace-tabs]')?.querySelectorAll('[role="tab"]')[position - 1],
+        run: () => requestAnimationFrame(() => runTabShortcut(id)) };
+    }),
+    { label: 'Close tab', kbd: hotkey('close-tab'), Icon: SquarePlus,
+      show: !!document.querySelector('[data-workspace-tabs] [aria-selected="true"]'),
+      run: () => requestAnimationFrame(() => runTabShortcut('close-tab')) },
     { label: 'Appearance', category: 'Settings', Icon: Paintbrush, keywords: 'settings theme font', run: () => ui.setSettingsOpen(true) },
   ];
   for (const c of commands) {
@@ -277,7 +327,8 @@ function CommandBody({ close }: { close: () => void }) {
   }
   const searching = category === 'All' && !!query && !invalidScope
     && (!searchEnabled || managed.isPending || legacy.isPending);
-  const searchError = searchEnabled && (managed.isError || legacy.isError);
+  const searchError = ((searchEnabled || browseDetached) && managed.isError)
+    || ((searchEnabled || browseSessions) && legacy.isError);
   const browsePending = (shows('Projects') && projectsQuery.isPending)
     || (shows('Workspaces') && workspacesQuery.isPending);
   const browseError = (shows('Projects') && projectsQuery.isError)

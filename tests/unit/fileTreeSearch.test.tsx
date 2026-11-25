@@ -40,7 +40,7 @@ afterEach(() => {
 });
 
 function renderFiles() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const panel = (current = project) => (
     <QueryClientProvider client={client}>
       <TooltipProvider><FileTree key={current.id} project={current} /></TooltipProvider>
@@ -48,10 +48,42 @@ function renderFiles() {
   );
   const view = render(panel());
   return {
+    reopen: () => {
+      view.rerender(null);
+      view.rerender(panel());
+    },
     switchProject: () => view.rerender(panel({ ...project, id: 'other' })),
     input: screen.getByRole<HTMLInputElement>('textbox', { name: 'Search files' }),
   };
 }
+
+it('mutes ignored items, keeps them openable, and refreshes the tree on reopen', async () => {
+  const ignoredFile = { ...file('cache/local.txt'), ignored: true };
+  vi.mocked(api.projectFiles)
+    .mockResolvedValueOnce([{ name: 'cache', path: 'cache', directory: true, ignored: true }])
+    .mockResolvedValueOnce([ignoredFile])
+    .mockResolvedValueOnce([{ name: 'cache', path: 'cache', directory: true }]);
+  vi.mocked(api.projectFilesSearch).mockResolvedValue([ignoredFile]);
+  const { input, reopen } = renderFiles();
+
+  const folder = await screen.findByRole('treeitem', { name: 'cache, Git ignored' });
+  expect(within(folder).getByText('cache').classList.contains('text-git-ignored-fg')).toBe(true);
+  fireEvent.click(folder);
+  const ignored = await screen.findByRole('treeitem', { name: 'local.txt, Git ignored' });
+  expect(within(ignored).getByText('local.txt').classList.contains('text-git-ignored-fg')).toBe(true);
+  const tree = screen.getByRole('tree', { name: 'Project files' });
+  fireEvent.keyDown(tree, { key: 'ArrowDown' });
+  fireEvent.keyDown(tree, { key: 'Enter' });
+  expect(api.projectFileRead).toHaveBeenCalledWith(project.id, 'cache/local.txt');
+
+  fireEvent.change(input, { target: { value: 'local' } });
+  const result = await screen.findByRole('treeitem', { name: 'cache/local.txt' });
+  expect(within(result).getByText('local.txt').classList.contains('text-git-ignored-fg')).toBe(false);
+
+  reopen();
+  const refreshed = await screen.findByRole('treeitem', { name: 'cache' });
+  expect(within(refreshed).getByText('cache').classList.contains('text-git-ignored-fg')).toBe(false);
+});
 
 it('opens the exact path with the keyboard and restores the open folder on clear', async () => {
   vi.mocked(api.projectFilesSearch).mockResolvedValue([file('src/main.ts'), file('tests/main.ts')]);

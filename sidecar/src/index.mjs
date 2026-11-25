@@ -26,6 +26,8 @@ const { values: args } = parseArgs({
     model: { type: 'string' },
     'inherited-model': { type: 'boolean', default: false },
     'data-dir': { type: 'string' },
+    'project-skills-plugin': { type: 'string' },
+    'project-skills-warning': { type: 'string' },
     resume: { type: 'boolean', default: false },
   },
 });
@@ -108,6 +110,7 @@ let currentModel = Object.hasOwn(meta, 'model') ? meta.model : (args.model ?? nu
 const inheritedModel = !!currentModel && (meta.inherited_model ?? (!meta.engine && args['inherited-model']));
 const ctx = {
   cwd: args.cwd,
+  projectSkillsPlugin: args['project-skills-plugin'],
   mode,
   model: currentModel ?? undefined,
   inheritedModel,
@@ -257,7 +260,10 @@ server = new SocketServer(sockPath, {
 saveMeta({ engine: args.engine, cwd: args.cwd, permission_mode: mode, model: currentModel, inherited_model: inheritedModel });
 await server.listen();
 
-emit('session_started', { engine: args.engine, model: ctx.model ?? null, cwd: args.cwd, permission_mode: mode, resumed: !!resumeId });
+if (args.engine === 'claude' && args['project-skills-warning']) {
+  emit('project_skills_warning', { message: args['project-skills-warning'] });
+}
+emit('session_started', { hc_terminal: process.env.HC_TERMINAL_ID, engine: args.engine, model: ctx.model ?? null, cwd: args.cwd, permission_mode: mode, resumed: !!resumeId });
 reportStatus('idle');
 
 listenStdin({

@@ -32,6 +32,7 @@ function fixture(t, initialModel, respond) {
     configured = options.model;
     let model = configured;
     return {
+      async interrupt() {},
       async setModel(next) {
         changes.push(next);
         model = next;
@@ -98,6 +99,26 @@ test('Claude never retries after a tool call or a non-model failure', { timeout:
     assert.equal(s.events.find((event) => event.type === 'turn_end').is_error, true);
     assert.deepEqual(s.states, [{ state: 'error', kind: undefined }]);
   }
+});
+
+test('Claude returns to idle when the SDK reports an error result after interrupt', { timeout: 3000 }, async (t) => {
+  const s = fixture(t, undefined, async function* (_model, turn) {
+    if (turn === 1) await s.engine.interrupt();
+    yield result(turn === 1);
+  });
+  s.engine.prompt('stop this turn');
+  await s.waitForTurns(1);
+  s.engine.prompt('continue the conversation');
+  await s.waitForTurns(2);
+
+  const [interrupted, completed] = s.events.filter((event) => event.type === 'turn_end');
+  assert.equal(interrupted.interrupted, true);
+  assert.equal(interrupted.is_error, false);
+  assert.equal(completed.interrupted, false);
+  assert.deepEqual(s.states, [
+    { state: 'idle', kind: undefined },
+    { state: 'idle', kind: 'turn_complete' },
+  ]);
 });
 
 test('Claude sidecar retains its inherited model through a restart before the first prompt', { timeout: 6000 }, async (t) => {

@@ -17,8 +17,7 @@ vi.mock('@/components/layout/Sidebar', () => ({ Sidebar: () => null }));
 vi.mock('@/components/layout/WorkspaceView', () => ({ WorkspaceView: () => null }));
 vi.mock('@/components/layout/ZoomIndicator', () => ({ ZoomIndicator: () => null }));
 vi.mock('@/components/panels/RightPanel', () => ({ RightPanel: () => null }));
-vi.mock('@/lib/sidebarShortcuts', () => ({ installSidebarShortcuts: () => {} }));
-vi.mock('@/lib/zoomShortcuts', () => ({ installZoomShortcuts: () => {}, useZoomEffect: () => {} }));
+vi.mock('@/lib/zoomShortcuts', () => ({ useZoomEffect: () => {} }));
 
 afterEach(() => {
   cleanup();

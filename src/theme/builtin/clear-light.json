@@ -1,0 +1,28 @@
+{
+  "name": "Clear Light",
+  "appearance": "light",
+  "background": "#fdfdfc",
+  "foreground": "#16181d",
+  "selection": "#c9dcf5",
+  "ansi": [
+    "#16181d", "#b3261e", "#1d6b33", "#7a5200", "#1a56b8", "#8a2d8f", "#0b6470", "#4a4f59",
+    "#3d424b", "#a1201a", "#185c2c", "#6b4700", "#1549a0", "#76267b", "#0a5660", "#5b616b"
+  ],
+  "colors": {
+    "surface": "#f4f5f7",
+    "muted": "#eef0f3",
+    "muted_foreground": "#5b616b",
+    "border": "#c3c8d0",
+    "input": "#8a909b",
+    "ring": "#1a56b8",
+    "primary": "#1a56b8",
+    "primary_foreground": "#ffffff",
+    "accent": "#dbe6f5",
+    "accent_foreground": "#16181d",
+    "code": "#f4f5f7",
+    "blocked": "#b3261e",
+    "idle": "#5b616b",
+    "term_bg": "#fdfdfc",
+    "term_fg": "#16181d"
+  }
+}

@@ -4,7 +4,7 @@ import { fontStack } from '@/lib/fonts';
 import { useThemeFiles } from '@/theme/files';
 import { applyTheme } from '@/theme/apply';
 import { buildCatalog, pickTheme, type ThemeCatalog } from '@/theme/catalog';
-import type { ResolvedTheme } from '@/theme/resolve';
+import { resolveTheme, type ResolvedTheme } from '@/theme/resolve';
 
 // Spec 016: colours come from theme files (src/theme/builtin/*.json + <data_dir>/themes/*.json) through the role registry.
 // Theme mode (System/Light/Dark, spec 010) decides light or dark; `lightTheme` / `darkTheme` pick the theme for each.
@@ -86,7 +86,11 @@ export function bootTheme() {
   const dark = isDarkMode(mode, darkMql()?.matches ?? false);
   const id = dark ? darkTheme : lightTheme;
   const cached = readCache()[dark ? 'dark' : 'light'];
-  applyTheme(cached && cached.id === id && cached.colors ? cached : pickTheme(buildCatalog(), id, dark));
+  if (cached?.id === id && cached.colors?.background && cached.colors.foreground) {
+    applyTheme(resolveTheme({ ...cached, background: cached.colors.background, foreground: cached.colors.foreground }));
+  } else {
+    applyTheme(pickTheme(buildCatalog(), id, dark));
+  }
 }
 
 /** Interface/code fonts: override the Tailwind font tokens on <html>, so every font-sans / font-mono follows. */

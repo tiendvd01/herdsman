@@ -1,7 +1,7 @@
 //! Tìm trong transcript của Claude Code (`<config>/projects/*/<session>.jsonl`), không phải session hc của app.
 use serde::Serialize;
-use serde_json::Value;
-use std::io::{BufRead, BufReader};
+use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -139,6 +139,7 @@ fn scan_file(path: &Path, terms: &[Vec<char>], mtime: i64) -> Option<ClaudeHit> 
     let mut cwd = None;
     let mut title = TranscriptTitle::default();
     let mut snip = None;
+    let mut first_prompt = None;
     for line in BufReader::new(std::fs::File::open(path).ok()?).lines().map_while(Result::ok) {
         let is_msg = line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"");
         let is_title = is_title_record(&line);
@@ -156,7 +157,10 @@ fn scan_file(path: &Path, terms: &[Vec<char>], mtime: i64) -> Option<ClaudeHit> 
             cwd = v.get("cwd").and_then(Value::as_str).map(str::to_string);
         }
         let Some(text) = message_text(&v) else { continue };
-        if snip.is_none() {
+        if first_prompt.is_none() && v["type"] == "user" {
+            first_prompt = Some(text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect::<String>());
+        }
+        if !terms.is_empty() && snip.is_none() {
             let folded = fold(&text);
             let pos: Option<Vec<usize>> = terms.iter().map(|t| find_sub(&folded, t)).collect();
             if let Some(pos) = pos {
@@ -165,8 +169,11 @@ fn scan_file(path: &Path, terms: &[Vec<char>], mtime: i64) -> Option<ClaudeHit> 
             }
         }
     }
-    let title = title.preferred();
-    if snip.is_none() && !title.as_deref().is_some_and(|title| {
+    let title = title.preferred().or(first_prompt);
+    if terms.is_empty() && title.is_none() {
+        return None;
+    }
+    if !terms.is_empty() && snip.is_none() && !title.as_deref().is_some_and(|title| {
         let folded = fold(title);
         terms.iter().all(|term| find_sub(&folded, term).is_some())
     }) {
@@ -181,12 +188,35 @@ fn scan_file(path: &Path, terms: &[Vec<char>], mtime: i64) -> Option<ClaudeHit> 
     })
 }
 
+pub fn details(path: &Path) -> Option<ClaudeHit> {
+    scan_file(path, &[], 0)
+}
+
+pub fn import_messages(path: &Path, mut out: impl Write) -> std::io::Result<()> {
+    let mut seq = 0;
+    for line in BufReader::new(std::fs::File::open(path)?).lines() {
+        let Ok(entry) = serde_json::from_str::<Value>(&line?) else { continue };
+        let Some(text) = message_text(&entry) else { continue };
+        let mut event = match entry["type"].as_str() {
+            Some("user") => json!({"type": "user_message", "text": text, "source": "app"}),
+            Some("assistant") => json!({"type": "assistant_message", "message_id": entry["message"]["id"],
+                "blocks": [{"kind": "text", "text": text}]}),
+            _ => continue,
+        };
+        seq += 1;
+        event["seq"] = json!(seq);
+        event["ts"] = json!(entry["timestamp"].as_str()
+            .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+            .map(|ts| ts.timestamp_millis()).unwrap_or_default());
+        serde_json::to_writer(&mut out, &event)?;
+        writeln!(out)?;
+    }
+    Ok(())
+}
+
 pub fn search(query: &str, limit: usize, include: impl Fn(&ClaudeHit) -> bool) -> Vec<ClaudeHit> {
     let terms: Vec<Vec<char>> = query.split_whitespace().map(fold).collect();
     let Some(root) = claude_dir().map(|d| d.join("projects")) else { return vec![] };
-    if terms.is_empty() {
-        return vec![];
-    }
     let mut files: Vec<(PathBuf, i64)> = vec![];
     for dir in std::fs::read_dir(&root).into_iter().flatten().flatten() {
         for f in std::fs::read_dir(dir.path()).into_iter().flatten().flatten() {
@@ -242,4 +272,28 @@ mod tests {
         assert!(h.snippet.contains("đăng nhập"));
         assert!(scan_file(&p, &[fold("zzz")], 1).is_none());
     }
+    #[test]
+    fn untitled_cli_session_can_be_browsed_and_replayed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, concat!(
+            "{\"type\":\"user\",\"cwd\":\"/project\",\"isMeta\":true,\"message\":{\"content\":\"Internal message\"}}\n",
+            "{\"type\":\"user\",\"cwd\":\"/project\",\"timestamp\":\"2026-11-25T12:00:00Z\",\"message\":{\"content\":\"Fix the login\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_1\",\"content\":[{\"type\":\"text\",\"text\":\"Fixed\"}]}}\n",
+        )).unwrap();
+        let hit = details(&path).unwrap();
+        assert_eq!(hit.cwd.as_deref(), Some("/project"));
+        assert_eq!(hit.title.as_deref(), Some("Fix the login"));
+
+        let mut output = Vec::new();
+        import_messages(&path, &mut output).unwrap();
+        let events: Vec<Value> = std::str::from_utf8(&output).unwrap().lines()
+            .map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["text"], "Fix the login");
+        assert_eq!(events[0]["ts"], 1795608000000_i64);
+        assert_eq!(events[1]["blocks"][0]["text"], "Fixed");
+        assert_eq!(events[1]["seq"], 2);
+    }
+
 }

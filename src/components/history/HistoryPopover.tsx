@@ -17,23 +17,36 @@ export function HistoryPopover({ ws, sessions }: { ws: Workspace; sessions: Sess
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [all, setAll] = useState(false);
-  const [hits, setHits] = useState<ClaudeHit[] | null>(null);
+  const [hits, setHits] = useState<ClaudeHit[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
   const qc = useQueryClient();
   const statuses = useUiStore((s) => s.statuses);
   const current = useUiStore((s) => s.sessionByWorkspace[ws.id]);
-  const sorted = sessions.filter((s) => s.title).sort((a, b) => b.updated_at - a.updated_at);
+  const sorted = sessions.filter((s) => s.title || ws.deleted_at != null).sort((a, b) => b.updated_at - a.updated_at);
 
   useEffect(() => {
-    if (!q.trim()) {
-      setHits(null);
-      return;
-    }
+    if (!open) return;
+    let active = true;
+    setHits([]);
+    setLoading(true);
+    setFailed(false);
     const h = setTimeout(() => {
-      api.claudeSearch(q).then(setHits).catch(() => setHits([]));
-    }, 150);
-    return () => clearTimeout(h);
-  }, [q]);
-  const shown = hits && (all ? hits : hits.filter((h) => h.workspace_id === ws.id));
+      api.claudeSearch(q, { workspaceId: all ? undefined : ws.id }).then((results) => {
+        if (active) setHits(results);
+      }).catch(() => {
+        if (active) setFailed(true);
+      }).finally(() => {
+        if (active) setLoading(false);
+      });
+    }, q.trim() ? 150 : 0);
+    return () => {
+      active = false;
+      clearTimeout(h);
+    };
+  }, [open, q, all, ws.id]);
+  const browse = !q.trim();
+  const shown = browse ? hits.filter((hit) => !sessions.some((s) => s.engine_session_id === hit.claude_session_id)) : hits;
 
   function openSession(workspaceId: string, projectId: string, sessionId: string, status?: string) {
     const ui = useUiStore.getState();
@@ -91,51 +104,50 @@ export function HistoryPopover({ ws, sessions }: { ws: Workspace; sessions: Sess
           </RadioGroup>
         </div>
         <span className="block px-2 py-1.5 text-xs font-medium text-muted-foreground">
-          {shown ? 'Claude conversations' : `Sessions in ${ws.name ?? 'this workspace'} · newest first`}
+          {browse ? `Sessions in ${ws.name ?? 'this workspace'}` : 'Claude conversations'}
         </span>
         <div className="flex max-h-[420px] flex-col overflow-y-auto">
-          {shown ? (
-            shown.length ? (
-              shown.map((h) => (
-                <button
-                  type="button"
-                  key={h.claude_session_id}
-                  className="flex flex-col rounded-md px-2 py-1.5 text-left hover:bg-accent"
-                  onClick={() => {
-                    setOpen(false);
-                    void openClaudeConversation(qc, h);
-                  }}
-                >
-                  <TruncatedText className="truncate text-[12px] font-medium">{h.title ?? 'Conversation'}</TruncatedText>
-                  <TruncatedText className="truncate text-xs text-muted-foreground">
-                    {h.project_name ? `${h.project_name} › ${h.workspace_name ?? 'Workspace'}` : (h.cwd ?? 'Unknown folder')}
-                  </TruncatedText>
-                  <TruncatedText className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{h.snippet}</TruncatedText>
-                </button>
-              ))
-            ) : (
-              <p className="px-2 py-6 text-center text-xs text-muted-foreground">No matches</p>
-            )
-          ) : sorted.length ? (
-            sorted.map((s) => {
-              const st = statuses[s.id]?.state ?? s.status;
-              return (
-                <button
-                  type="button"
-                  key={s.id}
-                  className={cn('flex min-h-9 items-center gap-2 rounded-md px-2 text-left hover:bg-accent', s.id === current && 'bg-accent')}
-                  onClick={() => openSession(ws.id, ws.project_id, s.id, st)}
-                >
-                  <StatusDot status={st} />
-                  <TruncatedText className="min-w-0 flex-1 truncate text-[12px]">{s.title ?? 'New session'}</TruncatedText>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {STATUS_LABEL[st]} · {timeAgo(s.updated_at)}
-                  </span>
-                </button>
-              );
-            })
-          ) : (
-            <p className="px-2 py-6 text-center text-xs text-muted-foreground">No sessions yet</p>
+          {browse && sorted.map((s) => {
+            const st = statuses[s.id]?.state ?? s.status;
+            return (
+              <button
+                type="button"
+                key={s.id}
+                className={cn('flex min-h-9 items-center gap-2 rounded-md px-2 text-left hover:bg-accent', s.id === current && 'bg-accent')}
+                onClick={() => openSession(ws.id, ws.project_id, s.id, st)}
+              >
+                <StatusDot status={st} />
+                <TruncatedText className="min-w-0 flex-1 truncate text-[12px]">{s.title ?? 'New session'}</TruncatedText>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {STATUS_LABEL[st]} · {timeAgo(s.updated_at)}
+                </span>
+              </button>
+            );
+          })}
+          {browse && shown.length > 0 && (
+            <span className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Claude Code</span>
+          )}
+          {shown.map((h) => (
+            <button
+              type="button"
+              key={h.claude_session_id}
+              className="flex flex-col rounded-md px-2 py-1.5 text-left hover:bg-accent"
+              onClick={() => {
+                setOpen(false);
+                void openClaudeConversation(qc, h);
+              }}
+            >
+              <TruncatedText className="truncate text-[12px] font-medium">{h.title ?? 'Conversation'}</TruncatedText>
+              <TruncatedText className="truncate text-xs text-muted-foreground">
+                {h.project_name ? `${h.project_name} › ${h.workspace_name ?? 'Workspace'}` : (h.cwd ?? 'Unknown folder')}
+              </TruncatedText>
+              {h.snippet && <TruncatedText className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{h.snippet}</TruncatedText>}
+            </button>
+          ))}
+          {(loading || failed || (!shown.length && (!browse || !sorted.length))) && (
+            <p className="px-2 py-6 text-center text-xs text-muted-foreground" role="status">
+              {loading ? 'Loading Claude conversations…' : failed ? 'Could not load Claude conversations' : browse ? 'No sessions yet' : 'No matches'}
+            </p>
           )}
         </div>
       </PopoverContent>

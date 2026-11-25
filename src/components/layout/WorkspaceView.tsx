@@ -22,9 +22,10 @@ import { toast } from '@/components/ui/toast';
 import { createSession } from '@/lib/actions';
 import { qk, useProjects, useSessions, useWorkspaces } from '@/lib/queries';
 import type { Project, Session, SessionStatus, Workspace } from '@/lib/types';
+import { useNavigationOrder } from '@/lib/useNavigationOrder';
 import { cn } from '@/lib/utils';
 import { IS_MAC, TRAFFIC_LIGHTS_PAD } from '@/lib/platform';
-import { SHORTCUT_ARIA, SHORTCUT_LABEL } from '@/lib/sidebarShortcuts';
+import { effectiveShortcut, shortcutLabel, useShortcutBindings } from '@/lib/keyboardShortcuts';
 import { sessionTabStatus, useUiStore } from '@/stores/useUiStore';
 
 const WorkspaceTerminal = lazy(() => import('@/components/terminal/WorkspaceTerminal'));
@@ -54,14 +55,15 @@ export function WorkspaceView() {
 }
 
 function SidebarToggle() {
+  const binding = effectiveShortcut('sidebar', useShortcutBindings());
   const open = useUiStore((s) => s.sidebarOpen);
   return (
-    <Tooltip content={<ShortcutHint label={open ? 'Collapse sidebar' : 'Expand sidebar'} kbd={SHORTCUT_LABEL.left} />}>
+    <Tooltip content={<ShortcutHint label={open ? 'Collapse sidebar' : 'Expand sidebar'} kbd={shortcutLabel(binding)} />}>
       <Button
         variant="ghost"
         size="icon-sm"
         aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
-        aria-keyshortcuts={SHORTCUT_ARIA.left}
+        aria-keyshortcuts={shortcutLabel(binding, true)}
         onClick={() => useUiStore.getState().setSidebarOpen(!open)}>
         <PanelLeft />
       </Button>
@@ -70,9 +72,10 @@ function SidebarToggle() {
 }
 
 function RightPanelToggle({ buttonRef }: { buttonRef?: React.Ref<HTMLButtonElement> } = {}) {
+  const binding = effectiveShortcut('side-panel', useShortcutBindings());
   const rightOpen = useUiStore((s) => s.rightOpen);
   return (
-    <Tooltip content={<ShortcutHint label={rightOpen ? 'Hide side panel' : 'Show side panel'} kbd={SHORTCUT_LABEL.right} />}>
+    <Tooltip content={<ShortcutHint label={rightOpen ? 'Hide side panel' : 'Show side panel'} kbd={shortcutLabel(binding)} />}>
       <Button
         variant="ghost"
         size="icon"
@@ -80,7 +83,7 @@ function RightPanelToggle({ buttonRef }: { buttonRef?: React.Ref<HTMLButtonEleme
         ref={buttonRef}
         data-right-panel-toggle=""
         aria-label={rightOpen ? 'Hide side panel' : 'Show side panel'}
-        aria-keyshortcuts={SHORTCUT_ARIA.right}
+        aria-keyshortcuts={shortcutLabel(binding, true)}
       >
         <PanelRight />
       </Button>
@@ -119,8 +122,9 @@ function TopBar() {
 
 const tabFrame = 'flex shrink-0 items-center rounded-md border border-transparent pr-0.5 transition-colors hover:bg-muted';
 const selectedTabFrame = 'border-border bg-muted';
-const tabTrigger = 'max-w-[240px] justify-start gap-1.5 px-2 hover:bg-transparent';
+const tabTrigger = 'max-w-[240px] justify-start gap-1.5 px-2 hover:bg-transparent touch-none select-none';
 const tabClose = 'size-6 hover:bg-transparent';
+const contentTabFrame = 'm-2 min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-primary';
 
 function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   const workspaceId = ws?.id ?? null;
@@ -135,7 +139,7 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [terminalAddress, setTerminalAddress] = useState<string>();
   const terminalQueryKey = qk.workspaceTerminals(workspaceId ?? '');
-  const { data: workspaceTerminals = [] } = useQuery({
+  const { data: workspaceTerminals = [], isSuccess: terminalsLoaded } = useQuery({
     queryKey: terminalQueryKey,
     queryFn: () => api.workspaceTerminalList(workspaceId!),
     enabled: !!workspaceId && ws?.archived_at == null,
@@ -206,7 +210,7 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
     else if (inContext()) trigger?.focus();
   }
   const fileClose = useFileClose(restoreCloseFocus);
-  const { data: sessions = [] } = useSessions(workspaceId);
+  const { data: sessions = [], isSuccess: sessionsLoaded } = useSessions(workspaceId);
   const statuses = useUiStore((s) => s.statuses);
   const viewedCompletions = useUiStore((s) => s.viewedCompletions);
   const current = useUiStore((s) => workspaceId ? s.sessionByWorkspace[workspaceId] : undefined);
@@ -256,14 +260,25 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   const fileKey = (id: string) => `file:${id}`;
   const diffKey = (id: string) => `diff:${id}`;
   const terminalKey = (address: string) => `terminal:${address}`;
-  const order = [
+  const tabKeys = [
     ...tabs.map((session) => sessionKey(session.id)),
     ...terminals.map((terminal) => terminalKey(terminal.address)),
     ...projectFiles.map((file) => fileKey(file.id)),
     ...workspaceDiffs.map((diff) => diffKey(diff.id)),
   ];
+  // Reopened file and diff tabs have a new position even if another workspace had them open.
+  const reorderKeys = new Map([
+    ...projectFiles.map((file) => [fileKey(file.id), fileKey(file.openedId ?? file.id)] as const),
+    ...workspaceDiffs.map((diff) => [diffKey(diff.id), diffKey(diff.openedId ?? diff.id)] as const),
+  ]);
+  const reorderKey = (key: string) => reorderKeys.get(key) ?? key;
+  const tabByReorderKey = new Map(tabKeys.map((key) => [reorderKey(key), key]));
+  const tabReorder = useNavigationOrder(workspaceId ? `tabs:${workspaceId}` : `project-tabs:${project.id}`,
+    [...tabByReorderKey.keys()], 'horizontal', !workspaceId || (sessionsLoaded && (terminalsLoaded || ws?.archived_at != null)));
+  const order = tabReorder.order.map((key) => tabByReorderKey.get(key)!);
 
   function navigateTabs(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (!(event.target instanceof HTMLElement) || event.target.getAttribute('role') !== 'tab') return;
     const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
     const index = items.indexOf(event.target as HTMLButtonElement);
@@ -423,6 +438,130 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
     }
   }
 
+  const tabNodes = new Map([
+    ...tabs.map((s) => {
+      const key = sessionKey(s.id);
+      const indicator = sessionTabStatus(s, statuses[s.id], viewedCompletions[s.id]);
+      const selected = !selectedTerminal && !selectedDocument && s.id === active?.id;
+      return (
+        <div
+          key={key}
+          {...tabReorder.row(reorderKey(key))}
+          className={cn(tabFrame, tabReorder.indicator, selected && selectedTabFrame)}
+        >
+          <Button
+            variant={selected ? 'ghost' : 'muted'}
+            size="xs"
+            {...tabReorder.item(reorderKey(key))}
+            role="tab"
+            id={domId(sessionKey(s.id), 'tab')}
+            aria-controls={domId(sessionKey(s.id), 'panel')}
+            tabIndex={selected ? 0 : -1}
+            aria-selected={selected}
+            className={tabTrigger}
+            onClick={() => {
+              setTerminalAddress(undefined);
+              useFileStore.getState().activate(project.id);
+              if (workspaceId) {
+                const ui = useUiStore.getState();
+                ui.selectSession(workspaceId, s.id);
+                if (document.hasFocus()) ui.acknowledgeCompletion(s);
+              }
+            }}
+          >
+            <span className="flex size-3 shrink-0 items-center justify-center">
+              {pendingClose?.id === s.id && !pendingClose.wasDone
+                ? <Spinner label="Closing session" className="text-muted-foreground" />
+                : <StatusDot status={indicator} spin />}
+            </span>
+            <TruncatedText className="truncate">{s.title ?? 'New session'}</TruncatedText>
+            <EngineIcon engine={s.engine} />
+            {s.permission_mode === 'bypass' ? (
+              <Badge variant="warn" className="h-[18px] px-1.5 text-[11px]">
+                bypass
+              </Badge>
+            ) : null}
+          </Button>
+          <Button
+            variant="muted"
+            size="icon-sm"
+            data-close-tab
+            onClick={(event) => requestClose(s, event.currentTarget)}
+            tabIndex={selected ? 0 : -1}
+            disabled={closePending}
+            className={tabClose}
+            aria-label={`Hide tab ${s.title ?? 'session'}`}
+          >
+            <X />
+          </Button>
+        </div>
+      );
+    }),
+    ...terminals.map((terminal) => {
+      const key = terminalKey(terminal.address);
+      const selected = selectedTerminal?.address === terminal.address;
+      return (
+        <div key={key} {...tabReorder.row(reorderKey(key))} className={cn(tabFrame, tabReorder.indicator, selected && selectedTabFrame)}>
+          <Button variant={selected ? 'ghost' : 'muted'} size="xs"
+            {...tabReorder.item(reorderKey(key))}
+            role="tab" aria-selected={selected} id={domId(key, 'tab')} aria-controls={domId(key, 'panel')}
+            tabIndex={selected || (!active && !selectedDocument && !selectedTerminal && terminals[0] === terminal) ? 0 : -1}
+            className={tabTrigger} onClick={() => selectTerminal(terminal.address)}>
+            <TerminalIcon aria-hidden="true" />
+            Terminal {terminal.address}
+          </Button>
+          <Button variant="muted" size="icon-sm" data-close-tab aria-label={`Close terminal ${terminal.address}`}
+            tabIndex={selected ? 0 : -1} disabled={stopTerminal.isPending}
+            className={tabClose} onClick={() => stopTerminal.mutate(terminal.address)}>
+            <X />
+          </Button>
+        </div>
+      );
+    }),
+    ...projectFiles.map((file) => {
+      const key = fileKey(file.id);
+      return (
+        <div key={key} {...tabReorder.row(reorderKey(key))} className={cn(tabFrame, tabReorder.indicator, file.id === fileId && selectedTabFrame)}>
+          <Button variant={file.id === fileId ? 'ghost' : 'muted'} size="xs" ref={file.id === fileId ? activeFileTab : undefined} {...tabReorder.item(reorderKey(key))} role="tab" aria-selected={file.id === fileId} title={file.path}
+            id={domId(fileKey(file.id), 'tab')} aria-controls={domId(fileKey(file.id), 'panel')}
+            tabIndex={file.id === fileId ? 0 : -1}
+            className={tabTrigger}
+            onClick={() => useFileStore.getState().activate(project.id, file.id)}>
+            <FileText data-icon="inline-start" />
+            <TruncatedText className="truncate">{file.name}</TruncatedText>
+            {isDirty(file) ? <Badge variant="outline" aria-label="Unsaved changes">Unsaved</Badge> : null}
+          </Button>
+          <Button variant="muted" size="icon-sm" data-close-tab aria-label={`Close ${file.path}`} onClick={(event) => requestFileClose(file, event.currentTarget)} disabled={file.saving} tabIndex={file.id === fileId ? 0 : -1}
+            className={tabClose}>
+            <X />
+          </Button>
+        </div>
+      );
+    }),
+    ...workspaceDiffs.map((diff) => {
+      const key = diffKey(diff.id);
+      const selected = diff.id === fileId;
+      return (
+        <div key={key} {...tabReorder.row(reorderKey(key))} className={cn(tabFrame, tabReorder.indicator, selected && selectedTabFrame)}>
+          <Button variant={selected ? 'ghost' : 'muted'} size="xs" ref={selected ? activeFileTab : undefined}
+            {...tabReorder.item(reorderKey(key))}
+            role="tab" aria-selected={selected} title={diff.commit ? `${diff.path} (${diff.commit.id})` : diff.path}
+            aria-label={`Changes: ${diff.path}${diff.commit ? ` (${diff.commit.shortId})` : ''}`}
+            id={domId(key, 'tab')} aria-controls={domId(key, 'panel')}
+            tabIndex={selected ? 0 : -1} className={tabTrigger}
+            onClick={() => useFileStore.getState().activate(project.id, diff.id)}>
+            <FileDiff data-icon="inline-start" />
+            <TruncatedText className="truncate">{diff.name}{diff.commit ? ` · ${diff.commit.shortId}` : ''}</TruncatedText>
+          </Button>
+          <Button variant="muted" size="icon-sm" data-close-tab aria-label={`Close changes for ${diff.path}`}
+            onClick={() => closeDiff(diff.id)} tabIndex={selected ? 0 : -1} className={tabClose}>
+            <X />
+          </Button>
+        </div>
+      );
+    }),
+  ].map((node) => [node.key, node]));
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {fileClose.dialog}
@@ -485,118 +624,8 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
 
       {/* Session tab row */}
       <div className="flex h-11 shrink-0 items-end gap-1 border-b border-border px-3">
-        <div ref={rowRef} onKeyDown={navigateTabs} className="flex min-w-0 items-center gap-1 overflow-x-auto pb-1.5 overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label={ws ? "Workspace tabs" : "Project tabs"}>
-          {tabs.map((s) => {
-            const indicator = sessionTabStatus(s, statuses[s.id], viewedCompletions[s.id]);
-            const selected = !selectedTerminal && !selectedDocument && s.id === active?.id;
-            return (
-              <div
-                key={s.id}
-                className={cn(tabFrame, selected && selectedTabFrame)}
-              >
-                <Button
-                  variant={selected ? 'ghost' : 'muted'}
-                  size="xs"
-                  role="tab"
-                  id={domId(sessionKey(s.id), 'tab')}
-                  aria-controls={domId(sessionKey(s.id), 'panel')}
-                  tabIndex={selected ? 0 : -1}
-                  aria-selected={selected}
-                  className={tabTrigger}
-                  onClick={() => {
-                    setTerminalAddress(undefined);
-                    useFileStore.getState().activate(project.id);
-                    if (workspaceId) {
-                      const ui = useUiStore.getState();
-                      ui.selectSession(workspaceId, s.id);
-                      if (document.hasFocus()) ui.acknowledgeCompletion(s);
-                    }
-                  }}
-                >
-                  <span className="flex size-3 shrink-0 items-center justify-center">
-                    {pendingClose?.id === s.id && !pendingClose.wasDone
-                      ? <Spinner label="Closing session" className="text-muted-foreground" />
-                      : <StatusDot status={indicator} spin />}
-                  </span>
-                  <TruncatedText className="truncate">{s.title ?? 'New session'}</TruncatedText>
-                  <EngineIcon engine={s.engine} />
-                  {s.permission_mode === 'bypass' ? (
-                    <Badge variant="warn" className="h-[18px] px-1.5 text-[11px]">
-                      bypass
-                    </Badge>
-                  ) : null}
-                </Button>
-                <Button
-                  variant="muted"
-                  size="icon-sm"
-                  onClick={(event) => requestClose(s, event.currentTarget)}
-                  tabIndex={selected ? 0 : -1}
-                  disabled={closePending}
-                  className={tabClose}
-                  aria-label={`Hide tab ${s.title ?? 'session'}`}
-                >
-                  <X />
-                </Button>
-              </div>
-            );
-          })}
-          {terminals.map((terminal) => {
-            const key = terminalKey(terminal.address);
-            const selected = selectedTerminal?.address === terminal.address;
-            return (
-              <div key={key} className={cn(tabFrame, selected && selectedTabFrame)}>
-                <Button variant={selected ? 'ghost' : 'muted'} size="xs"
-                  role="tab" aria-selected={selected} id={domId(key, 'tab')} aria-controls={domId(key, 'panel')}
-                  tabIndex={selected || (!active && !selectedDocument && !selectedTerminal && terminals[0] === terminal) ? 0 : -1}
-                  className={tabTrigger} onClick={() => selectTerminal(terminal.address)}>
-                  <TerminalIcon aria-hidden="true" />
-                  Terminal {terminal.address}
-                </Button>
-                <Button variant="muted" size="icon-sm" aria-label={`Close terminal ${terminal.address}`}
-                  tabIndex={selected ? 0 : -1} disabled={stopTerminal.isPending}
-                  className={tabClose} onClick={() => stopTerminal.mutate(terminal.address)}>
-                  <X />
-                </Button>
-              </div>
-            );
-          })}
-          {projectFiles.map((file) => (
-            <div key={file.id} className={cn(tabFrame, file.id === fileId && selectedTabFrame)}>
-              <Button variant={file.id === fileId ? 'ghost' : 'muted'} size="xs" ref={file.id === fileId ? activeFileTab : undefined} role="tab" aria-selected={file.id === fileId} title={file.path}
-                id={domId(fileKey(file.id), 'tab')} aria-controls={domId(fileKey(file.id), 'panel')}
-                tabIndex={file.id === fileId ? 0 : -1}
-                className={tabTrigger}
-                onClick={() => useFileStore.getState().activate(project.id, file.id)}>
-                <FileText data-icon="inline-start" />
-                <TruncatedText className="truncate">{file.name}</TruncatedText>
-                {isDirty(file) ? <Badge variant="outline" aria-label="Unsaved changes">Unsaved</Badge> : null}
-              </Button>
-              <Button variant="muted" size="icon-sm" aria-label={`Close ${file.path}`} onClick={(event) => requestFileClose(file, event.currentTarget)} disabled={file.saving} tabIndex={file.id === fileId ? 0 : -1}
-                className={tabClose}>
-                <X />
-              </Button>
-            </div>
-          ))}
-          {workspaceDiffs.map((diff) => {
-            const key = diffKey(diff.id);
-            const selected = diff.id === fileId;
-            return (
-              <div key={key} className={cn(tabFrame, selected && selectedTabFrame)}>
-                <Button variant={selected ? 'ghost' : 'muted'} size="xs" ref={selected ? activeFileTab : undefined}
-                  role="tab" aria-selected={selected} title={diff.path} aria-label={`Changes: ${diff.path}`}
-                  id={domId(key, 'tab')} aria-controls={domId(key, 'panel')}
-                  tabIndex={selected ? 0 : -1} className={tabTrigger}
-                  onClick={() => useFileStore.getState().activate(project.id, diff.id)}>
-                  <FileDiff data-icon="inline-start" />
-                  <TruncatedText className="truncate">{diff.name}</TruncatedText>
-                </Button>
-                <Button variant="muted" size="icon-sm" aria-label={`Close changes for ${diff.path}`}
-                  onClick={() => closeDiff(diff.id)} tabIndex={selected ? 0 : -1} className={tabClose}>
-                  <X />
-                </Button>
-              </div>
-            );
-          })}
+        <div ref={rowRef} data-workspace-tabs data-reorder-scroll onKeyDown={navigateTabs} className="flex min-w-0 items-center gap-1 overflow-x-auto pb-1.5 overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label={ws ? "Workspace tabs" : "Project tabs"}>
+          {order.map((key) => tabNodes.get(key))}
         </div>
         {ws && ws.archived_at == null ? (
           <DropdownMenu open={launcherOpen} onOpenChange={setLauncherOpen}>
@@ -635,15 +664,15 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
         {ws ? <HistoryPopover ws={ws} sessions={sessions} /> : null}
       </div>
 
-      {active && ws ? (
-        <div role="tabpanel" id={domId(sessionKey(active.id), 'panel')} aria-labelledby={domId(sessionKey(active.id), 'tab')} hidden={!!selectedTerminal || !!selectedDocument} className={cn('min-h-0 flex-1 flex-col', !selectedTerminal && !selectedDocument && 'flex')}>
-          <SessionView key={active.id} session={active} ws={ws} />
-        </div>
-      ) : null}
+      {ws && tabs.map((session) => (
+        <SessionTabPanel key={session.id} session={session} ws={ws}
+          id={domId(sessionKey(session.id), 'panel')} tabId={domId(sessionKey(session.id), 'tab')}
+          visible={session.id === visibleSession?.id} />
+      ))}
       {selectedTerminal && ws ? (
         <div role="tabpanel" id={domId(terminalKey(selectedTerminal.address), 'panel')}
           aria-labelledby={domId(terminalKey(selectedTerminal.address), 'tab')}
-          className="flex min-h-0 flex-1 flex-col">
+          className={cn('flex', contentTabFrame)}>
           <Suspense fallback={<Spinner label="Opening terminal" className="m-3 text-muted-foreground" />}>
             <WorkspaceTerminal key={selectedTerminal.address} workspaceId={ws.id} address={selectedTerminal.address}
               live={selectedTerminal.state === 'live'} />
@@ -651,16 +680,18 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
         </div>
       ) : null}
       {selectedFile ? (
-        <div role="tabpanel" id={domId(fileKey(selectedFile.id), 'panel')} aria-labelledby={domId(fileKey(selectedFile.id), 'tab')} className="flex min-h-0 flex-1 flex-col">
-          <FileEditor key={selectedFile.id} file={selectedFile} />
+        <div role="tabpanel" id={domId(fileKey(selectedFile.id), 'panel')} aria-labelledby={domId(fileKey(selectedFile.id), 'tab')}
+          className={cn('flex', contentTabFrame)}>
+          <FileEditor key={selectedFile.id} file={selectedFile} workspaceId={workspaceId ?? undefined} />
         </div>
       ) : null}
       {selectedDiff ? (
-        <div role="tabpanel" id={domId(diffKey(selectedDiff.id), 'panel')} aria-labelledby={domId(diffKey(selectedDiff.id), 'tab')} className="flex min-h-0 flex-1 flex-col">
+        <div role="tabpanel" id={domId(diffKey(selectedDiff.id), 'panel')} aria-labelledby={domId(diffKey(selectedDiff.id), 'tab')}
+          className={cn('flex', contentTabFrame)}>
           <FileChanges key={selectedDiff.id} tab={selectedDiff} />
         </div>
       ) : null}
-      {order.filter((key) => key !== (active && sessionKey(active.id))
+      {order.filter((key) => !key.startsWith('session:')
         && key !== (selectedTerminal && terminalKey(selectedTerminal.address))
         && key !== (selectedFile && fileKey(selectedFile.id))
         && key !== (selectedDiff && diffKey(selectedDiff.id))).map((key) => (
@@ -671,6 +702,24 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
           Pick a workspace or open a file from the Files panel.
         </div>
       )) : null}
+    </div>
+  );
+}
+
+function SessionTabPanel({ session, ws, id, tabId, visible }: {
+  session: Session;
+  ws: Workspace;
+  id: string;
+  tabId: string;
+  visible: boolean;
+}) {
+  const [opened, setOpened] = useState(visible);
+  if (visible && !opened) setOpened(true);
+
+  return (
+    <div role="tabpanel" id={id} aria-labelledby={tabId}
+      hidden={!visible} className={visible ? cn('flex', contentTabFrame) : undefined}>
+      {opened && <SessionView session={session} ws={ws} />}
     </div>
   );
 }

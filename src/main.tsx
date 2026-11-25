@@ -9,7 +9,9 @@ async function boot() {
     const { installDevMock } = await import('./lib/devMock');
     installDevMock();
   }
-  const { default: App } = await import('./App');
+  const { default: App } = new URLSearchParams(location.search).has('hc-output')
+    ? await import('./components/conversation/HcOutputWindow')
+    : await import('./App');
   // Spec 006: apply the saved zoom and text size before the first render, so the default size never flashes.
   const { useUiStore } = await import('./stores/useUiStore');
   const { applyZoom, applyCodeFontSize, applyContentStep } = await import('./lib/uiZoom');

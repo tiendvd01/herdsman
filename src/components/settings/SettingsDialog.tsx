@@ -1,9 +1,12 @@
+import { ProjectSkillsSection } from './ProjectSkillsSection';
+import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
+import { effectiveShortcut, shortcutLabel, useShortcutBindings } from '@/lib/keyboardShortcuts';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { TruncatedText } from '@/components/ui/truncated-text';
 // Settings dialog (spec 010): opened from the sidebar footer, ⌘, or the command menu. Sections on the left.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as D from '@radix-ui/react-dialog';
-import { Bell, Check, ChevronDown, Minus, Monitor, Moon, Paintbrush, Plus, Search, Sun, X } from 'lucide-react';
+import { Bell, Check, ChevronDown, Keyboard, Layers, Minus, Monitor, Moon, Paintbrush, Plus, Search, Sun, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { toast } from '@/components/ui/toast';
@@ -15,7 +18,7 @@ import { useThemeCatalog } from '@/lib/theme';
 import { useThemeFiles } from '@/theme/files';
 import { useAppInfo } from '@/lib/queries';
 import { pickTheme } from '@/theme/catalog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tooltip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
@@ -23,6 +26,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 
 const SECTIONS = [
   { id: 'appearance', label: 'Appearance', Icon: Paintbrush, Content: AppearanceSection },
+  { id: 'keyboard-shortcuts', label: 'Keyboard Shortcuts', Icon: Keyboard, Content: KeyboardShortcutsSection },
+  { id: 'skills', label: 'Skills', Icon: Layers, Content: ProjectSkillsSection },
   { id: 'notifications', label: 'Notifications', Icon: Bell, Content: NotificationsSection },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]['id'];
@@ -118,17 +123,16 @@ function NotificationsSection() {
 }
 
 function AppearanceSection() {
+  const themeKey = effectiveShortcut('theme', useShortcutBindings());
   return (
     <>
-      <Row label="Theme" hint="System follows your macOS appearance. Shortcut ⌘⇧L.">
+      <Row label="Theme" hint={`System follows your macOS appearance. Shortcut ${shortcutLabel(themeKey)}.`}>
         <ThemePicker />
       </Row>
-      <Row label="Light theme" hint="Used when the theme is Light, or System with a light macOS.">
-        <ThemeSelect dark={false} />
-      </Row>
-      <Row label="Dark theme" hint="Used when the theme is Dark, or System with a dark macOS.">
-        <ThemeSelect dark />
-      </Row>
+      <div className="@container flex flex-col gap-4 border-b border-border py-4">
+        <ThemePreviewGroup dark />
+        <ThemePreviewGroup dark={false} />
+      </div>
       <CustomThemes />
       <Row label="Interface font" hint="Menus, sidebar and conversation text.">
         <FontPicker kind="ui" />
@@ -180,28 +184,52 @@ const THEMES: { value: Theme; label: string; Icon: typeof Sun }[] = [
   { value: 'dark', label: 'Dark', Icon: Moon },
 ];
 
-/** Light theme / Dark theme dropdown (spec 016): built-in and custom themes of that brightness. */
-export function ThemeSelect({ dark }: { dark: boolean }) {
+const PREVIEW_COLORS = ['working', 'error', 'done', 'blocked', 'primary'] as const;
+
+function ThemePreviewGroup({ dark }: { dark: boolean }) {
   const catalog = useThemeCatalog();
   const stored = useUiStore((s) => (dark ? s.darkTheme : s.lightTheme));
   const setTheme = useUiStore((s) => (dark ? s.setDarkTheme : s.setLightTheme));
   const options = catalog.themes.filter((t) => t.appearance === (dark ? 'dark' : 'light'));
   const value = pickTheme(catalog, stored, dark).id; // a missing or wrong-brightness choice shows the default
-  const label = dark ? 'Dark theme' : 'Light theme';
+  const label = dark ? 'Dark' : 'Light';
   return (
-    <Select value={value} onValueChange={setTheme}>
-      <SelectTrigger aria-label={label}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {options.map((t) => (
-          <SelectItem key={t.id} value={t.id}>
-            {t.name}
-            {t.source === 'custom' ? <span className="text-muted-foreground"> · custom</span> : null}
-          </SelectItem>
+    <div className="flex flex-col gap-2">
+      <h3 className="text-[13px] font-medium">{label}</h3>
+      <RadioGroup
+        aria-label={`${label} themes`}
+        value={value}
+        onValueChange={setTheme}
+        className="grid grid-cols-1 gap-3 @[18rem]:grid-cols-2 @[27rem]:grid-cols-3 @[36rem]:grid-cols-4"
+      >
+        {options.map(({ id, name, colors }) => (
+          <Tooltip key={id} content={name} contentClassName="max-w-[min(28rem,90vw)] [overflow-wrap:anywhere]">
+            <RadioGroupItem
+              value={id}
+              aria-label={name}
+              className="group flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl border-2 p-2 text-left hover:bg-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background aria-checked:border-primary"
+            >
+              <span
+                aria-hidden="true"
+                className="flex h-14 w-full flex-col gap-2 overflow-hidden rounded-lg border border-border p-2"
+                style={{ backgroundColor: colors.background }}
+              >
+                <span className="h-1 w-1/2 rounded-full" style={{ backgroundColor: colors.foreground }} />
+                <span className="grid w-full max-w-20 grid-cols-5 gap-1">
+                  {PREVIEW_COLORS.map((role) => (
+                    <span key={role} className="aspect-square w-full max-w-2.5 rounded-full" style={{ backgroundColor: colors[role] }} />
+                  ))}
+                </span>
+              </span>
+              <span className="flex w-full items-center gap-1.5">
+                <span className="truncate text-[13px]">{name}</span>
+                <Check aria-hidden="true" className="invisible size-3.5 shrink-0 text-primary group-aria-checked:visible" />
+              </span>
+            </RadioGroupItem>
+          </Tooltip>
         ))}
-      </SelectContent>
-    </Select>
+      </RadioGroup>
+    </div>
   );
 }
 

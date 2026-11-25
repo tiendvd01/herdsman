@@ -1,0 +1,109 @@
+.demo-shell {
+  --demo-ink: #20554a;
+  --demo-tint: #e4f1eb;
+  --demo-line: #bcd9cd;
+  --demo-canvas: #f5f8f6;
+  --demo-rail: #112b26;
+  --demo-rail-text: #ccded7;
+  --demo-rail-hover: #21433a;
+}
+
+.demo-shell[data-appearance='dark'] {
+  --demo-ink: #b7e7d1;
+  --demo-tint: #203c32;
+  --demo-line: #36594d;
+  --demo-canvas: #18211e;
+  --demo-rail: #111e1a;
+}
+
+.demo-topbar,
+.demo-project-tabs,
+.demo-sidebar {
+  background: color-mix(in srgb, var(--demo-canvas) 45%, var(--background));
+}
+
+.demo-rail {
+  background: var(--demo-rail);
+  color: var(--demo-rail-text);
+}
+
+.demo-rail-button {
+  width: 2.5rem;
+  height: 2.5rem;
+  flex-shrink: 0;
+  border-radius: .75rem;
+  color: inherit;
+}
+
+.demo-rail-button svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.demo-rail-button:hover {
+  background: var(--demo-rail-hover);
+  color: white;
+}
+
+.demo-rail-button[aria-current='page'] {
+  background: #bde9d4;
+  border-color: transparent;
+  color: #153b2e;
+}
+
+.demo-project-tab[data-active='true'] {
+  background: var(--demo-tint);
+  border-color: var(--demo-line);
+  color: var(--demo-ink);
+}
+
+.demo-tool-view,
+.demo-conversation {
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+
+.demo-tool-view {
+  background: var(--demo-canvas);
+}
+
+.demo-tool-card {
+  box-shadow: 0 2px 5px #10282008;
+}
+
+.demo-tool-card:focus-within,
+.demo-tool-card:hover,
+.demo-session-selected {
+  border-color: var(--demo-line);
+}
+
+.demo-tool-icon,
+.demo-session-selected,
+.demo-session-row:hover {
+  background: var(--demo-tint);
+}
+
+.demo-tool-icon {
+  border-color: var(--demo-line);
+  color: var(--demo-ink);
+}
+
+.demo-tool-status[data-status='Open'],
+.demo-tool-status[data-status='Done'] {
+  background: var(--demo-tint);
+  color: var(--demo-ink);
+}
+
+.demo-tool-status[data-status='In review'] {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+@media (max-width: 767px) {
+  .demo-sidebar {
+    position: absolute;
+    z-index: 20;
+    inset: 0 auto 0 3.5rem;
+    max-width: calc(100% - 3.5rem);
+    box-shadow: 8px 0 24px #1028202b;
+  }
+}

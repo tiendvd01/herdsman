@@ -191,11 +191,14 @@ impl Hc {
     }
 
     pub async fn read(&self, t: &str, lines: u32) -> AppResult<String> {
-        let v = self.call(&["read".into(), t.into(), "--lines".into(), lines.to_string()]).await;
-        match v {
-            Ok(v) => Ok(v.get("text").and_then(|t| t.as_str()).unwrap_or_default().to_string()),
-            Err(e) => Err(e),
-        }
+        self.read_output(t, lines).await.map(|(text, _)| text)
+    }
+
+    pub async fn read_output(&self, t: &str, lines: u32) -> AppResult<(String, bool)> {
+        let v = self.call(&["read".into(), t.into(), "--lines".into(), lines.to_string()]).await?;
+        let text = v.get("text").and_then(Value::as_str).unwrap_or_default();
+        let complete = v.get("complete").and_then(Value::as_bool).unwrap_or(false);
+        Ok((text.to_owned(), complete))
     }
 
     /// Theo dõi `hc events` (lọc label). Gọi `on_event(type, terminal)` cho mỗi sự kiện; trả về khi stream kết thúc.
