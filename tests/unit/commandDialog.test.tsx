@@ -56,7 +56,7 @@ beforeEach(() => {
     hits.filter((h) => (!ws || ws === h.workspace_id) && (!project || project === h.project_id)));
   vi.mocked(api.claudeSearch).mockResolvedValue([]);
   useUiStore.setState({
-    cmdOpen: false, settingsOpen: false, sidebarOpen: true, rightOpen: true,
+    cmdOpen: false, screen: 'projects', sidebarOpen: true, rightOpen: true,
     projectId: 'p1', workspaceId: 'w1', recentWorkspaceIds: [], reopenedWorkspaceIds: [],
     collapsed: { p1: true }, sessionByWorkspace: {}, tempTabs: {},
   });
@@ -112,6 +112,18 @@ describe('CommandDialog', () => {
     fireEvent.click(await screen.findByText('CLI conversation'));
     await waitFor(() => expect(useUiStore.getState().sessionByWorkspace[workspace.id]).toBe(session.id));
     expect(api.claudeOpen).toHaveBeenCalledWith('cli-id', undefined);
+  });
+
+  it('opens the Settings screen from both the command palette and the shortcut', () => {
+    const input = openPalette();
+    fireEvent.change(input, { target: { value: 'Open settings' } });
+    fireEvent.click(screen.getByRole('option', { name: /Open settings/i }));
+    expect(useUiStore.getState().screen).toBe('settings');
+    expect(useUiStore.getState().cmdOpen).toBe(false);
+
+    act(() => useUiStore.getState().setScreen('skills'));
+    fireEvent.keyDown(window, { key: ',', code: 'Comma', metaKey: true });
+    expect(useUiStore.getState().screen).toBe('settings');
   });
 
   it('keeps category results separate and activates the highlighted action', async () => {

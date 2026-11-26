@@ -28,6 +28,12 @@ function mergeOrder(saved: string[], visible: string[]) {
   return [...saved, ...visible.filter((id) => !known.has(id))];
 }
 
+export function readProjectOrder(ids: string[]) {
+  const saved = readOrder('herdsman.navigation-order:projects');
+  const visible = new Set(ids);
+  return saved ? mergeOrder(saved, ids).filter((id) => visible.has(id)) : ids;
+}
+
 export function useNavigationOrder(scope: string, ids: string[], axis: 'horizontal' | 'vertical', ready = true) {
   const storageKey = `herdsman.navigation-order:${scope}`;
   const [saved, setSaved] = useState(() => readOrder(storageKey));

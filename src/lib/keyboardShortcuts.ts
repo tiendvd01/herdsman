@@ -178,6 +178,7 @@ export function matchShortcut(event: KeyboardEvent) {
 
 export function runTabShortcut(id: ShortcutId) {
   const row = document.querySelector('[data-workspace-tabs]');
+  if (row?.closest('[hidden]')) return;
   if (id === 'close-tab') {
     row?.querySelector('[role="tab"][aria-selected="true"]')?.parentElement
       ?.querySelector<HTMLButtonElement>('[data-close-tab]')?.click();

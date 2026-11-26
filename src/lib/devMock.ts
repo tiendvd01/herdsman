@@ -71,6 +71,8 @@ export function installDevMock() {
           return { hc_connected: true, hc_version: 'hc 0.1.21', hc_path: '/usr/local/bin/hc', node_path: '/usr/local/bin/node', data_dir: '~' };
         case 'project_list':
           return [{ ...P }, { ...P2 }];
+        case 'github_accounts':
+          return ['personal-account', 'work-account'];
         case 'project_skill_catalog':
           return { sources: [{ id: 'shared', path: '~/herdsman/skills', available: true }], skills: [], enabled: [] };
         case 'project_skill_change':

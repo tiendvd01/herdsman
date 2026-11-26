@@ -6,40 +6,10 @@ import { ConfirmDialog } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { api, errMsg, type ProjectSkillChange } from '@/lib/api';
-import { useProjects } from '@/lib/queries';
-import { useUiStore } from '@/stores/useUiStore';
 
-export function ProjectSkillsSection() {
-  const projects = useProjects();
-  const activeProject = useUiStore((state) => state.projectId);
-  const [selected, setSelected] = useState<string>();
-  const projectId = projects.data?.find(({ id }) => id === (selected ?? activeProject))?.id
-    ?? projects.data?.[0]?.id;
-
-  if (projects.isPending) return <p role="status" className="py-4 text-sm text-muted-foreground">Loading projects…</p>;
-  if (projects.isError) return <p role="alert" className="py-4 text-sm">Could not load projects. <Button variant="outline" size="sm" onClick={() => void projects.refetch()}>Retry</Button></p>;
-  if (!projectId) return <p className="py-4 text-sm text-muted-foreground">Add a project from the sidebar to manage its skills.</p>;
-
-  return (
-    <div className="flex flex-col gap-4 py-4">
-      <div className="flex items-center justify-between gap-4">
-        <label htmlFor="skills-project" className="text-sm font-medium">Project</label>
-        <Select value={projectId} onValueChange={setSelected}>
-          <SelectTrigger id="skills-project"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {projects.data?.map(({ id, name }) => <SelectItem key={id} value={id}>{name}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-      <ProjectSkills key={projectId} projectId={projectId} />
-    </div>
-  );
-}
-
-function ProjectSkills({ projectId }: { projectId: string }) {
+export function ProjectSkillsSection({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const queryKey = ['project-skills', projectId] as const;
   const catalog = useQuery({ queryKey, queryFn: () => api.projectSkillCatalog(projectId) });

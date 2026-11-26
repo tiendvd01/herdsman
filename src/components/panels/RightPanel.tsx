@@ -47,7 +47,7 @@ export function RightPanel() {
   const sessionId = useUiStore((s) => (s.workspaceId ? s.sessionByWorkspace[s.workspaceId] : undefined));
   if (!open || width === 0) return null;
   return (
-    <aside style={{ width }} className="relative flex h-full shrink-0 flex-col border-l border-border bg-background" aria-label="Side panel">
+    <aside style={{ width }} className="relative flex h-full shrink-0 flex-col bg-background after:pointer-events-none after:absolute after:top-11 after:bottom-0 after:left-0 after:border-l after:border-border" aria-label="Side panel">
       <ResizeHandle
         side="right"
         label="Resize side panel"
@@ -57,9 +57,10 @@ export function RightPanel() {
         onChange={(px) => useUiStore.getState().setRightWidth(px)}
         onReset={() => useUiStore.getState().setRightWidth(RIGHT.def)}
       />
+      <div data-tauri-drag-region className="h-11 shrink-0 border-b border-border bg-surface" />
       <Tabs value={tab} onValueChange={(value) => useUiStore.getState().setRightTab(value as RightTab)}
         activationMode="manual" className="flex min-h-0 flex-1 flex-col">
-        <div data-tauri-drag-region className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
+        <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-3">
           <TabsList aria-label="Side panel content" className="h-auto gap-1 rounded-none bg-transparent p-0">
             {TABS.map(({ id, label, Icon }) => (
               <Tooltip key={id} content={label}>

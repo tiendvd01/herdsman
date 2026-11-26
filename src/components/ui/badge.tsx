@@ -8,6 +8,8 @@ const badgeVariants = cva('inline-flex h-5 shrink-0 items-center gap-1.5 rounded
       default: 'border border-primary bg-primary text-primary-foreground',
       outline: 'border border-border text-foreground',
       muted: 'bg-muted font-mono font-normal text-foreground',
+      success: 'border border-st-done/30 bg-diff-add text-diff-add-fg',
+      info: 'border border-st-working/30 bg-st-working/10 text-git-rename-fg',
       warn: 'border border-warn-border bg-warn-bg text-warn-fg',
       danger: 'border border-destructive/40 bg-danger-bg text-destructive',
     },

@@ -8,6 +8,7 @@ interface Toast {
   id: number;
   text: string;
   tone: 'info' | 'error';
+  action?: { label: string; run: () => void };
 }
 const useToasts = create<{ items: Toast[]; push: (t: Omit<Toast, 'id'>) => void; drop: (id: number) => void }>((set) => ({
   items: [],
@@ -15,8 +16,8 @@ const useToasts = create<{ items: Toast[]; push: (t: Omit<Toast, 'id'>) => void;
   drop: (id) => set((s) => ({ items: s.items.filter((x) => x.id !== id) })),
 }));
 
-export function toast(text: string, tone: 'info' | 'error' = 'info') {
-  useToasts.getState().push({ text, tone });
+export function toast(text: string, tone: 'info' | 'error' = 'info', action?: Toast['action']) {
+  useToasts.getState().push({ text, tone, action });
 }
 
 function ToastItem({ t }: { t: Toast }) {
@@ -34,6 +35,10 @@ function ToastItem({ t }: { t: Toast }) {
       )}
     >
       <span className="flex-1">{t.text}</span>
+      {t.action && <button type="button" className="shrink-0 font-medium underline" onClick={() => {
+        t.action?.run();
+        drop(t.id);
+      }}>{t.action.label}</button>}
       <button onClick={() => drop(t.id)} aria-label="Dismiss" className="text-muted-foreground">
         <X className="size-3.5" />
       </button>

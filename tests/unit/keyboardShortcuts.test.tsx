@@ -15,7 +15,7 @@ const press = (code: string, options: KeyboardEventInit = {}) =>
 afterEach(async () => {
   cleanup();
   await saveShortcut();
-  useUiStore.setState({ cmdOpen: false, settingsOpen: false });
+  useUiStore.setState({ cmdOpen: false, screen: 'projects' });
 });
 
 describe('keyboard shortcuts', () => {

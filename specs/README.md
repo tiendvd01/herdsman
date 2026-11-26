@@ -46,6 +46,9 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [058 · Git Graph Lane Colors](files-git/058-color-git-graph/spec.md)
 - [059 · Inspect Commit Changes](files-git/059-inspect-commit-changes/spec.md)
 - [060 · Editor LSP Hover](files-git/060-editor-lsp-hover/spec.md)
+- [064 · Theo dõi pull request theo project](files-git/064-track-pull-requests/spec.md)
+- [066 · Tinh chỉnh giao diện Pull Requests](files-git/066-refine-pull-requests/spec.md)
+- [067 · Mở rộng trang chi tiết Pull Request](files-git/067-expand-pr-details/spec.md)
 
 ## Giao diện, khả năng tiếp cận và phím tắt
 
@@ -55,6 +58,7 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [055 · Theme Preview Picker](appearance-shortcuts/055-theme-preview-picker/spec.md)
 - [057 · Quản lý phím tắt](appearance-shortcuts/057-manage-keyboard-shortcuts/spec.md)
 - [061 · Theme Git-Ignored Text](appearance-shortcuts/061-theme-git-ignored-text/spec.md)
+- [065 · Sidebar danh sách project cho Pull Requests và Skills](appearance-shortcuts/065-add-project-sidebar/spec.md)
 
 ## Terminal và cửa sổ output
 

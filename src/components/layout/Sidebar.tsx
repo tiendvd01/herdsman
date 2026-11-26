@@ -1,11 +1,9 @@
+import { SidebarLayout } from './SidebarLayout';
 import { TruncatedText } from '@/components/ui/truncated-text';
 // Left sidebar: app header, ⌘K search, projects → workspaces, hc status (BR 3.1, FR-001–003, FR-019).
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Check, ChevronsUpDown, ChevronRight, GitBranch, MoreHorizontal, Plus, Search, Settings, Square } from 'lucide-react';
-import lightIconUrl from '@/assets/herdsman_lightmode.png';
-import darkIconUrl from '@/assets/herdsman_darkmode.png';
-import { useThemeColors } from '@/lib/theme';
+import { AlertTriangle, Check, ChevronsUpDown, ChevronRight, GitBranch, MoreHorizontal, Plus, Search, Square } from 'lucide-react';
 import { api } from '@/lib/api';
 import { qk, usePaletteWorkspaces, useAppInfo, useProjects, useWorkspaces } from '@/lib/queries';
 import type { Project } from '@/lib/types';
@@ -36,7 +34,6 @@ export function Sidebar() {
   const projectsById = new Map(projects.map((p) => [p.id, p]));
   const selectedId = useUiStore((s) => s.projectId);
   const focusedProject = projectsById.get(selectedId ?? '') ?? projects[0];
-  const appearance = useThemeColors().appearance;
   const open = useUiStore((s) => s.sidebarOpen);
   const newWsFor = useUiStore((s) => s.newWorkspaceFor);
   const addOpen = useUiStore((s) => s.addProjectOpen);
@@ -47,15 +44,7 @@ export function Sidebar() {
   return (
     <>
       {open && width > 0 ? (
-        <aside aria-label="Sidebar" style={{ width }} className="relative flex h-full shrink-0 flex-col gap-2 border-r border-border bg-surface px-2 pb-2">
-          {/* Top row shares the window's title bar: traffic lights on the left. */}
-          <div data-tauri-drag-region className="-mx-2 h-11 shrink-0 select-none border-b border-border" />
-
-          <div data-tauri-drag-region className="flex shrink-0 select-none items-center gap-1.5 px-2 pb-1">
-            <img src={appearance === 'dark' ? darkIconUrl : lightIconUrl} alt="" className="pointer-events-none size-10 rounded-md" />
-            <span className="pointer-events-none text-[14px] font-semibold tracking-tight text-foreground">Herdsman</span>
-          </div>
-
+        <SidebarLayout aria-label="Sidebar" style={{ width }} className="gap-2 pb-2">
           <button
             type="button"
             onClick={() => ui().setCmdOpen(true)}
@@ -74,7 +63,7 @@ export function Sidebar() {
             </nav>
           ) : <div className="mx-2 flex min-h-0 flex-1 flex-col py-1">
             <div className="flex h-8 shrink-0 items-center justify-between pl-2">
-              <span className="text-xs font-medium text-muted-foreground">Projects</span>
+              <span className="text-sm font-medium text-muted-foreground">Projects</span>
               <Tooltip content="New project">
                 <Button variant="muted" size="icon-sm" aria-label="New project" onClick={() => ui().setAddProjectOpen(true)}>
                   <Plus />
@@ -100,7 +89,7 @@ export function Sidebar() {
             onChange={(px) => ui().setSidebarWidth(px)}
             onReset={() => ui().setSidebarWidth(LEFT.def)}
           />
-        </aside>
+        </SidebarLayout>
       ) : null}
       {creatingFor ? <CreateWorkspaceDialog project={creatingFor} open onOpenChange={(o) => !o && ui().setNewWorkspaceFor(null)} /> : null}
       <AddProjectDialog open={addOpen} onOpenChange={(o) => ui().setAddProjectOpen(o)} />
@@ -274,7 +263,6 @@ function ProjectNode({ project, reorder, switcher }: {
 }
 
 function HcStatus() {
-  const settingsKey = effectiveShortcut('settings', useShortcutBindings());
   const { data } = useAppInfo();
   const statuses = useUiStore((s) => s.statuses);
   const ok = data?.hc_connected;
@@ -296,17 +284,6 @@ function HcStatus() {
             <AlertTriangle className="size-3.5 text-st-blocked" aria-label="Node.js not found" />
           </Tooltip>
         ) : null}
-        <Tooltip content={<span className="inline-flex items-center gap-2">Settings <Kbd>{shortcutLabel(settingsKey)}</Kbd></span>}>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="-mr-1.5 text-muted-foreground"
-            aria-label="Settings"
-            aria-keyshortcuts={shortcutLabel(settingsKey, true)}
-            onClick={() => useUiStore.getState().setSettingsOpen(true)}>
-            <Settings />
-          </Button>
-        </Tooltip>
       </div>
     </div>
   );

@@ -18,7 +18,7 @@
 
 ### User Story 1 - Xem skills của từng project (Priority: P1)
 
-Developer mở **Settings → Skills**, chọn một project và xem skill nào có thể dùng, skill nào đã bật và skill nào Claude tự nạp từ project hoặc cấu hình toàn cục.
+Developer mở màn **Skills** từ thanh điều hướng trái, chọn một project và xem skill nào có thể dùng, skill nào đã bật và skill nào Claude tự nạp từ project hoặc cấu hình toàn cục.
 
 **Why this priority**: Người dùng cần biết cấu hình nào sẽ áp dụng trước khi mở session hoặc thay đổi lựa chọn.
 
@@ -28,7 +28,7 @@ Developer mở **Settings → Skills**, chọn một project và xem skill nào 
 
 1. **Given** hai project có cùng skill trong thư viện, **When** chuyển giữa hai project, **Then** Settings hiển thị tên project và trạng thái bật/tắt đã lưu của từng project.
 2. **Given** danh sách có skill từ thư viện, thư mục bổ sung và cấu hình toàn cục, **When** tìm theo tên hoặc mô tả hoặc làm mới, **Then** Settings hiển thị kết quả tương ứng, nguồn của từng mục và đánh dấu các skill Claude tự nạp từ project hoặc cấu hình toàn cục chỉ để xem.
-3. **Given** chưa có project, danh sách trống hoặc tìm kiếm không khớp, **When** mở mục Skills hoặc tìm kiếm, **Then** Settings giải thích trạng thái hiện tại và cách tiếp tục nếu có.
+3. **Given** chưa có project, danh sách trống hoặc tìm kiếm không khớp, **When** mở mục Skills hoặc tìm kiếm, **Then** màn Skills giải thích trạng thái hiện tại và cách tiếp tục nếu có.
 
 ---
 
@@ -63,7 +63,7 @@ Developer thêm thư mục skill có sẵn để dùng riêng cho một project 
 1. **Given** một thư mục local đọc được chứa skill hợp lệ, **When** thêm vào A, **Then** skill xuất hiện để chọn ở A và cấu hình nguồn của B giữ nguyên.
 2. **Given** A có skill đang bật từ một thư mục bổ sung, **When** gỡ nguồn, **Then** người dùng thấy skill nào bị ảnh hưởng trước khi xác nhận, session Claude mới ngừng nhận các skill đó và nội dung gốc vẫn nguyên vẹn.
 3. **Given** thư mục không tồn tại, không đọc được hoặc đã được thêm qua một đường dẫn khác, **When** thử thêm, **Then** Settings báo lý do và giữ danh sách đã lưu.
-4. **Given** hai nguồn cung cấp skill cùng tên, **When** xem danh sách hoặc gỡ nguồn đang được ưu tiên, **Then** Settings giải thích mục nào có thể bật và mục nào bị trùng. Skill từ nguồn khác chỉ được cấp cho session sau khi người dùng bật mục đó.
+4. **Given** hai nguồn cung cấp skill cùng tên, **When** xem danh sách hoặc gỡ nguồn đang được ưu tiên, **Then** màn Skills giải thích mục nào có thể bật và mục nào bị trùng. Skill từ nguồn khác chỉ được cấp cho session sau khi người dùng bật mục đó.
 
 ### Edge Cases
 
@@ -77,7 +77,7 @@ Developer thêm thư mục skill có sẵn để dùng riêng cho một project 
 
 ### Functional Requirements
 
-- **FR-001**: Settings MUST có mục **Skills** để người dùng chọn một project local đã có trong Herdsman, thấy tên project đang xem và nhận hướng dẫn khi chưa có project.
+- **FR-001**: Thanh điều hướng trái MUST có mục **Skills** riêng mở trong vùng nội dung để người dùng chọn một project local đã có trong Herdsman, thấy tên project đang xem và nhận hướng dẫn khi chưa có project.
 - **FR-002**: Herdsman MUST liệt kê skill từ thư viện dùng chung và các nguồn bổ sung của project, với tên, mô tả nếu đọc được, nguồn và trạng thái khả dụng hoặc bật/tắt. Herdsman MUST tự phát hiện các skill Claude nạp từ thư mục project, hiển thị nguồn của chúng và hiển thị các skill Claude toàn cục. Cả hai nhóm chỉ để xem.
 - **FR-003**: Người dùng MUST có thể tìm theo tên hoặc mô tả và làm mới danh sách để thấy thay đổi ở thư mục nguồn. Settings MUST phân biệt đang tải, trống, không có kết quả tìm kiếm và nguồn không khả dụng.
 - **FR-004**: Người dùng MUST có thể bật hoặc tắt từng skill hợp lệ cho project đã chọn. Herdsman MUST lưu lựa chọn qua lần mở lại app và giữ cấu hình của các project khác nguyên vẹn.
@@ -105,7 +105,7 @@ Developer thêm thư mục skill có sẵn để dùng riêng cho một project 
 
 ## Assumptions
 
-- Tham chiếu chức năng là tab **Skills** của mod **Project Settings** trong bản herdr-app cài trên máy. Herdsman áp dụng luồng chọn theo project vào Settings hiện có.
+- Tham chiếu chức năng là tab **Skills** của mod **Project Settings** trong bản herdr-app cài trên máy. Herdsman áp dụng luồng chọn theo project vào màn Skills riêng.
 - Phiên bản đầu áp dụng lựa chọn theo project cho session Claude mới, theo bản tham chiếu. Codex, cấp lại skill cho session đang chạy, quản lý MCP, cài từ catalog trực tuyến và chỉnh sửa nội dung skill nằm ngoài phạm vi.
 - Thư viện dùng chung và nguồn bổ sung chứa các thư mục skill local có định nghĩa `SKILL.md`. Có thể bắt đầu với thư viện trống và thêm nguồn đã có.
 - Lựa chọn và nguồn bổ sung là thiết lập local của Herdsman, độc lập với branch Git và dùng chung giữa các workspace thuộc cùng project.

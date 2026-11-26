@@ -7,6 +7,7 @@ mod workspace_terminal;
 mod hc_output;
 pub mod error;
 pub mod git;
+mod pull_requests;
 pub mod claude_history;
 pub mod hc;
 pub mod state;
@@ -236,7 +237,13 @@ pub fn run() {
         })
         .manage(workspace_terminal::Viewers::default())
         .manage(editor_lsp::EditorLsp::default())
+        .manage(pull_requests::PullRequests::default())
         .invoke_handler(tauri::generate_handler![
+            pull_requests::github_accounts,
+            pull_requests::pull_requests_refresh,
+            pull_requests::pull_requests_read,
+            pull_requests::pull_request_open,
+            pull_requests::detail::pull_request_detail,
             workspace_terminal::workspace_terminal_create,
             workspace_terminal::workspace_terminal_list,
             workspace_terminal::workspace_terminal_stop,

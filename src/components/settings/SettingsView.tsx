@@ -1,12 +1,10 @@
-import { ProjectSkillsSection } from './ProjectSkillsSection';
+import { GitHubSettingsSection } from './GitHubSettingsSection';
 import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
 import { effectiveShortcut, shortcutLabel, useShortcutBindings } from '@/lib/keyboardShortcuts';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { TruncatedText } from '@/components/ui/truncated-text';
-// Settings dialog (spec 010): opened from the sidebar footer, ⌘, or the command menu. Sections on the left.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import * as D from '@radix-ui/react-dialog';
-import { Bell, Check, ChevronDown, Keyboard, Layers, Minus, Monitor, Moon, Paintbrush, Plus, Search, Sun, X } from 'lucide-react';
+import { Bell, Check, ChevronDown, GitPullRequest, Keyboard, Minus, Monitor, Moon, Paintbrush, Plus, Search, Sun } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { toast } from '@/components/ui/toast';
@@ -27,59 +25,36 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 const SECTIONS = [
   { id: 'appearance', label: 'Appearance', Icon: Paintbrush, Content: AppearanceSection },
   { id: 'keyboard-shortcuts', label: 'Keyboard Shortcuts', Icon: Keyboard, Content: KeyboardShortcutsSection },
-  { id: 'skills', label: 'Skills', Icon: Layers, Content: ProjectSkillsSection },
   { id: 'notifications', label: 'Notifications', Icon: Bell, Content: NotificationsSection },
+  { id: 'github', label: 'GitHub', Icon: GitPullRequest, Content: GitHubSettingsSection },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]['id'];
 
-export function SettingsDialog() {
-  const open = useUiStore((s) => s.settingsOpen);
-  const setOpen = useUiStore((s) => s.setSettingsOpen);
+export function SettingsView() {
   const [section, setSection] = useState<SectionId>('appearance');
   const { label, Content } = SECTIONS.find((item) => item.id === section) ?? SECTIONS[0];
   return (
-    <D.Root open={open} onOpenChange={setOpen}>
-      <D.Portal>
-        <D.Overlay className="fixed inset-0 z-50 bg-scrim" />
-        <D.Content
-          aria-describedby={undefined}
-          // Focus the dialog itself (not the first nav item) so no focus ring shows on open; Tab still enters it.
-          onOpenAutoFocus={(e) => {
-            e.preventDefault();
-            (e.currentTarget as HTMLElement).focus();
-          }}
-          className="fixed left-1/2 top-1/2 z-50 flex h-4/5 w-4/5 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border border-border bg-background shadow-lg focus:outline-none"
-        >
-          <nav aria-label="Settings sections" className="flex w-[180px] shrink-0 flex-col gap-0.5 border-r border-border bg-surface p-2">
-            <D.Title className="px-2 pb-2 pt-1.5 text-[13px] font-semibold text-muted-foreground">Settings</D.Title>
-            {SECTIONS.map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                type="button"
-                aria-current={section === id ? 'page' : undefined}
-                onClick={() => setSection(id)}
-                className={cn(
-                  'flex h-8 items-center gap-2 rounded-md px-2 text-[13px] [&_svg]:size-4',
-                  section === id ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-                )}
-              >
-                <Icon />
-                {label}
-              </button>
-            ))}
-          </nav>
-          <div className="flex min-w-0 flex-1 flex-col">
-            <header className="flex h-12 shrink-0 items-center justify-between border-b border-border pl-6 pr-3">
-              <h2 className="text-[15px] font-semibold">{label}</h2>
-              <D.Close className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close">
-                <X className="size-4" />
-              </D.Close>
-            </header>
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-2"><Content /></div>
-          </div>
-        </D.Content>
-      </D.Portal>
-    </D.Root>
+    <section aria-labelledby="settings-title" className="flex min-h-0 flex-1 flex-col">
+      <header className="flex h-14 shrink-0 items-center border-b border-border px-4">
+        <h1 id="settings-title" className="text-sm font-semibold">Settings</h1>
+      </header>
+      <div className="flex min-h-0 flex-1">
+        <nav aria-label="Settings sections" className="flex w-[180px] shrink-0 flex-col gap-0.5 border-r border-border bg-surface p-2">
+          {SECTIONS.map(({ id, label, Icon }) => (
+            <Button key={id} variant={section === id ? 'secondary' : 'muted'} size="sm"
+              aria-current={section === id ? 'page' : undefined} onClick={() => setSection(id)}
+              className="justify-start px-2">
+              <Icon aria-hidden="true" />
+              {label}
+            </Button>
+          ))}
+        </nav>
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-4">
+          <h2 className="text-sm font-semibold">{label}</h2>
+          <Content />
+        </div>
+      </div>
+    </section>
   );
 }
 

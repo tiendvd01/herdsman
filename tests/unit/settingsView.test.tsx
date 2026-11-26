@@ -1,5 +1,4 @@
 import { TooltipProvider } from '@/components/ui/tooltip';
-// Spec 010: Settings dialog — opens from the store, theme radio group, font picker + reset.
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -7,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 vi.mock('@/lib/api', () => ({
   api: {
     projectList: vi.fn(async () => [{ id: 'alpha', name: 'Alpha' }, { id: 'beta', name: 'Beta' }]),
+    githubAccounts: vi.fn(async () => ['personal-account', 'work-account']),
     projectSkillCatalog: vi.fn(),
     projectSkillChange: vi.fn(async () => {}),
     fontFamilies: vi.fn(async () => ['Arial', 'Courier New', 'Georgia', 'Menlo']),
@@ -15,7 +15,8 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { api } from '@/lib/api';
-import { SettingsDialog } from '@/components/settings/SettingsDialog';
+import { SettingsView } from '@/components/settings/SettingsView';
+import { ProjectSkillsSection } from '@/components/settings/ProjectSkillsSection';
 import { applyFonts, useThemeEffect } from '@/lib/theme';
 import { builtinThemes } from '@/theme/catalog';
 import { useZoomEffect } from '@/lib/zoomShortcuts';
@@ -34,15 +35,13 @@ beforeAll(() => {
 
 beforeEach(() => {
   useThemeFiles.setState({ files: [] });
-  useUiStore.setState({ settingsOpen: false, theme: 'system', lightTheme: 'light', darkTheme: 'dark', uiFont: 'geist', codeFont: 'geist-mono' });
+  useUiStore.setState({ theme: 'system', lightTheme: 'light', darkTheme: 'dark', uiFont: 'geist', codeFont: 'geist-mono' });
 });
 
 const render = (ui: React.ReactElement) => rtlRender(<QueryClientProvider client={new QueryClient()}><TooltipProvider>{ui}</TooltipProvider></QueryClientProvider>);
-const open = () => act(() => useUiStore.getState().setSettingsOpen(true));
 
-describe('SettingsDialog', () => {
+describe('SettingsView', () => {
   it('manages skills for the selected project and shows native skills as read only', async () => {
-    useUiStore.setState({ projectId: 'beta' });
     const managed = { source_id: 'shared', directory: 'review', name: 'Review', path: '/shared/review', description: 'Review changes', enabled: false, native: false, global: false, reason: null };
     vi.mocked(api.projectSkillCatalog).mockResolvedValue({
       sources: [{ id: 'shared', path: '/shared', available: true }],
@@ -52,10 +51,8 @@ describe('SettingsDialog', () => {
       ],
       enabled: [],
     });
-    render(<SettingsDialog />);
-    open();
-    fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
-    expect((await screen.findByRole('combobox', { name: 'Project' })).textContent).toContain('Beta');
+    render(<ProjectSkillsSection projectId="beta" />);
+    await waitFor(() => expect(api.projectSkillCatalog).toHaveBeenCalledWith('beta'));
     expect(await screen.findByText('Claude project · Read only')).toBeTruthy();
     expect(screen.queryByRole('switch', { name: 'Enable Build' })).toBeNull();
     fireEvent.click(screen.getByRole('switch', { name: 'Enable Review' }));
@@ -66,12 +63,33 @@ describe('SettingsDialog', () => {
     expect(screen.getByText('No matching skills.')).toBeTruthy();
   });
 
-  it('is closed until opened, then shows the Appearance section', () => {
-    render(<SettingsDialog />);
+  it('shows Appearance by default in the Settings page', () => {
+    render(<SettingsView />);
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
-    open();
-    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Skills' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Appearance' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('selects and restores the GitHub account independently of the CLI default', async () => {
+    useUiStore.getState().setGitHubAccount(null);
+    try {
+      render(<SettingsView />);
+      fireEvent.click(screen.getByRole('button', { name: 'GitHub' }));
+      const account = screen.getByRole('combobox', { name: 'GitHub account' });
+      expect(account.textContent).toContain('GitHub CLI default');
+      await waitFor(() => expect(screen.queryByText('Loading GitHub accounts…')).toBeNull());
+      fireEvent.keyDown(account, { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('option', { name: 'work-account' }));
+      expect(useUiStore.getState().githubAccount).toBe('work-account');
+      await act(async () => { await useUiStore.persist.rehydrate(); });
+      expect(account.textContent).toContain('work-account');
+      fireEvent.keyDown(account, { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('option', { name: 'GitHub CLI default' }));
+      expect(useUiStore.getState().githubAccount).toBeNull();
+    } finally {
+      useUiStore.getState().setGitHubAccount(null);
+    }
   });
 
   it('restores notification defaults and persists both choices across rehydration', async () => {
@@ -83,8 +101,7 @@ describe('SettingsDialog', () => {
         localStorage.setItem(key, JSON.stringify({ state: { theme: 'system' }, version: 4 }));
         await useUiStore.persist.rehydrate();
       });
-      render(<SettingsDialog />);
-      open();
+      render(<SettingsView />);
       fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
       expect(screen.getByRole('heading', { name: 'Notifications' })).toBeTruthy();
       const completion = screen.getByRole('switch', { name: 'Agent completion notifications' });
@@ -125,8 +142,7 @@ describe('SettingsDialog', () => {
   });
 
   it('switches theme from the radio group', () => {
-    render(<SettingsDialog />);
-    open();
+    render(<SettingsView />);
     const group = screen.getByRole('radiogroup', { name: 'Theme' });
     expect(group.querySelector('[aria-checked="true"]')?.textContent).toBe('System');
     fireEvent.click(within(group).getByRole('radio', { name: 'Dark' }));
@@ -136,7 +152,7 @@ describe('SettingsDialog', () => {
   it('previews and applies both new palettes and restores independent selections', async () => {
     function SettingsWithTheme() {
       useThemeEffect();
-      return <SettingsDialog />;
+      return <SettingsView />;
     }
 
     const root = document.documentElement;
@@ -149,7 +165,6 @@ describe('SettingsDialog', () => {
     const getBackground = (id: string) => builtinThemes().find((theme) => theme.id === id)!.colors.background;
     try {
       render(<SettingsWithTheme />);
-      open();
       const dark = within(screen.getByRole('radiogroup', { name: 'Dark themes' }));
       const light = within(screen.getByRole('radiogroup', { name: 'Light themes' }));
       const mode = within(screen.getByRole('radiogroup', { name: 'Theme' }));
@@ -216,8 +231,7 @@ describe('SettingsDialog', () => {
       file: 'custom-night.json',
       text: JSON.stringify({ name: 'Custom Night', appearance: 'dark', background: '#202020', foreground: '#ffffff' }),
     }] });
-    render(<SettingsDialog />);
-    open();
+    render(<SettingsView />);
     const dark = within(screen.getByRole('radiogroup', { name: 'Dark themes' }));
     const custom = dark.getByRole('radio', { name: 'Custom Night' });
     fireEvent.click(custom);
@@ -228,8 +242,7 @@ describe('SettingsDialog', () => {
   });
 
   it('shows Reset only for a non-default font and resets it', () => {
-    render(<SettingsDialog />);
-    open();
+    render(<SettingsView />);
     expect(screen.queryByRole('button', { name: 'Reset code font' })).toBeNull();
     act(() => useUiStore.getState().setCodeFont('menlo'));
     expect(screen.getByRole('button', { name: 'Code font' }).textContent).toContain('Menlo');
@@ -240,7 +253,7 @@ describe('SettingsDialog', () => {
   it('applies and restores a code font size independently of content text size', async () => {
     function SettingsWithZoom() {
       useZoomEffect();
-      return <SettingsDialog />;
+      return <SettingsView />;
     }
 
     const rootStyle = document.documentElement.style;
@@ -249,7 +262,6 @@ describe('SettingsDialog', () => {
     try {
       act(() => useUiStore.setState({ codeFontSize: null, contentStep: 2 }));
       render(<SettingsWithZoom />);
-      open();
       const size = screen.getByRole('status', { name: 'Current code font size' });
       expect(size.textContent).toBe('14');
       expect(rootStyle.getPropertyValue('--code-font-size')).toBe('');
@@ -281,16 +293,8 @@ describe('SettingsDialog', () => {
     }
   });
 
-  it('closes on Escape', () => {
-    render(<SettingsDialog />);
-    open();
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
-    expect(useUiStore.getState().settingsOpen).toBe(false);
-  });
-
   it('lists installed families, filters by search and picks one', async () => {
-    render(<SettingsDialog />);
-    open();
+    render(<SettingsView />);
     fireEvent.click(screen.getByRole('button', { name: 'Interface font' }));
     expect(await screen.findByRole('option', { name: /Georgia/ })).toBeTruthy();
     expect(screen.getByRole('option', { name: /Geist/ }).getAttribute('aria-selected')).toBe('true');
@@ -301,8 +305,7 @@ describe('SettingsDialog', () => {
   });
 
   it('selects a code font with the keyboard and restores the saved choice and Reset', async () => {
-    render(<SettingsDialog />);
-    open();
+    render(<SettingsView />);
     fireEvent.click(screen.getByRole('button', { name: 'Code font' }));
     const option = await screen.findByRole('option', { name: 'Menlo' });
     expect(option.querySelector('span')?.style.fontFamily).toContain('Menlo');
@@ -333,8 +336,7 @@ describe('SettingsDialog', () => {
   });
 
   it('lists built-in themes by brightness in the Light and Dark galleries', () => {
-    render(<SettingsDialog />);
-    open();
+    render(<SettingsView />);
     const light = within(screen.getByRole('radiogroup', { name: 'Light themes' }));
     const dark = within(screen.getByRole('radiogroup', { name: 'Dark themes' }));
     expect(light.getAllByRole('radio').map((radio) => radio.getAttribute('aria-label'))).toEqual(['Light', 'Paper', 'Clear Light', 'Minimal']);
@@ -344,8 +346,7 @@ describe('SettingsDialog', () => {
   });
 
   it('shows where custom themes go and that nothing is wrong', () => {
-    render(<SettingsDialog />);
-    open();
+    render(<SettingsView />);
     expect(screen.getByText('Custom themes')).toBeTruthy();
     expect(screen.getByText('No problems found')).toBeTruthy();
   });
@@ -357,8 +358,7 @@ describe('SettingsDialog', () => {
         { file: 'sepia.json', text: '{"background":"#fbf7ef","foreground":"#2a2622"}' },
       ],
     });
-    render(<SettingsDialog />);
-    open();
+    render(<SettingsView />);
     const list = screen.getByLabelText('Theme problems');
     expect(list.textContent).toContain('bad.json · background');
     expect(list.textContent).toContain('skipped');

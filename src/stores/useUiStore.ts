@@ -9,6 +9,7 @@ import { clampContentStep, clampZoom, CONTENT_STEP, nextZoom, normalizeCodeFontS
 export type Theme = 'system' | 'light' | 'dark';
 /** Spec 016: theme ids picked for Light and for Dark (built-in `light`/`paper`/`dark` or a custom theme file name). */
 export const isThemeId = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 64;
+export type Screen = 'projects' | 'pull-requests' | 'skills' | 'settings';
 export type RightTab = 'agents' | 'files' | 'project-files' | 'log' | 'history';
 
 interface LiveStatus {
@@ -46,13 +47,16 @@ interface UiState {
   codeFontSize: number | null;
   completionNotifications: boolean;
   completionSound: boolean;
+  githubAccount: string | null;
   statuses: Record<string, LiveStatus>;
   viewedCompletions: Record<string, string>;
   // Transient dialogs (not persisted)
   cmdOpen: boolean;
+  sessionLauncherOpen: boolean;
+  setSessionLauncherOpen: (open: boolean) => void;
   addProjectOpen: boolean;
   newWorkspaceFor: string | null;
-  settingsOpen: boolean;
+  screen: Screen;
   selectWorkspace: (projectId: string, workspaceId: string | null) => void;
   reopenWorkspace: (projectId: string, workspaceId: string) => void;
   hideReopenedWorkspace: (workspaceId: string) => void;
@@ -76,7 +80,8 @@ interface UiState {
   setCodeFontSize: (size: number | null) => void;
   setCompletionNotifications: (enabled: boolean) => void;
   setCompletionSound: (enabled: boolean) => void;
-  setSettingsOpen: (o: boolean) => void;
+  setGitHubAccount: (account: string | null) => void;
+  setScreen: (screen: Screen) => void;
   zoomIn: () => void;
   zoomOut: () => void;
   zoomReset: () => void;
@@ -118,15 +123,19 @@ export const useUiStore = create<UiState>()(
       codeFontSize: null,
       completionNotifications: true,
       completionSound: true,
+      githubAccount: null,
       statuses: {},
       viewedCompletions: {},
       cmdOpen: false,
+      sessionLauncherOpen: false,
+      setSessionLauncherOpen: (open) => set(open ? { sessionLauncherOpen: true, screen: 'projects' } : { sessionLauncherOpen: false }),
       addProjectOpen: false,
       newWorkspaceFor: null,
-      settingsOpen: false,
+      screen: 'projects',
       selectWorkspace: (projectId, workspaceId) => set((s) => ({
         projectId,
         workspaceId,
+        sessionLauncherOpen: false,
         recentWorkspaceIds: workspaceId
           ? [workspaceId, ...s.recentWorkspaceIds.filter((id) => id !== workspaceId)].slice(0, 10)
           : s.recentWorkspaceIds,
@@ -174,7 +183,8 @@ export const useUiStore = create<UiState>()(
       setCodeFontSize: (size) => set({ codeFontSize: normalizeCodeFontSize(size) }),
       setCompletionNotifications: (completionNotifications) => set({ completionNotifications }),
       setCompletionSound: (completionSound) => set({ completionSound }),
-      setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+      setGitHubAccount: (githubAccount) => set({ githubAccount }),
+      setScreen: (screen) => set({ screen, sessionLauncherOpen: false }),
       zoomIn: () => set((s) => ({ zoom: nextZoom(s.zoom, 1), zoomFlash: { kind: 'zoom', at: Date.now() } })),
       zoomOut: () => set((s) => ({ zoom: nextZoom(s.zoom, -1), zoomFlash: { kind: 'zoom', at: Date.now() } })),
       zoomReset: () => set({ zoom: ZOOM_DEFAULT, zoomFlash: { kind: 'zoom', at: Date.now() } }),
@@ -230,6 +240,7 @@ export const useUiStore = create<UiState>()(
         codeFontSize: s.codeFontSize,
         completionNotifications: s.completionNotifications,
         completionSound: s.completionSound,
+        githubAccount: s.githubAccount,
         viewedCompletions: s.viewedCompletions,
       }),
     },

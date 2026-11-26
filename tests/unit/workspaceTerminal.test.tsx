@@ -51,8 +51,31 @@ describe('workspace launcher', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useUiStore.setState({
-      projectId: 'p1', workspaceId: 'w1', sessionByWorkspace: { w1: 's1' }, tempTabs: {}, statuses: {},
+      projectId: 'p1', workspaceId: 'w1', sessionLauncherOpen: false, sessionByWorkspace: { w1: 's1' }, tempTabs: {}, statuses: {},
     });
+  });
+
+  it.each([
+    ['t', 'Terminal t1'],
+    ['1', /New session/],
+    ['2', /New session/],
+  ] as const)('opens the launcher via the new-session shortcut and selects %s', async (key, tabName) => {
+    const trigger = renderWorkspace();
+    const shortcut = IS_MAC ? { metaKey: true } : { ctrlKey: true };
+    fireEvent.keyDown(trigger, { ...shortcut, code: 'KeyT', key: 't' });
+    const menu = screen.getByRole('menu');
+    expect(api.sessionCreate).not.toHaveBeenCalled();
+    expect(api.workspaceTerminalCreate).not.toHaveBeenCalled();
+
+    expect(menu.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect((await screen.findByRole('tab', { name: tabName })).getAttribute('aria-selected')).toBe('true');
+    if (key === 't') {
+      expect(api.workspaceTerminalCreate).toHaveBeenCalledWith('w1');
+    } else {
+      expect(api.sessionCreate).toHaveBeenCalledWith('w1', key === '1' ? 'claude' : 'codex', undefined, undefined);
+    }
   });
 
   it('opens and dismisses the menu by keyboard and uses the chosen agent', async () => {

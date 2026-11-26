@@ -115,6 +115,7 @@ export const api = {
     invoke<void>('project_markdown_download', { projectId, path, text }),
 
   appInfo: () => invoke<AppInfo>('app_info'),
+  githubAccounts: () => invoke<string[]>('github_accounts'),
   fontFamilies: () => invoke<string[]>('font_families'),
   terminalFontData: (family: string) => invoke<ArrayBuffer>('terminal_font_data', { family }),
   themeFiles: () => invoke<ThemeFile[]>('theme_files'),

@@ -11,7 +11,7 @@ import { effectiveShortcut, matchShortcut, runTabShortcut, shortcutLabel, syncSh
 import type { ShortcutId } from '@/lib/keyboardShortcuts';
 import { runZoomAction } from '@/lib/zoomShortcuts';
 import { api, errMsg } from '@/lib/api';
-import { createSession, cycleTheme, openClaudeConversation, openStoredSession } from '@/lib/actions';
+import { cycleTheme, openClaudeConversation, openStoredSession } from '@/lib/actions';
 import { qk, usePaletteWorkspaces, useProjects, useSessions } from '@/lib/queries';
 import type { Workspace } from '@/lib/types';
 import { toast } from '@/components/ui/toast';
@@ -54,12 +54,12 @@ export function CommandDialog() {
       if ((e.repeat && !zoom) || (dialog && !insidePalette && !zoom)) return;
       switch (id) {
         case 'palette': ui.setCmdOpen(!ui.cmdOpen); break;
-        case 'settings': ui.setCmdOpen(false); ui.setSettingsOpen(true); break;
-        case 'add-project': ui.setAddProjectOpen(true); break;
-        case 'new-workspace': if (ui.projectId) ui.setNewWorkspaceFor(ui.projectId); break;
+        case 'settings': ui.setCmdOpen(false); ui.setScreen('settings'); break;
+        case 'add-project': ui.setScreen('projects'); ui.setAddProjectOpen(true); break;
+        case 'new-workspace': if (ui.projectId) { ui.setScreen('projects'); ui.setNewWorkspaceFor(ui.projectId); } break;
         case 'new-session': {
           const workspace = qc.getQueryData<Workspace[]>(qk.workspaces(ui.projectId ?? '', true))?.find((entry) => entry.id === ui.workspaceId);
-          if (ui.workspaceId && !workspace?.archived_at) void createSession(qc, ui.workspaceId);
+          if (workspace && workspace.archived_at == null) ui.setSessionLauncherOpen(true);
           break;
         }
         case 'theme': cycleTheme(); break;
@@ -185,10 +185,12 @@ function CommandBody({ close }: { close: () => void }) {
     try {
       if (workspaces.some((w) => w.id === workspaceId && w.deleted_at != null)) {
         await openStoredSession(qc, await api.sessionRehome(sessionId));
+        ui.setScreen('projects');
         return;
       }
       const session = await api.sessionGet(sessionId);
       openSession(projectId, workspaceId, sessionId, (statuses[sessionId]?.state ?? session.status) === 'done');
+      ui.setScreen('projects');
     } catch (error) {
       toast(errMsg(error), 'error');
     }
@@ -202,6 +204,7 @@ function CommandBody({ close }: { close: () => void }) {
       run: () => {
         ui.setCollapsed(workspace.project_id, false);
         ui.selectWorkspace(workspace.project_id, workspace.id);
+        ui.setScreen('projects');
       },
       node: <><Folder className="size-4 shrink-0 text-muted-foreground" />
         <ResultText title={workspace.name ?? 'New workspace'} detail={name} /></>,
@@ -232,6 +235,7 @@ function CommandBody({ close }: { close: () => void }) {
         key: 'p-' + p.id,
         group: 'Projects',
         run: () => {
+          ui.setScreen('projects');
           ui.setCollapsed(p.id, false);
           if (p.id !== projectId) ui.selectWorkspace(p.id, availableWorkspaces.find((w) => w.project_id === p.id)?.id ?? null);
         },
@@ -247,7 +251,7 @@ function CommandBody({ close }: { close: () => void }) {
       entries.push({
         key: 's-' + session.id,
         group: 'Sessions',
-        run: () => openSession(project.id, ws.id, session.id, status === 'done'),
+        run: () => { ui.setScreen('projects'); openSession(project.id, ws.id, session.id, status === 'done'); },
         node: <><StatusDot status={status} />
           <ResultText title={session.title ?? 'New session'} detail={location(project.name, ws.name)} /></>,
       });
@@ -275,7 +279,7 @@ function CommandBody({ close }: { close: () => void }) {
       group: 'Claude conversations',
       run: () => {
         if (sessionId && foundProject && foundWorkspace) void openFoundSession(foundProject, foundWorkspace, sessionId);
-        else void openClaudeConversation(qc, hit);
+        else { ui.setScreen('projects'); void openClaudeConversation(qc, hit); }
       },
       node: <ResultText title={hit.title ?? 'Conversation'}
         detail={[hit.project_name, hit.workspace_name ?? hit.cwd, hit.snippet].filter(Boolean).join(' · ')} />,
@@ -283,9 +287,9 @@ function CommandBody({ close }: { close: () => void }) {
   }
 
   const commands: { label: string; category?: Category; kbd?: string; Icon: typeof Plus; run: () => void; show?: boolean; keywords?: string }[] = [
-    { label: `New workspace in ${project?.name ?? 'project'}`, kbd: hotkey('new-workspace'), Icon: Plus, run: () => project && ui.setNewWorkspaceFor(project.id), show: !!project },
-    { label: 'New session in workspace', kbd: hotkey('new-session'), Icon: SquarePlus, run: () => ws && createSession(qc, ws.id), show: !!ws && ws.archived_at === null },
-    { label: 'Add project', kbd: hotkey('add-project'), Icon: FolderPlus, run: () => ui.setAddProjectOpen(true) },
+    { label: `New workspace in ${project?.name ?? 'project'}`, kbd: hotkey('new-workspace'), Icon: Plus, run: () => { if (project) { ui.setScreen('projects'); ui.setNewWorkspaceFor(project.id); } }, show: !!project },
+    { label: 'New session in workspace', kbd: hotkey('new-session'), Icon: SquarePlus, run: () => ui.setSessionLauncherOpen(true), show: !!ws && ws.archived_at === null },
+    { label: 'Add project', kbd: hotkey('add-project'), Icon: FolderPlus, run: () => { ui.setScreen('projects'); ui.setAddProjectOpen(true); } },
     { label: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', kbd: hotkey('sidebar'), Icon: PanelLeft, run: () => ui.setSidebarOpen(!sidebarOpen) },
     { label: rightOpen ? 'Hide side panel' : 'Show side panel', kbd: hotkey('side-panel'), Icon: PanelRight, run: () => ui.setRightOpen(!rightOpen) },
     { label: 'Toggle theme', kbd: hotkey('theme'), Icon: Moon, run: cycleTheme },
@@ -296,17 +300,17 @@ function CommandBody({ close }: { close: () => void }) {
     { label: `Increase text size (${contentPx(contentStep)}px)`, kbd: hotkey('text-in'), Icon: ALargeSmall, run: ui.contentBigger, keywords: 'font text size bigger' },
     { label: `Decrease text size (${contentPx(contentStep)}px)`, kbd: hotkey('text-out'), Icon: ALargeSmall, run: ui.contentSmaller, keywords: 'font text size smaller' },
     { label: 'Reset text size', kbd: hotkey('text-reset'), Icon: ALargeSmall, run: ui.contentReset, keywords: 'font text size default' },
-    { label: 'Open settings', category: 'Settings', kbd: hotkey('settings'), Icon: Settings, run: () => ui.setSettingsOpen(true) },
+    { label: 'Open settings', category: 'Settings', kbd: hotkey('settings'), Icon: Settings, run: () => ui.setScreen('settings') },
     ...tabPositions.map((position) => {
       const id = `tab-${position}` as const;
       return { label: `Switch to tab ${position}`, kbd: hotkey(id), Icon: SquarePlus,
-        show: !!document.querySelector('[data-workspace-tabs]')?.querySelectorAll('[role="tab"]')[position - 1],
+        show: ui.screen === 'projects' && !!document.querySelector('[data-workspace-tabs]')?.querySelectorAll('[role="tab"]')[position - 1],
         run: () => requestAnimationFrame(() => runTabShortcut(id)) };
     }),
     { label: 'Close tab', kbd: hotkey('close-tab'), Icon: SquarePlus,
-      show: !!document.querySelector('[data-workspace-tabs] [aria-selected="true"]'),
+      show: ui.screen === 'projects' && !!document.querySelector('[data-workspace-tabs] [aria-selected="true"]'),
       run: () => requestAnimationFrame(() => runTabShortcut('close-tab')) },
-    { label: 'Appearance', category: 'Settings', Icon: Paintbrush, keywords: 'settings theme font', run: () => ui.setSettingsOpen(true) },
+    { label: 'Appearance', category: 'Settings', Icon: Paintbrush, keywords: 'settings theme font', run: () => ui.setScreen('settings') },
   ];
   for (const c of commands) {
     const group = c.category ?? 'Actions';

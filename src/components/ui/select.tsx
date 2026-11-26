@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 
 export const Select = S.Root;
 export const SelectValue = S.Value;
+export const SelectGroup = S.Group;
 
 export function SelectTrigger({ className, children, ...props }: React.ComponentProps<typeof S.Trigger>) {
   return (

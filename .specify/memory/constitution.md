@@ -1,5 +1,21 @@
 <!--
 Sync Impact Report
+- Version change: 1.5.0 → 2.0.0 (MAJOR, bỏ yêu cầu bắt buộc dùng shadcn/ui)
+- Modified core principles: không có
+- Added sections: không có
+- Removed sections: không có
+- Modified sections: Ràng buộc kỹ thuật, Quy trình phát triển & cổng chất lượng
+- Deferred TODOs: không có
+
+Sync Impact Report
+- Version change: 1.4.0 → 1.5.0 (MINOR, mở rộng chuẩn màu sắc cho toàn app)
+- Modified principles: không có
+- Added sections: không có
+- Removed sections: không có
+- Modified sections: Ràng buộc kỹ thuật, Quy trình phát triển & cổng chất lượng
+- Deferred TODOs: không có
+
+Sync Impact Report
 - Version change: 1.3.0 → 1.4.0 (MINOR, mở rộng checkout worktree)
 - Modified principles: VI cho phép checkout branch local có sẵn
 - Related documents: BR-001 F11, technical D8, spec 028
@@ -108,11 +124,15 @@ thêm một bước giữa developer và agent.
 
 ## Ràng buộc kỹ thuật
 
-- **Phong cách giao diện**. Toàn bộ giao diện do Herdsman cung cấp MUST theo shadcn/ui với
-  style `new-york` đã cấu hình trong `components.json`. MUST dùng component tương ứng từ
-  `src/components/ui` khi đã có. Thành phần chuyên biệt như cây file, editor và terminal
-  MUST dùng token theme của app và theo cùng quy ước về bố cục, khoảng cách, typography,
-  bo góc và trạng thái tương tác trong cả theme sáng lẫn tối.
+- **Phong cách giao diện**. Herdsman MAY dùng shadcn/ui hoặc chọn thành phần giao diện phù hợp
+  với tính năng. Mọi thành phần MUST dùng token theme của app và tuân theo quy ước chung về bố
+  cục, khoảng cách, typography, bo góc và trạng thái tương tác trong cả theme sáng lẫn tối.
+- **Màu sắc có chủ đích**. Giao diện Herdsman MUST dùng màu để người dùng nhận ra hành động
+  chính, mục đang chọn và trạng thái quan trọng ngay khi lướt qua. Chip, badge, biểu tượng và
+  nền nhấn MUST dùng token màu theo vai trò của theme. Cùng một ý nghĩa MUST dùng cùng vai trò
+  màu giữa các màn hình. Khi màu truyền tải trạng thái hoặc lựa chọn, giao diện MUST có thêm
+  nhãn, biểu tượng hoặc chỉ báo hình dạng. Chữ và biểu tượng MUST đủ tương phản với nền trong
+  cả theme sáng lẫn tối.
 - **Ngôn ngữ giao diện**: Mọi nội dung giao diện do Herdsman cung cấp MUST dùng tiếng Anh,
   gồm nhãn, nút, menu, hộp thoại, tooltip, thông báo trạng thái và thông báo lỗi.
   Nội dung do người dùng hoặc agent cung cấp được hiển thị bằng ngôn ngữ gốc.
@@ -139,8 +159,11 @@ thêm một bước giữa developer và agent.
     gì; Mermaid/chart render đúng; duyệt quyền `Edit` hiện diff và Allow cho agent chạy tiếp.
 - Thay đổi chạm tới persistence, permission hoặc giao thức MUST có test tái hiện kịch bản app tắt
   giữa chừng.
-- Plan và review cho mọi thay đổi giao diện MUST kiểm tra việc dùng component chung, token
-  theme và tính nhất quán với shadcn/ui trong cả theme sáng lẫn tối.
+- Plan và review cho mọi thay đổi giao diện MUST kiểm tra việc dùng token theme và tính nhất
+  quán với quy ước giao diện của Herdsman trong cả theme sáng lẫn tối.
+- Plan và review giao diện MUST xác định điểm nhấn màu cho hành động chính, mục đang chọn và
+  trạng thái quan trọng khi có. Review MUST kiểm tra ý nghĩa màu nhất quán, độ tương phản và
+  khả năng nhận biết trạng thái khi hiển thị ở thang xám.
 - Review MUST kiểm tra: không có đường nào agent chạy tool cần quyền mà không qua người dùng;
   không có dữ liệu nhạy cảm trong log.
 
@@ -154,4 +177,4 @@ thêm một bước giữa developer và agent.
 - Mỗi lần `/speckit-plan` và review PR MUST kiểm tra tuân thủ; khi BR hoặc Technical Architecture
   đổi phạm vi, MUST rà lại constitution.
 
-**Version**: 1.4.0 | **Ratified**: 2026-11-21 | **Last Amended**: 2026-11-24
+**Version**: 2.0.0 | **Ratified**: 2026-11-21 | **Last Amended**: 2026-11-26

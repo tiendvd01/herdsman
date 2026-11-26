@@ -23,7 +23,6 @@ import { qk, useProjects, useSessions, useWorkspaces } from '@/lib/queries';
 import type { Project, Session, SessionStatus, Workspace } from '@/lib/types';
 import { useNavigationOrder } from '@/lib/useNavigationOrder';
 import { cn } from '@/lib/utils';
-import { IS_MAC, TRAFFIC_LIGHTS_PAD } from '@/lib/platform';
 import { effectiveShortcut, shortcutLabel, useShortcutBindings } from '@/lib/keyboardShortcuts';
 import { sessionTabStatus, useUiStore } from '@/stores/useUiStore';
 
@@ -34,7 +33,7 @@ export function useLiveStatus(s: Session | undefined): SessionStatus {
   return live ?? s?.status ?? 'idle';
 }
 
-export function WorkspaceView() {
+export function WorkspaceView({ visible = true }: { visible?: boolean } = {}) {
   const projectId = useUiStore((s) => s.projectId);
   const workspaceId = useUiStore((s) => s.workspaceId);
   const { data: projects = [] } = useProjects();
@@ -50,7 +49,7 @@ export function WorkspaceView() {
       </>
     );
   }
-  return <WorkspacePane key={ws?.id ?? project.id} project={project} ws={ws} />;
+  return <WorkspacePane key={ws?.id ?? project.id} project={project} ws={ws} visible={visible} />;
 }
 
 function SidebarToggle() {
@@ -100,18 +99,11 @@ function ShortcutHint({ label, kbd }: { label: string; kbd: string }) {
   );
 }
 
-/** When the sidebar is hidden on macOS, the traffic lights float over the header's left edge. */
-function useHeaderPad() {
-  const sidebarOpen = useUiStore((s) => s.sidebarOpen);
-  return !sidebarOpen && IS_MAC ? TRAFFIC_LIGHTS_PAD : 'pl-4';
-}
-
 function TopBar() {
-  const pad = useHeaderPad();
   return (
-    <header data-tauri-drag-region className={cn('flex h-11 shrink-0 items-center gap-2 border-b border-border pr-4', pad)}>
+    <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-surface px-4">
       <SidebarToggle />
-      <span data-tauri-drag-region className="flex-1 self-stretch" />
+      <span className="flex-1 self-stretch" />
       <RightPanelToggle />
     </header>
   );
@@ -123,7 +115,7 @@ const tabTrigger = 'max-w-[240px] justify-start gap-1.5 px-2 hover:bg-transparen
 const tabClose = 'size-6 hover:bg-transparent';
 const contentTabFrame = 'm-2 min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-primary';
 
-function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
+function WorkspacePane({ project, ws, visible }: { project: Project; ws?: Workspace; visible: boolean }) {
   const workspaceId = ws?.id ?? null;
   const qc = useQueryClient();
   const fileTabs = useFileStore((state) => state.tabs);
@@ -133,7 +125,17 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
   const selectedDiff = workspaceDiffs.find((diff) => diff.id === fileId);
   const selectedFile = fileTabs.find((file) => file.id === fileId);
   const selectedDocument = selectedFile ?? selectedDiff;
-  const [launcherOpen, setLauncherOpen] = useState(false);
+  const launcherOpen = useUiStore((s) => s.sessionLauncherOpen);
+  const setLauncherOpen = useUiStore((s) => s.setSessionLauncherOpen);
+  const launcherShortcut = effectiveShortcut('new-session', useShortcutBindings());
+  function launchAgent(engine: 'claude' | 'codex') {
+    if (!workspaceId) return;
+    void createSession(qc, workspaceId, engine).then((session) => {
+      if (!session) return;
+      setTerminalAddress(undefined);
+      useFileStore.getState().activate(project.id);
+    });
+  }
   const [terminalAddress, setTerminalAddress] = useState<string>();
   const terminalQueryKey = qk.workspaceTerminals(workspaceId ?? '');
   const { data: workspaceTerminals = [], isSuccess: terminalsLoaded } = useQuery({
@@ -226,7 +228,7 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
     [sessions, current, pendingClose, temp, statuses],
   );
   const active = sessions.find((s) => s.id === current) ?? tabs[0];
-  const visibleSession = selectedTerminal || selectedDocument ? undefined : active;
+  const visibleSession = visible && !selectedTerminal && !selectedDocument ? active : undefined;
   const visibleCompletion = visibleSession ? statuses[visibleSession.id] : undefined;
   useLayoutEffect(() => {
     if (
@@ -360,7 +362,6 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
     if (workspaceId && !selectedTerminal && !selectedDocument && active && active.id !== current) useUiStore.getState().selectSession(workspaceId, active.id);
   }, [active, current, selectedDocument, selectedTerminal, workspaceId]);
 
-  const pad = useHeaderPad();
 
   const [closing, setClosing] = useState<Session | null>(null);
   const [closeWorkspace, setCloseWorkspace] = useState(false);
@@ -589,43 +590,49 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
           </label>
         ) : null}
       </ConfirmDialog>
-      <header data-tauri-drag-region className={cn('flex h-11 shrink-0 items-center gap-1 border-b border-border pr-4', pad)}>
+      <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-surface px-4">
         <SidebarToggle />
         <div ref={rowRef} data-workspace-tabs data-reorder-scroll onKeyDown={navigateTabs} className="flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label={ws ? "Workspace tabs" : "Project tabs"}>
           {order.map((key) => tabNodes.get(key))}
         </div>
         {ws && ws.archived_at == null ? (
-          <DropdownMenu open={launcherOpen} onOpenChange={setLauncherOpen}>
+          <DropdownMenu open={visible && launcherOpen} onOpenChange={setLauncherOpen}>
             <DropdownMenuTrigger asChild>
               <Button variant="muted" size="icon-sm" ref={newSessionRef}
                 className="shrink-0" aria-label="New session in workspace" disabled={createTerminal.isPending}
+                aria-keyshortcuts={shortcutLabel(launcherShortcut, true)}
                 onClick={(event) => {
                   // Assistive technology can activate the trigger with a click alone.
-                  if (event.detail === 0) setLauncherOpen((open) => !open);
+                  if (event.detail === 0) setLauncherOpen(!launcherOpen);
                 }}>
                 <Plus />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem onSelect={() => createTerminal.mutate()}>
+            <DropdownMenuContent onKeyDown={(event) => {
+              if (event.defaultPrevented || event.nativeEvent.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+              const choice = event.key;
+              if (choice !== 't' && choice !== '1' && choice !== '2') return;
+              event.preventDefault();
+              if (event.repeat || (choice === 't' && createTerminal.isPending)) return;
+              setLauncherOpen(false);
+              if (choice === 't') createTerminal.mutate();
+              else launchAgent(choice === '1' ? 'claude' : 'codex');
+            }}>
+              <DropdownMenuItem aria-keyshortcuts="T" disabled={createTerminal.isPending} onSelect={() => createTerminal.mutate()}>
                 <TerminalIcon aria-hidden="true" /> Terminal
+                <Kbd aria-hidden="true" className="ml-auto">T</Kbd>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              {(['claude', 'codex'] as const).map((engine) => (
-                <DropdownMenuItem key={engine} onSelect={() => {
-                  void createSession(qc, ws.id, engine).then((session) => {
-                    if (!session) return;
-                    setTerminalAddress(undefined);
-                    useFileStore.getState().activate(project.id);
-                  });
-                }}>
+              {(['claude', 'codex'] as const).map((engine, index) => (
+                <DropdownMenuItem key={engine} aria-keyshortcuts={String(index + 1)} onSelect={() => launchAgent(engine)}>
                   <EngineIcon engine={engine} /> {engine === 'claude' ? 'Claude Code' : 'Codex'}
+                  <Kbd aria-hidden="true" className="ml-auto">{index + 1}</Kbd>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
-        <span data-tauri-drag-region className="min-w-4 flex-1 self-stretch" />
+        <span className="min-w-4 flex-1 self-stretch" />
         <RightPanelToggle buttonRef={rightPanelRef} />
       </header>
 

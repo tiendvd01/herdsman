@@ -7,14 +7,43 @@ import { toast } from '@/components/ui/toast';
 import { errMsg } from '@/lib/api';
 import { Sidebar } from './Sidebar';
 import { WorkspaceView } from './WorkspaceView';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { RightPanel } from '@/components/panels/RightPanel';
+import lightIconUrl from '@/assets/herdsman_lightmode.png';
+import darkIconUrl from '@/assets/herdsman_darkmode.png';
+import { IS_MAC, TRAFFIC_LIGHTS_PAD } from '@/lib/platform';
+import { useThemeColors } from '@/lib/theme';
+import { cn } from '@/lib/utils';
 import { useZoomEffect } from '@/lib/zoomShortcuts';
 import { ZoomIndicator } from './ZoomIndicator';
+import { allProjects, PullRequestsView, usePullRequests } from './PullRequests';
+import { readProjectOrder } from '@/lib/useNavigationOrder';
+import { ProjectPickerSidebar } from './ProjectPickerSidebar';
+import { NavigationRail } from './NavigationRail';
+import { SettingsView } from '@/components/settings/SettingsView';
+import { ProjectSkillsSection } from '@/components/settings/ProjectSkillsSection';
+import { useUiStore } from '@/stores/useUiStore';
 
 export function AppShell() {
   useZoomEffect();
   const fileClose = useFileClose();
+  const { appearance } = useThemeColors();
+  const pullRequests = usePullRequests();
+  const screen = useUiStore((s) => s.screen);
+  const projectsVisible = screen === 'projects';
+  const pullRequestsVisible = screen === 'pull-requests';
+  const skillsVisible = screen === 'skills';
+  const workspaceProjectId = useUiStore((s) => s.projectId);
+  const [skillsSelection, setSkillsSelection] = useState<string>();
+  const projectQuery = pullRequests.projectQuery;
+  const projectsById = new Map(projectQuery.data?.map((project) => [project.id, project]));
+  const orderedProjects = readProjectOrder([...projectsById.keys()]).map((id) => projectsById.get(id)!);
+  const skillsProjectId = projectsById.get(skillsSelection ?? workspaceProjectId ?? '')?.id ?? orderedProjects[0]?.id;
+
+  useEffect(() => {
+    if (skillsVisible && projectQuery.isSuccess) setSkillsSelection(skillsProjectId);
+  }, [skillsVisible, projectQuery.isSuccess, skillsProjectId]);
+
   useEffect(() => {
     if (!isTauri()) return;
     const nativeWindow = getCurrentWindow();
@@ -43,13 +72,46 @@ export function AppShell() {
     };
   }, []);
   return (
-    <div className="flex h-full bg-background text-foreground">
+    <div className="relative flex h-full bg-background text-foreground">
+      <div className={cn('pointer-events-none absolute left-0 top-0 z-10 flex h-11 items-center', IS_MAC ? TRAFFIC_LIGHTS_PAD : 'pl-2')}>
+        <img src={appearance === 'dark' ? darkIconUrl : lightIconUrl} alt="Herdsman" className="size-6 rounded-sm" />
+      </div>
       {fileClose.dialog}
-      <Sidebar />
+      <NavigationRail unread={pullRequests.unread} />
+      <div hidden={!projectsVisible} className={!projectsVisible ? undefined : 'contents'}><Sidebar /></div>
+      {(pullRequestsVisible || skillsVisible) && (
+        <ProjectPickerSidebar
+          projects={orderedProjects}
+          selectedId={pullRequestsVisible ? pullRequests.projectId : skillsProjectId}
+          allProjectsId={pullRequestsVisible ? allProjects : undefined}
+          pending={projectQuery.isPending}
+          onRetry={projectQuery.isError ? () => void projectQuery.refetch() : undefined}
+          onSelect={pullRequestsVisible ? pullRequests.selectProject : setSkillsSelection}
+        />
+      )}
       <main tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
-        <WorkspaceView />
+        <div data-tauri-drag-region className="h-11 shrink-0 border-b border-border bg-surface" />
+        <div hidden={!projectsVisible} className={!projectsVisible ? undefined : 'flex min-h-0 flex-1 flex-col'}>
+          <WorkspaceView visible={projectsVisible} />
+        </div>
+        {screen === 'pull-requests' && <PullRequestsView tracker={pullRequests} />}
+        {screen === 'settings' && <SettingsView />}
+        {skillsVisible && (
+          <section aria-labelledby="skills-title" className="flex min-h-0 flex-1 flex-col">
+            <header className="flex h-14 shrink-0 items-center border-b border-border px-4">
+              <h1 id="skills-title" className="text-sm font-semibold">Skills</h1>
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+              {skillsProjectId ? (
+                <ProjectSkillsSection key={skillsProjectId} projectId={skillsProjectId} />
+              ) : !projectQuery.isPending && !projectQuery.isError && (
+                <p className="text-sm text-muted-foreground">Add a project in Projects to manage its skills.</p>
+              )}
+            </div>
+          </section>
+        )}
       </main>
-      <RightPanel />
+      <div hidden={!projectsVisible} className={!projectsVisible ? undefined : 'contents'}><RightPanel /></div>
       <ZoomIndicator />
     </div>
   );
