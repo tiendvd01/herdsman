@@ -629,18 +629,16 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
         </div>
         {ws && ws.archived_at == null ? (
           <DropdownMenu open={launcherOpen} onOpenChange={setLauncherOpen}>
-            <Tooltip content="New session in workspace">
-              <DropdownMenuTrigger asChild>
-                <Button variant="muted" size="icon-sm" ref={newSessionRef}
-                  className="mb-2 shrink-0" aria-label="New session in workspace" disabled={createTerminal.isPending}
-                  onClick={(event) => {
-                    // Assistive technology can activate the trigger with a click alone.
-                    if (event.detail === 0) setLauncherOpen((open) => !open);
-                  }}>
-                  <Plus />
-                </Button>
-              </DropdownMenuTrigger>
-            </Tooltip>
+            <DropdownMenuTrigger asChild>
+              <Button variant="muted" size="icon-sm" ref={newSessionRef}
+                className="mb-2 shrink-0" aria-label="New session in workspace" disabled={createTerminal.isPending}
+                onClick={(event) => {
+                  // Assistive technology can activate the trigger with a click alone.
+                  if (event.detail === 0) setLauncherOpen((open) => !open);
+                }}>
+                <Plus />
+              </Button>
+            </DropdownMenuTrigger>
             <DropdownMenuContent>
               <DropdownMenuItem onSelect={() => createTerminal.mutate()}>
                 <TerminalIcon aria-hidden="true" /> Terminal
