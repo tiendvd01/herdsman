@@ -28,7 +28,6 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/components/conversation/SessionView', () => ({
   SessionView: ({ session }: { session: { id: string } }) => <div data-testid={`session-view-${session.id}`} />,
 }));
-vi.mock('@/components/history/HistoryPopover', () => ({ HistoryPopover: () => null }));
 vi.mock('@/components/terminal/WorkspaceTerminal', () => ({
   default: ({ address }: { address: string }) => <div>Connected to {address}</div>,
 }));

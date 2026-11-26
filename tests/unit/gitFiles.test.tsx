@@ -25,7 +25,6 @@ vi.mock('@/components/files/FileEditor', () => ({
   FileEditor: ({ file }: { file: { draft: string } }) => <div>{file.draft}</div>,
 }));
 vi.mock('@/components/conversation/SessionView', () => ({ SessionView: () => null }));
-vi.mock('@/components/history/HistoryPopover', () => ({ HistoryPopover: () => null }));
 
 // Shiki's WASM loader uses Blob.stream, which jsdom does not implement.
 beforeAll(() => vi.stubGlobal('Blob', Blob));

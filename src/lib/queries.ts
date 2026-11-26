@@ -8,6 +8,7 @@ export const qk = {
   allWorkspaces: ['workspaces'] as const,
   sessions: (workspaceId: string) => ['sessions', workspaceId] as const,
   allSessions: ['sessions'] as const,
+  historySessions: ['sessions', 'history'] as const,
   allWorkspaceTerminals: ['workspace-terminals'] as const,
   workspaceTerminals: (workspaceId: string) => ['workspace-terminals', workspaceId] as const,
   agentTree: (sessionId: string) => ['agentTree', sessionId] as const,

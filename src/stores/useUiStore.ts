@@ -9,7 +9,7 @@ import { clampContentStep, clampZoom, CONTENT_STEP, nextZoom, normalizeCodeFontS
 export type Theme = 'system' | 'light' | 'dark';
 /** Spec 016: theme ids picked for Light and for Dark (built-in `light`/`paper`/`dark` or a custom theme file name). */
 export const isThemeId = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 64;
-export type RightTab = 'agents' | 'files' | 'project-files' | 'log';
+export type RightTab = 'agents' | 'files' | 'project-files' | 'log' | 'history';
 
 interface LiveStatus {
   state: SessionStatus;

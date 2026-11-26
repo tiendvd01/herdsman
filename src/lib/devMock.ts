@@ -18,9 +18,9 @@ const WS: Workspace[] = [
   { id: 'w3', project_id: 'p2', name: 'Add rate limiting', dir_kind: 'project', work_dir: P2.path, branch: null, base_branch: null, archived_at: null, worktree_removed: false, created_at: now - 9e6 },
 ];
 // s1 has no model set, like a fresh session on the engine default.
-const S = (id: string, ws: string, title: string, status: string, mode = 'ask') => ({
+const S = (id: string, ws: string, title: string, status: string, mode = 'ask', engineSessionId: string | null = null) => ({
   id, workspace_id: ws, engine: 'claude', hc_terminal: `t${id}`, title, status, permission_mode: mode, model: id === 's1' ? null : 'claude-opus-5-5',
-  engine_session_id: null, last_seen_seq: 0, pinned_tab: true, created_at: now - 1e5, updated_at: now - 6e4, ended_at: null,
+  engine_session_id: engineSessionId, last_seen_seq: 0, pinned_tab: true, created_at: now - 1e5, updated_at: now - 6e4, ended_at: null,
 });
 const SESSIONS = [S('s1', 'w1', 'Draw the login flow', 'blocked'), S('s2', 'w1', 'Write e2e tests', 'working', 'accept_edits'), S('s3', 'w2', 'Split the store', 'idle', 'bypass'), S('s4', 'w3', 'Rate limit', 'error')];
 
@@ -116,7 +116,7 @@ export function installDevMock() {
         case 'session_get':
           return SESSIONS.find((s) => s.id === a.id);
         case 'session_open':
-          setTimeout(() => emit('session:events', { session_id: a.id, events: [...(a.id === 's1' ? EVENTS : EVENTS.slice(0, 2)), ...(extraEvents[a.id] ?? [])] }), 50);
+          setTimeout(() => emit('session:events', { session_id: a.id, events: [...(a.id === 's1' ? EVENTS : a.id === 'cli-review' ? [] : EVENTS.slice(0, 2)), ...(extraEvents[a.id] ?? [])] }), 50);
           return null;
         case 'session_list_models':
           return { models: MODELS, current: sessionModel[a.id] ?? null, default_model: 'claude-opus-5-5' };
@@ -224,6 +224,30 @@ export function installDevMock() {
           return { is_repo: true, branches: ['main', 'develop'], checked_out: ['main'], default_branch: 'main', current: 'main' };
         case 'plugin:webview|set_webview_zoom':
           throw new Error('Native webview zoom is unavailable in the browser preview');
+        case 'history_stored': {
+          const query = a.query.trim().toLowerCase();
+          return SESSIONS.flatMap((session) => {
+            const workspace = WS.find((item) => item.id === session.workspace_id)!;
+            if (a.workspaceId && a.workspaceId !== workspace.id) return [];
+            const project = [P, P2].find((item) => item.id === workspace.project_id)!;
+            const snippet = query && session.id === 's1' && LOGIN_PROMPT.toLowerCase().includes(query) ? LOGIN_PROMPT : null;
+            if (!session.title.toLowerCase().includes(query) && !snippet) return [];
+            return [{ session, workspace, project_name: project.name, snippet }];
+          });
+        }
+        case 'history_claude': {
+          const title = 'Review CLI changes';
+          const message = 'Check the release notes before shipping.';
+          const workspace = WS[2];
+          const query = a.query.trim().toLowerCase();
+          const snippet = query && message.toLowerCase().includes(query) ? message : '';
+          const show = (!a.workspaceId || a.workspaceId === workspace.id) && (title.toLowerCase().includes(query) || !!snippet);
+          return { partial: false, hits: show ? [{
+            claude_session_id: 'cli-review', session_id: SESSIONS.find((item) => item.id === 'cli-review')?.id ?? null, cwd: workspace.work_dir, title, snippet,
+            updated_at: now - 2e5, workspace_id: workspace.id, workspace_name: workspace.name,
+            project_id: P2.id, project_name: P2.name,
+          }] : [] };
+        }
         case 'search': {
           const query = a.query.toLowerCase().trim();
           return SESSIONS.flatMap((session) => {
@@ -251,8 +275,17 @@ export function installDevMock() {
             project_id: P.id, project_name: P.name,
           }];
         }
-        case 'claude_open':
-          return { session: SESSIONS[0], workspace: WS[0] };
+        case 'claude_open': {
+          if (a.claudeSessionId !== 'cli-review') return { session: SESSIONS[0], workspace: WS[0] };
+          const workspace = WS[2];
+          const session = SESSIONS.find((item) => item.id === 'cli-review')
+            ?? S('cli-review', workspace.id, 'Review CLI changes', 'done', 'cli-review');
+          if (!SESSIONS.includes(session)) {
+            SESSIONS.push(session);
+            extraEvents[session.id] = [t(3, { type: 'assistant_message', message_id: 'cli', blocks: [{ kind: 'text', text: 'Check the release notes before shipping.' }] })];
+          }
+          return { session, workspace };
+        }
         case 'session_rehome': {
           const session = SESSIONS.find((s) => s.id === a.id)!;
           const previous = WS.find((w) => w.id === session.workspace_id)!;

@@ -49,7 +49,7 @@ export function Sidebar() {
       {open && width > 0 ? (
         <aside aria-label="Sidebar" style={{ width }} className="relative flex h-full shrink-0 flex-col gap-2 border-r border-border bg-surface px-2 pb-2">
           {/* Top row shares the window's title bar: traffic lights on the left. */}
-          <div data-tauri-drag-region className="-mx-2 h-11 shrink-0 select-none" />
+          <div data-tauri-drag-region className="-mx-2 h-11 shrink-0 select-none border-b border-border" />
 
           <div data-tauri-drag-region className="flex shrink-0 select-none items-center gap-1.5 px-2 pb-1">
             <img src={appearance === 'dark' ? darkIconUrl : lightIconUrl} alt="" className="pointer-events-none size-10 rounded-md" />

@@ -42,6 +42,7 @@ export function useBackendEvents() {
         const prev = useUiStore.getState().statuses[session_id]?.state;
         useUiStore.getState().setStatus(session_id, { state, kind, workspace_id, completionSeq: completion?.seq ?? completion_seq, completionTs: completion?.ts ?? completion_ts });
         qc.invalidateQueries({ queryKey: qk.sessions(workspace_id) });
+        qc.invalidateQueries({ queryKey: qk.historySessions });
         if (
           completion && completion.ts >= performance.timeOrigin
           && completion.seq > (notifiedTurns.get(session_id) ?? 0)

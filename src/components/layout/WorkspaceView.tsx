@@ -6,16 +6,15 @@ import { TruncatedText } from '@/components/ui/truncated-text';
 // Center column: workspace header, session tab row, conversation (BR 3.1; FR-009, FR-018, FR-027, FR-029).
 import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, FileDiff, FileText, PanelLeft, PanelRight, Plus, Terminal as TerminalIcon, X } from 'lucide-react';
+import { FileDiff, FileText, PanelLeft, PanelRight, Plus, Terminal as TerminalIcon, X } from 'lucide-react';
 import { Button, Kbd } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/alert-dialog';
-import { Tooltip, TooltipProvider } from '@/components/ui/tooltip';
+import { Tooltip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
 import { StatusDot } from '@/components/ui/status-dot';
 import { EngineIcon } from '@/components/ui/engine-icon';
-import { HistoryPopover } from '@/components/history/HistoryPopover';
 import { SessionView } from '@/components/conversation/SessionView';
 import { api, errMsg, type WorkspaceTerminalRef } from '@/lib/api';
 import { toast } from '@/components/ui/toast';
@@ -101,8 +100,6 @@ function ShortcutHint({ label, kbd }: { label: string; kbd: string }) {
   );
 }
 
-const Sep = () => <span aria-hidden="true" className="mx-0.5 h-4 w-px shrink-0 bg-border" />;
-
 /** When the sidebar is hidden on macOS, the traffic lights float over the header's left edge. */
 function useHeaderPad() {
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
@@ -112,7 +109,7 @@ function useHeaderPad() {
 function TopBar() {
   const pad = useHeaderPad();
   return (
-    <header data-tauri-drag-region className={cn('flex min-h-14 shrink-0 items-center gap-2 border-b border-border py-2 pr-4', pad)}>
+    <header data-tauri-drag-region className={cn('flex h-11 shrink-0 items-center gap-2 border-b border-border pr-4', pad)}>
       <SidebarToggle />
       <span data-tauri-drag-region className="flex-1 self-stretch" />
       <RightPanelToggle />
@@ -592,46 +589,16 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
           </label>
         ) : null}
       </ConfirmDialog>
-      {/* Workspace header */}
-      <header data-tauri-drag-region className={cn('flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-border py-2 pr-4', pad)}>
+      <header data-tauri-drag-region className={cn('flex h-11 shrink-0 items-center gap-1 border-b border-border pr-4', pad)}>
         <SidebarToggle />
-        <Sep />
-        <nav data-tauri-drag-region aria-label="Breadcrumb" className="flex flex-1 items-center self-stretch">
-          <ol data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-muted-foreground">
-            <li className="shrink-0 whitespace-nowrap">{project.name}</li>
-            {ws ? <>
-            <li aria-hidden="true" className="flex">
-              <ChevronRight className="size-3.5" />
-            </li>
-            <TooltipProvider delayDuration={1000} skipDelayDuration={0}>
-              <TruncatedText
-                as="li"
-                data-tauri-drag-region
-                aria-current="page"
-                className="min-w-0 truncate font-medium text-foreground"
-                tooltip={{ align: 'start', sideOffset: 3 }}
-              >
-                {ws.name ?? 'New workspace'}
-              </TruncatedText>
-            </TooltipProvider>
-            </> : null}
-          </ol>
-        </nav>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <RightPanelToggle buttonRef={rightPanelRef} />
-        </div>
-      </header>
-
-      {/* Session tab row */}
-      <div className="flex h-11 shrink-0 items-end gap-1 border-b border-border px-3">
-        <div ref={rowRef} data-workspace-tabs data-reorder-scroll onKeyDown={navigateTabs} className="flex min-w-0 items-center gap-1 overflow-x-auto pb-1.5 overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label={ws ? "Workspace tabs" : "Project tabs"}>
+        <div ref={rowRef} data-workspace-tabs data-reorder-scroll onKeyDown={navigateTabs} className="flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label={ws ? "Workspace tabs" : "Project tabs"}>
           {order.map((key) => tabNodes.get(key))}
         </div>
         {ws && ws.archived_at == null ? (
           <DropdownMenu open={launcherOpen} onOpenChange={setLauncherOpen}>
             <DropdownMenuTrigger asChild>
               <Button variant="muted" size="icon-sm" ref={newSessionRef}
-                className="mb-2 shrink-0" aria-label="New session in workspace" disabled={createTerminal.isPending}
+                className="shrink-0" aria-label="New session in workspace" disabled={createTerminal.isPending}
                 onClick={(event) => {
                   // Assistive technology can activate the trigger with a click alone.
                   if (event.detail === 0) setLauncherOpen((open) => !open);
@@ -658,9 +625,9 @@ function WorkspacePane({ project, ws }: { project: Project; ws?: Workspace }) {
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
-        <span className="flex-1" />
-        {ws ? <HistoryPopover ws={ws} sessions={sessions} /> : null}
-      </div>
+        <span data-tauri-drag-region className="min-w-4 flex-1 self-stretch" />
+        <RightPanelToggle buttonRef={rightPanelRef} />
+      </header>
 
       {ws && tabs.map((session) => (
         <SessionTabPanel key={session.id} session={session} ws={ws}

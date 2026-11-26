@@ -209,7 +209,7 @@ pub fn open_saved_history(st: Arc<AppState>, sid: String) {
 }
 
 // A stopped agent has no socket. The transcript is still available on disk.
-async fn emit_saved_history(st: &AppState, sid: &str) {
+pub(crate) async fn emit_saved_history(st: &AppState, sid: &str) {
     let path = st.session_dir(sid).join("events.ndjson");
     let Ok(file) = tokio::fs::File::open(path).await else { return };
     let mut lines = BufReader::new(file).lines();

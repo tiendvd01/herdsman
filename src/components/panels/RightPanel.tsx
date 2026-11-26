@@ -5,10 +5,10 @@ import { Empty as EmptyState, EmptyDescription, EmptyHeader, EmptyMedia } from '
 import { FileTree } from '@/components/files/FileTree';
 import { TruncatedText } from '@/components/ui/truncated-text';
 import { Tooltip } from '@/components/ui/tooltip';
-// Right side panel: Agents, Files, Git, Log (BR 3.1).
+import { HistoryPanel } from '@/components/history/HistoryPanel';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Bot, ChevronDown, ChevronRight, FolderTree, GitBranch, Maximize2, Minimize2, RefreshCw, ScrollText } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, FolderTree, GitBranch, History, Maximize2, Minimize2, RefreshCw, ScrollText } from 'lucide-react';
 import { api, errMsg } from '@/lib/api';
 import { qk, useProjects, useSessions } from '@/lib/queries';
 import type { AgentNode, ChangedFile, SessionStatus } from '@/lib/types';
@@ -27,6 +27,7 @@ const TABS: { id: RightTab; label: string; Icon: typeof Bot }[] = [
   { id: 'project-files', label: 'Files', Icon: FolderTree },
   { id: 'agents', label: 'Agents', Icon: Bot },
   { id: 'files', label: 'Git', Icon: GitBranch },
+  { id: 'history', label: 'History', Icon: History },
   { id: 'log', label: 'Log', Icon: ScrollText },
 ];
 
@@ -58,11 +59,15 @@ export function RightPanel() {
       />
       <Tabs value={tab} onValueChange={(value) => useUiStore.getState().setRightTab(value as RightTab)}
         activationMode="manual" className="flex min-h-0 flex-1 flex-col">
-        <div data-tauri-drag-region className="flex min-h-14 items-center justify-between gap-2 border-b border-border px-3 py-2">
-          <TabsList aria-label="Side panel content">
+        <div data-tauri-drag-region className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
+          <TabsList aria-label="Side panel content" className="h-auto gap-1 rounded-none bg-transparent p-0">
             {TABS.map(({ id, label, Icon }) => (
               <Tooltip key={id} content={label}>
-                <TabsTrigger value={id} aria-label={label} className="w-9 justify-center">
+                <TabsTrigger
+                  value={id}
+                  aria-label={label}
+                  className="size-8 shrink-0 justify-center border-0 p-0 hover:bg-accent aria-selected:bg-muted aria-selected:hover:bg-accent"
+                >
                   <Icon aria-hidden="true" />
                 </TabsTrigger>
               </Tooltip>
@@ -105,6 +110,9 @@ export function RightPanel() {
               )}
             </section>
           )}
+        </TabsContent>
+        <TabsContent value="history" forceMount className="flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+          <HistoryPanel workspaceId={workspaceId} selectedSessionId={sessionId} active={tab === 'history'} />
         </TabsContent>
         <TabsContent value="log" className="flex min-h-0 flex-1 flex-col overflow-y-auto data-[state=inactive]:hidden">{tab === 'log' && <LogPanel workspaceId={workspaceId} sessionId={sessionId} />}</TabsContent>
       </Tabs>

@@ -13,6 +13,7 @@ import type {
   PermissionMode,
   Project,
   SearchHit,
+  StoredHistoryEntry,
   ClaudeHit,
   Session,
   Workspace,
@@ -171,6 +172,10 @@ export const api = {
   sessionKill: (id: string) => invoke<void>('session_kill', { id }),
   sessionSetPinned: (id: string, pinned: boolean) => invoke<void>('session_set_pinned', { id, pinned }),
   search: (query: string, workspaceId?: string, projectId?: string) => invoke<SearchHit[]>('search', { query, workspaceId, projectId }),
+  historyStored: (query: string, workspaceId?: string) =>
+    invoke<StoredHistoryEntry[]>('history_stored', { query, workspaceId }),
+  historyClaude: (query: string, workspaceId?: string) =>
+    invoke<{ hits: ClaudeHit[]; partial: boolean }>('history_claude', { query, workspaceId }),
   claudeSearch: (query: string, scope?: { workspaceId?: string; projectId?: string }) =>
     invoke<ClaudeHit[]>('claude_search', { query, ...scope, palette: !!scope }),
   codexThreads: (workspaceId: string) => invoke<{ id: string; name: string }[]>('codex_threads', { workspaceId }),

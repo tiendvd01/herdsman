@@ -19,21 +19,31 @@ export function SessionView({ session, ws }: { session: Session; ws: Workspace }
   const qc = useQueryClient();
   const view = useSessionStore((s) => s.sessions[session.id]);
   const status = useLiveStatus(session);
+  const [opening, setOpening] = useState(true);
   const [resuming, setResuming] = useState(false);
   const [nonce, setNonce] = useState(0);
   const agentName = ENGINE_LABEL[session.engine] ?? 'Agent';
   const historyOnly = ws.deleted_at != null;
 
   useEffect(() => {
+    let active = true;
+    setOpening(true);
     useSessionStore.getState().reset(session.id);
-    api.sessionOpen(session.id).catch((e) => toast(errMsg(e), 'error'));
+    api.sessionOpen(session.id)
+      .catch((e) => {
+        if (active) toast(errMsg(e), 'error');
+      })
+      .finally(() => {
+        if (active) setOpening(false);
+      });
     return () => {
+      active = false;
       api.sessionCloseView(session.id).catch(() => {});
       useSessionStore.getState().release(session.id); // free memory; reopening replays from the event log
     };
   }, [session.id, historyOnly, nonce]);
 
-  const needsResume = status === 'error' || (status === 'done' && view?.closed);
+  const needsResume = !opening && (status === 'error' || (status === 'done' && view?.closed));
 
   async function resume() {
     setResuming(true);
@@ -77,7 +87,7 @@ export function SessionView({ session, ws }: { session: Session; ws: Workspace }
         session={session}
         status={status}
         mode={view?.mode ?? session.permission_mode}
-        disabled={!!view?.error}
+        disabled={opening || !!view?.error}
         onNeedResume={needsResume ? resume : undefined}
         agentName={agentName}
         firstPrompt={!!isEmpty}

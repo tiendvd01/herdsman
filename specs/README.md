@@ -30,6 +30,7 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 ## Lịch sử, tìm session và Command Palette
 
 - [031 · Lịch sử, tìm session và Command Palette](history-search/031-session-history-search/spec.md)
+- [063 · Panel History cho phiên agent](history-search/063-session-history-panel/spec.md)
 
 ## Duyệt, sửa file và xem Git
 

@@ -58,6 +58,13 @@ export interface SearchHit {
   engine_session_id: string | null;
 }
 
+export interface StoredHistoryEntry {
+  session: Session;
+  workspace: Workspace;
+  project_name: string;
+  snippet: string | null;
+}
+
 /** Hit in a Claude Code transcript (~/.claude/projects), not a Herdsman/hc session. */
 export interface ClaudeHit {
   claude_session_id: string;

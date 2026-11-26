@@ -22,7 +22,6 @@ vi.mock('@/lib/api', () => ({
 }));
 vi.mock('@/components/ui/toast', () => ({ toast: vi.fn() }));
 vi.mock('@/components/conversation/SessionView', () => ({ SessionView: () => null }));
-vi.mock('@/components/history/HistoryPopover', () => ({ HistoryPopover: () => null }));
 
 function renderWorkspace(status: SessionStatus = 'idle', withNeighbor = false, completionSeqs?: [number, number]) {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
