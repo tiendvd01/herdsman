@@ -84,7 +84,8 @@ terminal.run {
 }
 ```
 - `node` đóng gói kèm app (Tauri sidecar binary) để không phụ thuộc Node của máy. Agent SDK dùng engine Claude Code có sẵn trong package; có thể trỏ sang `claude` đã cài bằng `pathToClaudeCodeExecutable`.
-- **Project skills (spec 062)**. Khi tạo session Claude, Herdsman lấy cấu hình đã lưu theo `workspace.project_id` và xét skill Claude tự nạp tại `workspace.work_dir`. Skill hợp lệ đã bật được sao chép cùng tài nguyên đi kèm vào một plugin local riêng trong thư mục dữ liệu session. Sidecar đọc `--project-skills-plugin` và truyền cho Claude Agent SDK lúc bắt đầu query. Session đã có plugin giữ bản đã chốt khi resume. Skill bị bỏ qua hiện cảnh báo trong hội thoại. Claude tiếp tục nạp skill native theo thiết lập hiện hành.
+- **Project skills (spec 062)**. Khi tạo session Claude, Herdsman lấy cấu hình đã lưu theo `workspace.project_id` và xét skill Claude tự nạp tại `workspace.work_dir`. Skill hợp lệ đã bật được sao chép cùng tài nguyên đi kèm vào một plugin local riêng trong thư mục dữ liệu session. Sidecar đọc `--project-skills-plugin` và truyền cho Claude Agent SDK lúc bắt đầu query. Session đã có plugin giữ bản đã chốt khi resume. Skill bị bỏ qua hiện cảnh báo trong hội thoại. Claude tiếp tục nạp skill native theo thiết lập hiện hành. Claude Agent SDK báo skill của plugin với tiền tố `herdsman-project:`; Composer hiện tên ngắn kèm nhãn `Herdsman`, khớp theo cả hai tên và chèn tên đầy đủ khi chọn (spec 071). Resume dựng lại plugin khi thư mục plugin bị mất.
+- **MCP theo project (spec 071)**. Định nghĩa server nằm trong `mcp_servers`, lựa chọn trong `project_mcp_servers`. Giá trị env/header nằm trong Keychain (service `app.herdsman.mcp`, account `<server_id>/<env|header>/<key>`); SQLite chỉ lưu tên khóa. Khi tạo session Claude, Herdsman bỏ server trùng tên với server Claude tự nạp (`.mcp.json`, `~/.claude.json`), ghi id đã chốt vào `sessions/<id>/mcp-selection.json` và ghi `sessions/<id>/mcp-servers.json` quyền 0600. Sidecar đọc file qua `--mcp-servers-file`, xoá ngay rồi truyền `options.mcpServers` cho SDK. Resume dựng lại file từ `mcp-selection.json`. Bí mật không đi qua argv, event log hay log. Server không kết nối được hiện cảnh báo `project_skills_warning`.
 - Label nằm trong `hc`, nên mất DB vẫn dựng lại được danh sách project/workspace/session từ `terminal.list`. Danh sách label đầy đủ: `specs/archive/001-herdsman-use-cases/contracts/hc-integration.md`.
 
 ### 3.2 Bên trong sidecar
@@ -133,6 +134,8 @@ sessions(id /*= Claude session id*/, workspace_id, engine, account_id, hc_termin
          title, status, permission_mode /*ask|accept_edits|bypass*/, model,
          last_seen_seq, pinned_tab, created_at, updated_at, ended_at)
 project_skills(project_id PRIMARY KEY REFERENCES projects ON DELETE CASCADE, config)
+mcp_servers(id PRIMARY KEY, name UNIQUE, transport, command, args, url, env_keys, header_keys, created_at, updated_at)
+project_mcp_servers(project_id REFERENCES projects ON DELETE CASCADE, server_id REFERENCES mcp_servers ON DELETE CASCADE)
 accounts(id, label, engine, config_dir, uses_api_key)   -- CLAUDE_CONFIG_DIR theo tài khoản
 message_fts USING fts5(session_id, workspace_id, project_id, seq, text)  -- tìm kiếm
 ```
@@ -194,7 +197,7 @@ SQLite FTS5 (`message_fts`) lập chỉ mục cho mỗi message hoàn chỉnh. M
 | Mermaid | `mermaid` render trong worker, cache theo hash + theme, zoom/pan; lỗi thì hiện lại source |
 | Biểu đồ | Khối ` ```chart ` (Vega-Lite) → `vega-embed` |
 | Toán | KaTeX |
-| Tool call | Card thu gọn được: `Bash`, `Edit/Write` (diff bằng `@codemirror/merge`), `Read`, `Task` (sub-agent) |
+| Tool call | Card thu gọn được: `Bash` (mở để xem toàn bộ lệnh dưới dạng văn bản), `Edit/Write` (diff bằng `@codemirror/merge`), `Read`, `Task` (sub-agent) |
 | Danh sách dài | Virtual scroll (`@tanstack/react-virtual`); Mermaid/chart chỉ render khi lọt vào viewport |
 
 Có thể truyền thêm `systemPrompt` / output style để agent ưu tiên trả về Mermaid và khối ` ```chart ` khi phù hợp.

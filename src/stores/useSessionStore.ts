@@ -2,7 +2,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { subscribeWithSelector } from 'zustand/middleware';
-import type { AgentEvent, ChatAttachment, LimitWindow, PermissionMode, SessionStatus, ShellUpdate } from '@/lib/types';
+import type { AgentEvent, ChatAttachment, UsageLimits, UsageProvider, PermissionMode, SessionStatus, ShellUpdate } from '@/lib/types';
 import { modelLabel } from '@/lib/model';
 
 export type Item =
@@ -19,7 +19,7 @@ export type Item =
       steps: number;
       ts: number;
     }
-  | { kind: 'turn_end'; key: string; interrupted: boolean; tokens?: number; cost?: number | null; ts: number }
+  | { kind: 'turn_end'; key: string; interrupted: boolean; tokens?: number; usage?: Extract<AgentEvent, { type: 'turn_end' }>['usage']; cost?: number | null; ts: number }
   | { kind: 'notice'; key: string; tone: 'info' | 'error'; text: string; ts: number };
 
 export interface PermissionReq {
@@ -64,7 +64,7 @@ const empty = (): SessionView => ({
 interface State {
   sessions: Record<string, SessionView>;
   /** Hạn mức 5h/tuần thuộc tài khoản: lấy snapshot mới nhất của mọi session. */
-  limits: { five_hour?: LimitWindow | null; seven_day?: LimitWindow | null; ts: number } | null;
+  limits: Partial<Record<UsageProvider, UsageLimits & { ts: number }>>;
   applyEvents: (sid: string, events: AgentEvent[], meta?: { closed?: boolean; error?: string }) => void;
   reset: (sid: string) => void;
   release: (sid: string) => void;
@@ -186,6 +186,7 @@ export function applyEvent(v: SessionView, ev: AgentEvent) {
         key,
         interrupted: ev.interrupted,
         tokens: ev.usage ? ev.usage.input_tokens + ev.usage.output_tokens : undefined,
+        usage: ev.usage,
         cost: ev.cost_usd,
         ts: ev.ts,
       });
@@ -203,13 +204,17 @@ export const useSessionStore = create<State>()(
   subscribeWithSelector(
     immer((set) => ({
       sessions: {},
-      limits: null,
+      limits: {},
       applyEvents: (sid, events, meta) =>
         set((s) => {
           const v = (s.sessions[sid] ??= empty());
           for (const ev of events) {
             applyEvent(v, ev);
-            if (ev.type === 'usage_snapshot' && ev.limits && (!s.limits || ev.ts >= s.limits.ts)) s.limits = { ...ev.limits, ts: ev.ts };
+            if (ev.type === 'usage_snapshot' && ev.limits) {
+              const provider = ev.provider ?? 'claude';
+              const previous = s.limits[provider];
+              if (!previous || ev.ts >= previous.ts) s.limits[provider] = { ...ev.limits, ts: ev.ts };
+            }
           }
           v.loaded = true;
           if (meta?.closed) v.closed = true;

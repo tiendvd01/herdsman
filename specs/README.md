@@ -12,6 +12,11 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [045 · Chọn branch có sẵn cho workspace worktree](projects-workspaces/045-select-worktree-branch/spec.md)
 - [052 · Sắp xếp lại tab, workspace và project](projects-workspaces/052-reorder-navigation-items/spec.md)
 - [062 · Quản lý skills theo project](projects-workspaces/062-manage-project-skills/spec.md)
+- [068 · Đóng workspace khi đóng session cuối](projects-workspaces/068-close-empty-workspace/spec.md)
+- [069 · Hiện pull request dưới worktree](projects-workspaces/069-show-worktree-prs/spec.md)
+- [070 · Tạo session từ workspace trống](projects-workspaces/070-create-session-empty-workspace/spec.md)
+- [071 · Sửa cấp skill và quản lý MCP theo project](projects-workspaces/071-project-skills-mcps/spec.md)
+- [072 · Bật tắt mọi MCP server theo project](projects-workspaces/072-project-mcp-toggles/spec.md)
 
 ## Phiên agent, trạng thái và thông báo
 
@@ -26,6 +31,7 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 
 - [030 · Hội thoại và soạn tin](conversation/030-conversation-composer/spec.md)
 - [044 · Mở tệp từ Rich Conversation](conversation/044-rich-conversation-file-links/spec.md)
+- [078 · Hiện toàn bộ lệnh shell](conversation/078-show-shell-command/spec.md)
 
 ## Lịch sử, tìm session và Command Palette
 
@@ -49,6 +55,9 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [064 · Theo dõi pull request theo project](files-git/064-track-pull-requests/spec.md)
 - [066 · Tinh chỉnh giao diện Pull Requests](files-git/066-refine-pull-requests/spec.md)
 - [067 · Mở rộng trang chi tiết Pull Request](files-git/067-expand-pr-details/spec.md)
+- [073 · Quay lại danh sách từ chi tiết PR](files-git/073-pr-detail-back/spec.md)
+- [074 · Đánh dấu tất cả thông báo PR là chưa đọc](files-git/074-mark-notifications-unread/spec.md)
+- [075 · Phân biệt loại thông báo PR](files-git/075-classify-pr-notifications/spec.md)
 
 ## Giao diện, khả năng tiếp cận và phím tắt
 
@@ -67,6 +76,7 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [050 · Đóng tab terminal bằng một thao tác](terminal-output/050-close-terminal-tab/spec.md)
 - [051 · Xem output shell của Claude khi lệnh đang chạy](terminal-output/051-live-claude-shell-output/spec.md)
 - [053 · Cửa sổ nổi xem output của tiến trình hc](terminal-output/053-floating-hc-output/spec.md)
+- [076 · Status bar và terminal nổi](terminal-output/076-statusbar-floating-terminal/spec.md)
 
 ## Tài liệu chung
 

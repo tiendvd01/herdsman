@@ -1,7 +1,6 @@
 import { SidebarLayout } from './SidebarLayout';
 import { useEffect, useRef, useState } from 'react';
-import { Folders, GitPullRequest, Layers, PanelLeftClose, PanelLeftOpen, Settings } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { Folders, GitPullRequest, Layers, PanelLeftClose, PanelLeftOpen, Plug, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
 import { effectiveShortcut, shortcutLabel, useShortcutBindings } from '@/lib/keyboardShortcuts';
@@ -29,12 +28,13 @@ export function NavigationRail({ unread }: { unread: number }) {
     { id: 'projects', name: 'Projects', Icon: Folders },
     { id: 'pull-requests', name: 'Pull Requests', Icon: GitPullRequest },
     { id: 'skills', name: 'Skills', Icon: Layers },
+    { id: 'mcp', name: 'MCP', Icon: Plug },
     { id: 'settings', name: 'Settings', Icon: Settings },
   ] satisfies { id: Screen; name: string; Icon: typeof Folders }[];
   return (
     <SidebarLayout as="nav" aria-label="Views" className={cn('gap-1', expanded ? 'w-44' : 'w-12')}>
       {items.map(({ id, name, Icon }) => (
-        <Tooltip key={id} content={id === 'pull-requests' ? label : name} side="right">
+        <Tooltip key={id} content={id === 'pull-requests' && unread > 0 ? 'Pull Requests, unread notifications' : name} side="right">
           <Button ref={id === 'projects' ? projectsButton : undefined}
             variant={screen === id ? 'secondary' : 'muted'} size={itemSize} className={itemClass}
             aria-label={id === 'pull-requests' ? label : name} aria-current={screen === id ? 'page' : undefined}
@@ -43,9 +43,8 @@ export function NavigationRail({ unread }: { unread: number }) {
             <span className="relative inline-flex shrink-0">
               <Icon aria-hidden="true" />
               {id === 'pull-requests' && unread > 0 && (
-                <Badge aria-hidden="true" variant="default" className="pointer-events-none absolute -right-2 -top-2 h-4 min-w-4 justify-center rounded-full px-1 text-[10px] tabular-nums">
-                  {unread}
-                </Badge>
+                <span aria-hidden="true" data-slot="unread-dot"
+                  className="pointer-events-none absolute -right-1 -top-0.5 size-1.5 rounded-full bg-primary" />
               )}
             </span>
             {expanded && <span className="truncate">{name}</span>}

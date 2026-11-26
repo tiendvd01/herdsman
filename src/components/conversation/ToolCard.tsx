@@ -1,6 +1,6 @@
 import { TruncatedText } from '@/components/ui/truncated-text';
 // A tool call as a collapsible card; Edit/Write show their diff (FR-013).
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Bot, ChevronDown, FileText, Globe, Pencil, Search, SquareTerminal, Wrench } from 'lucide-react';
 import type { Item } from '@/stores/useSessionStore';
 import { cn } from '@/lib/utils';
@@ -59,7 +59,7 @@ const SHELL_LABELS = {
 };
 
 export function ToolCard({ item, disconnected = false, action }: { item: ToolItem; disconnected?: boolean; action?: ReactNode }) {
-  const diff = toolDiff(item.tool, item.input);
+  const diff = useMemo(() => toolDiff(item.tool, item.input), [item.tool, item.input]);
   const [open, setOpen] = useState(!!diff);
   const Icon = ICON[item.tool] ?? Wrench;
   const shell = item.shell;
@@ -81,6 +81,7 @@ export function ToolCard({ item, disconnected = false, action }: { item: ToolIte
     : ended ? '(no output)'
     : shellStatus === 'unknown' ? 'No output recorded.' : 'Waiting for output…';
   const summary = toolSummary(item.tool, item.input);
+  const command = item.tool === 'Bash' ? summary : '';
   const agentName = (item.tool === 'Task' || item.tool === 'Agent') && typeof item.input.subagent_type === 'string' ? item.input.subagent_type : null;
   return (
     <div className={cn('overflow-hidden rounded-lg border bg-background', error ? 'border-destructive/40' : 'border-border')}>
@@ -108,9 +109,18 @@ export function ToolCard({ item, disconnected = false, action }: { item: ToolIte
       {open ? (
         <div className="border-t border-border">
           {diff ? (
-            <Diff lines={diff.lines} bare />
+            <Diff file={diff.file} lines={diff.lines} bare />
           ) : (
-            <pre className="m-0 max-h-48 overflow-auto bg-code px-3 py-2 font-mono text-content-code text-muted-foreground whitespace-pre-wrap">{JSON.stringify(item.input, null, 2)}</pre>
+            <pre
+              tabIndex={command ? 0 : undefined}
+              aria-label={command ? 'Shell command' : undefined}
+              className={cn(
+                'm-0 max-h-48 overflow-auto whitespace-pre-wrap bg-code px-3 py-2 font-mono text-content-code',
+                command ? 'break-words text-foreground' : 'text-muted-foreground',
+              )}
+            >
+              {command || JSON.stringify(item.input, null, 2)}
+            </pre>
           )}
           {shell ? (
             <div className="border-t border-border">

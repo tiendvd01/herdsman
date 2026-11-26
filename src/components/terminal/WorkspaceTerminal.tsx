@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 let nextFontAlias = 0;
 
 export default function WorkspaceTerminal({ workspaceId, address, live }: {
-  workspaceId: string;
+  workspaceId?: string;
   address: string;
   live: boolean;
 }) {
@@ -81,7 +81,7 @@ export default function WorkspaceTerminal({ workspaceId, address, live }: {
     const themeObserver = new MutationObserver(() => { terminal.options.theme = theme(); });
     themeObserver.observe(document.documentElement, { attributes: true });
 
-    const attachment = api.workspaceTerminalAttach(id, workspaceId, address, terminal.rows, terminal.cols, (buffer) => {
+    const onOutput = (buffer: ArrayBuffer) => {
       if (disposed) return;
       if (buffer.byteLength) terminal.write(new Uint8Array(buffer));
       else {
@@ -89,7 +89,11 @@ export default function WorkspaceTerminal({ workspaceId, address, live }: {
         terminal.options.disableStdin = true;
         setError('Terminal disconnected.');
       }
-    }).then(() => {
+    };
+    const attachment = (workspaceId === undefined
+      ? api.floatingTerminalAttach(id, address, terminal.rows, terminal.cols, onOutput)
+      : api.workspaceTerminalAttach(id, workspaceId, address, terminal.rows, terminal.cols, onOutput)
+    ).then(() => {
       if (disposed) return;
       connected = !terminal.options.disableStdin;
       if (connected) return api.workspaceTerminalResize(id, terminal.rows, terminal.cols);

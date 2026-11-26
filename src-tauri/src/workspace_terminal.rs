@@ -8,9 +8,14 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::State;
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 pub(crate) static LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+const FLOATING_LABELS: [(&str, &str); 2] = [
+    ("herdsman.app", "1"),
+    ("herdsman.kind", "floating-terminal"),
+];
 
 type St<'a> = State<'a, Arc<AppState>>;
 
@@ -30,7 +35,7 @@ impl Drop for Viewer {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct Viewers(Arc<Mutex<HashMap<String, Viewer>>>);
+pub(crate) struct Viewers(Arc<Mutex<HashMap<(String, String), Viewer>>>);
 
 fn workspace(st: &AppState, id: &str) -> AppResult<Workspace> {
     let ws = store::workspace_get(&st.db.lock(), id)?;
@@ -176,36 +181,38 @@ fn attach(
     ))
 }
 
-#[tauri::command]
-pub(crate) async fn workspace_terminal_attach(
-    st: St<'_>,
-    viewers: State<'_, Viewers>,
-    workspace_id: String,
-    address: String,
+fn start_view(
+    hc: &Hc,
+    viewers: &Viewers,
+    window: &WebviewWindow,
+    terminal: Terminal,
     id: String,
-    rows: u16,
-    cols: u16,
+    dimensions: PtySize,
     output: Channel<InvokeResponseBody>,
 ) -> AppResult<()> {
-    let ws = workspace(&st, &workspace_id)?;
-    let hc = st.hc()?;
-    let terminal = owned_terminal(hc, &ws, &address).await?;
     if terminal.state != "live" {
-        return Err(AppError::new("terminal_ended", "The terminal has ended"));
+        return Err(AppError::new("terminal_ended", "The terminal has ended."));
     }
 
+    let key = (window.label().to_owned(), id);
     let mut entries = viewers.0.lock();
-    if entries.contains_key(&id) {
+    if window.get_webview_window(window.label()).is_none() {
+        return Err(AppError::new(
+            "terminal_view",
+            "The terminal window has closed.",
+        ));
+    }
+    if entries.contains_key(&key) {
         return Err(AppError::new(
             "terminal_view",
             "The terminal view already exists",
         ));
     }
-    let (viewer, mut reader) = attach(hc, &terminal.address, size(rows, cols))?;
-    entries.insert(id.clone(), viewer);
+    let (viewer, mut reader) = attach(hc, &terminal.address, dimensions)?;
+    entries.insert(key.clone(), viewer);
     drop(entries);
 
-    let viewers = viewers.inner().clone();
+    let viewers = viewers.clone();
     std::thread::spawn(move || {
         let mut buffer = [0; 8192];
         while let Ok(count) = reader.read(&mut buffer) {
@@ -217,7 +224,7 @@ pub(crate) async fn workspace_terminal_attach(
                 break;
             }
         }
-        let viewer = viewers.0.lock().remove(&id);
+        let viewer = viewers.0.lock().remove(&key);
         drop(viewer);
         let _ = output.send(InvokeResponseBody::Raw(Vec::new()));
     });
@@ -225,15 +232,167 @@ pub(crate) async fn workspace_terminal_attach(
 }
 
 #[tauri::command]
+pub(crate) async fn workspace_terminal_attach(
+    st: St<'_>,
+    viewers: State<'_, Viewers>,
+    window: WebviewWindow,
+    workspace_id: String,
+    address: String,
+    id: String,
+    rows: u16,
+    cols: u16,
+    output: Channel<InvokeResponseBody>,
+) -> AppResult<()> {
+    if window.label() != "main" {
+        return Err(AppError::new("terminal_view", "Expected the main window."));
+    }
+    let ws = workspace(&st, &workspace_id)?;
+    let hc = st.hc()?;
+    let terminal = owned_terminal(hc, &ws, &address).await?;
+    start_view(
+        hc,
+        &viewers,
+        &window,
+        terminal,
+        id,
+        size(rows, cols),
+        output,
+    )
+}
+
+async fn floating_list(hc: &Hc) -> AppResult<Vec<Terminal>> {
+    let mut terminals = hc.list(&FLOATING_LABELS, false).await?;
+    terminals.sort_by(|a, b| {
+        a.created_ms
+            .cmp(&b.created_ms)
+            .then(a.address.cmp(&b.address))
+    });
+    Ok(terminals)
+}
+
+async fn create_floating(hc: &Hc, cwd: &str) -> AppResult<Terminal> {
+    hc.run(
+        &[],
+        cwd,
+        &FLOATING_LABELS.map(|(key, value)| (key, value.into())),
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn floating_terminal_list(st: St<'_>) -> AppResult<Vec<Terminal>> {
+    floating_list(st.hc()?).await
+}
+
+fn floating_directory(
+    st: &AppState,
+    workspace_id: Option<&str>,
+    project_id: Option<&str>,
+    home: impl FnOnce() -> AppResult<String>,
+) -> AppResult<String> {
+    if let Some(id) = workspace_id {
+        return Ok(workspace(st, id)?.work_dir);
+    }
+    if let Some(id) = project_id {
+        return Ok(store::project_get(&st.db.lock(), id)?.path);
+    }
+    home()
+}
+
+#[tauri::command]
+pub(crate) async fn floating_terminal_create(
+    window: WebviewWindow,
+    app: AppHandle,
+    st: St<'_>,
+    workspace_id: Option<String>,
+    project_id: Option<String>,
+) -> AppResult<Terminal> {
+    if window.label() != "main" {
+        return Err(AppError::new("terminal_view", "Expected the main window."));
+    }
+    let hc = st.hc()?;
+    if !hc.server_ok().await {
+        return Err(AppError::new(
+            "hc_disconnected",
+            "hc is not connected. Try again when it reconnects.",
+        ));
+    }
+    let cwd = floating_directory(&st, workspace_id.as_deref(), project_id.as_deref(), || {
+        Ok(app
+            .path()
+            .home_dir()
+            .map_err(pty_error)?
+            .to_string_lossy()
+            .into_owned())
+    })?;
+    create_floating(hc, &cwd).await
+}
+
+async fn owned_floating_terminal(hc: &Hc, address: &str) -> AppResult<Terminal> {
+    let terminal = hc.get(address).await?;
+    if !FLOATING_LABELS
+        .iter()
+        .all(|(key, value)| terminal.label(key) == Some(*value))
+    {
+        return Err(AppError::new(
+            "terminal_not_found",
+            "Floating terminal not found.",
+        ));
+    }
+    Ok(terminal)
+}
+
+#[tauri::command]
+pub(crate) async fn floating_terminal_stop(
+    st: St<'_>,
+    window: WebviewWindow,
+    address: String,
+) -> AppResult<()> {
+    if window.label() != "main" {
+        return Err(AppError::new("terminal_view", "Expected the main window."));
+    }
+    let hc = st.hc()?;
+    stop(hc, owned_floating_terminal(hc, &address).await?).await
+}
+
+#[tauri::command]
+pub(crate) async fn floating_terminal_attach(
+    st: St<'_>,
+    viewers: State<'_, Viewers>,
+    window: WebviewWindow,
+    address: String,
+    id: String,
+    rows: u16,
+    cols: u16,
+    output: Channel<InvokeResponseBody>,
+) -> AppResult<()> {
+    if window.label() != "main" {
+        return Err(AppError::new("terminal_view", "Expected the main window."));
+    }
+    let hc = st.hc()?;
+    let terminal = owned_floating_terminal(hc, &address).await?;
+    start_view(
+        hc,
+        &viewers,
+        &window,
+        terminal,
+        id,
+        size(rows, cols),
+        output,
+    )
+}
+
+#[tauri::command]
 pub(crate) async fn workspace_terminal_input(
     viewers: State<'_, Viewers>,
+    window: WebviewWindow,
     id: String,
     data: Vec<u8>,
 ) -> AppResult<()> {
     let writer = viewers
         .0
         .lock()
-        .get(&id)
+        .get(&(window.label().to_owned(), id))
         .map(|viewer| viewer.writer.clone());
     if let Some(writer) = writer {
         tokio::task::spawn_blocking(move || writer.lock().write_all(&data))
@@ -246,11 +405,12 @@ pub(crate) async fn workspace_terminal_input(
 #[tauri::command]
 pub(crate) fn workspace_terminal_resize(
     viewers: State<'_, Viewers>,
+    window: WebviewWindow,
     id: String,
     rows: u16,
     cols: u16,
 ) -> AppResult<()> {
-    if let Some(viewer) = viewers.0.lock().get(&id) {
+    if let Some(viewer) = viewers.0.lock().get(&(window.label().to_owned(), id)) {
         viewer.master.resize(size(rows, cols)).map_err(pty_error)?;
     }
     Ok(())
@@ -259,9 +419,10 @@ pub(crate) fn workspace_terminal_resize(
 #[tauri::command]
 pub(crate) async fn workspace_terminal_detach(
     viewers: State<'_, Viewers>,
+    window: WebviewWindow,
     id: String,
 ) -> AppResult<()> {
-    let viewer = viewers.0.lock().remove(&id);
+    let viewer = viewers.0.lock().remove(&(window.label().to_owned(), id));
     drop(viewer);
     Ok(())
 }
@@ -424,6 +585,64 @@ mod tests {
         let output = wait_for_output(reader);
         expect_output(&output, "resized_32 96");
         drop(viewer);
+
+        let start_app = || {
+            AppState::new(
+                Box::new(|_, _| {}),
+                store::open(&scratch.path().join("test.db")).unwrap(),
+                scratch.path().to_owned(),
+                Some(hc.clone()),
+                None,
+                Default::default(),
+            )
+        };
+        let app = start_app();
+        let home = || Ok("/tmp".to_owned());
+        assert_eq!(floating_directory(&app, None, None, home).unwrap(), "/tmp");
+        assert_eq!(
+            floating_directory(&app, None, Some(&project.id), home).unwrap(),
+            project.path
+        );
+        let cwd = floating_directory(&app, Some(&ws.id), Some(&project.id), home).unwrap();
+        let floating = create_floating(hc, &cwd).await.unwrap();
+        let next = create_floating(hc, &project.path).await.unwrap();
+        assert_eq!(floating_list(hc).await.unwrap().len(), 2);
+        assert_eq!(floating.cwd, ws.work_dir);
+        assert_eq!(list(hc, &ws).await.unwrap().len(), 2);
+        assert!(owned_terminal(hc, &ws, &floating.address).await.is_err());
+        let (viewer, reader) = attach(hc, &floating.address, size(24, 80)).unwrap();
+        let output = wait_for_output(reader);
+        expect_output(&output, "\x1b[");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        viewer
+            .writer
+            .lock()
+            .write_all(b"printf 'float_%s\\n' ready; sleep 2; printf 'float_%s\\n' continued\r")
+            .unwrap();
+        expect_output(&output, "float_ready");
+        drop(viewer);
+        drop(output);
+        drop(app);
+
+        let reopened_app = start_app();
+        let found = floating_list(reopened_app.hc().unwrap())
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(found.address, floating.address);
+        let (viewer, reader) = attach(hc, &found.address, size(24, 80)).unwrap();
+        let output = wait_for_output(reader);
+        expect_output(&output, "float_continued");
+        drop(viewer);
+        assert!(owned_floating_terminal(hc, &first.address).await.is_err());
+        stop(
+            hc,
+            owned_floating_terminal(hc, &found.address).await.unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(floating_list(hc).await.unwrap()[0].address, next.address);
+        stop(hc, next).await.unwrap();
 
         stop(hc, first).await.unwrap();
         assert_eq!(list(hc, &ws).await.unwrap()[0].address, second.address);

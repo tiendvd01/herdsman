@@ -28,6 +28,8 @@ const { values: args } = parseArgs({
     'data-dir': { type: 'string' },
     'project-skills-plugin': { type: 'string' },
     'project-skills-warning': { type: 'string' },
+    'mcp-servers-file': { type: 'string' },
+    'mcp-denied-file': { type: 'string' },
     resume: { type: 'boolean', default: false },
   },
 });
@@ -104,6 +106,36 @@ function requestPermission(tool, input, extra = {}, signal) {
   });
 }
 
+// spec 071: MCP servers (with secret env/header values) arrive in a 0600 file, never in argv.
+// Read it once and delete it at once, even when it cannot be parsed.
+let mcpServers;
+let mcpWarning;
+if (args['mcp-servers-file']) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(args['mcp-servers-file'], 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('bad shape');
+    mcpServers = parsed;
+  } catch {
+    mcpWarning = 'Could not load MCP servers for this session';
+  } finally {
+    try { fs.unlinkSync(args['mcp-servers-file']); } catch {}
+  }
+}
+
+// spec 072: names of servers Claude loads by itself that the project turned off. Not secret, and
+// Herdsman keeps the file for resume, so it is read but never deleted.
+let mcpDenied;
+let mcpDeniedWarning;
+if (args['mcp-denied-file']) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(args['mcp-denied-file'], 'utf8'));
+    if (!Array.isArray(parsed) || !parsed.every((name) => typeof name === 'string')) throw new Error('bad shape');
+    mcpDenied = parsed;
+  } catch {
+    mcpDeniedWarning = 'Could not load disabled MCP servers for this session';
+  }
+}
+
 const resumeId = meta.engine_session_id;
 // A stored null means the session has already fallen back to Claude's default.
 let currentModel = Object.hasOwn(meta, 'model') ? meta.model : (args.model ?? null);
@@ -111,6 +143,8 @@ const inheritedModel = !!currentModel && (meta.inherited_model ?? (!meta.engine 
 const ctx = {
   cwd: args.cwd,
   projectSkillsPlugin: args['project-skills-plugin'],
+  mcpServers,
+  mcpDenied,
   mode,
   model: currentModel ?? undefined,
   inheritedModel,
@@ -263,6 +297,8 @@ await server.listen();
 if (args.engine === 'claude' && args['project-skills-warning']) {
   emit('project_skills_warning', { message: args['project-skills-warning'] });
 }
+if (mcpWarning) emit('project_skills_warning', { message: mcpWarning });
+if (mcpDeniedWarning) emit('project_skills_warning', { message: mcpDeniedWarning });
 emit('session_started', { hc_terminal: process.env.HC_TERMINAL_ID, engine: args.engine, model: ctx.model ?? null, cwd: args.cwd, permission_mode: mode, resumed: !!resumeId });
 reportStatus('idle');
 

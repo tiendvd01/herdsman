@@ -5,6 +5,7 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 pub struct AppState {
     /// Phát event lên UI (Tauri) — tách ra để test được không cần cửa sổ.
@@ -20,6 +21,8 @@ pub struct AppState {
     pub terminals: Mutex<HashMap<String, Terminal>>,
     pub hc_connected: AtomicBool,
     pub hc_version: Mutex<Option<String>>,
+    /// Keychain in the app; in-memory for tests (spec 071).
+    pub secrets: Arc<dyn crate::secrets::SecretStore>,
 }
 
 impl AppState {
@@ -42,6 +45,7 @@ impl AppState {
             terminals: Mutex::new(HashMap::new()),
             hc_connected: AtomicBool::new(false),
             hc_version: Mutex::new(None),
+            secrets: Arc::new(crate::secrets::MemorySecrets::default()),
         }
     }
 

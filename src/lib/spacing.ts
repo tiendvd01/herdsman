@@ -24,11 +24,6 @@ export const SPACING_STEPS = [
 /** Values outside the scale that are allowed on purpose. Each must still be used in its file. */
 export const SPACING_EXCEPTIONS: readonly { file: string; token: string; reason: string }[] = [
   { file: 'src/lib/platform.ts', token: 'pl-[84px]', reason: 'room for the macOS traffic lights; size set by the OS' },
-  {
-    file: 'src/components/layout/Sidebar.tsx',
-    token: 'ml-[15px]',
-    reason: 'workspace tree line sits under the centre of the project chevron (8px padding + half of a 14px icon)',
-  },
 ];
 
 const ALLOWED = new Set<string>(['0', ...SPACING_STEPS.map((s) => s.step)]);

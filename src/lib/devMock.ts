@@ -5,6 +5,8 @@ import { emit } from '@tauri-apps/api/event';
 import type { Workspace } from './types';
 
 const now = Date.now();
+// spec 072: names of servers Claude loads by itself that the mock project turned off.
+const mockMcpDisabled = new Set(['docs-index']);
 const P = { id: 'p1', name: 'herdsman', path: '/Users/dev/herdsman', sort: 1, created_at: now, missing: false };
 const P2 = { id: 'p2', name: 'api-server', path: '/Users/dev/api-server', sort: 2, created_at: now, missing: false };
 const SAMPLE_FILES = [
@@ -77,6 +79,29 @@ export function installDevMock() {
           return { sources: [{ id: 'shared', path: '~/herdsman/skills', available: true }], skills: [], enabled: [] };
         case 'project_skill_change':
           throw new Error('Managing skill sources requires the desktop app.');
+        case 'mcp_catalog':
+          return {
+            servers: [
+              { id: 'mcp1', name: 'github-tools', transport: 'stdio', command: 'npx', args: ['-y', '@acme/github-mcp'], url: null, env: [{ key: 'GITHUB_TOKEN', set: true }], headers: [], enabled: true, conflict: null },
+              { id: 'mcp2', name: 'docs-search', transport: 'http', command: null, args: [], url: 'https://docs.example.com/mcp', env: [], headers: [{ key: 'Authorization', set: true }], enabled: false, conflict: null },
+              { id: 'mcp3', name: 'sora-pms', transport: 'stdio', command: 'node', args: ['server.js'], url: null, env: [], headers: [], enabled: false, conflict: 'Claude already loads a server with this name' },
+            ],
+            native: [
+              { name: 'sora-pms', transport: 'stdio', scope: 'user', source: '~/.claude.json' },
+              { name: 'codegraph', transport: 'stdio', scope: 'project', source: '/Users/dev/herdsman/.mcp.json' },
+              { name: 'codegraph', transport: 'stdio', scope: 'user', source: '~/.claude.json' },
+              { name: 'docs-index', transport: 'http', scope: 'local', source: '~/.claude.json' },
+            ].map((server) => ({ ...server, enabled: !mockMcpDisabled.has(server.name) })),
+          };
+        case 'mcp_native_toggle':
+          if (a.enabled) mockMcpDisabled.delete(String(a.name));
+          else mockMcpDisabled.add(String(a.name));
+          return null;
+        case 'mcp_server_remove':
+          return { affected_projects: ['herdsman'] };
+        case 'mcp_server_save':
+        case 'mcp_project_toggle':
+          throw new Error('Managing MCP servers requires the desktop app.');
         case 'project_rename': {
           const pr = [P, P2].find((x) => x.id === a.id);
           if (pr) pr.name = a.name;
@@ -129,6 +154,7 @@ export function installDevMock() {
             { name: 'review', description: 'Review current changes', argument_hint: '', builtin: true },
             { name: 'speckit-plan', description: 'Execute the implementation planning workflow', argument_hint: '', builtin: false },
             { name: 'speckit-specify', description: 'Create or update the feature specification', argument_hint: '<description>', builtin: false },
+            { name: 'herdsman-project:delivery', description: 'Open a delivery session for the pending work', argument_hint: '[link]', builtin: false, plugin: 'herdsman-project' },
           ] };
         case 'session_set_model': {
           const previous = sessionModel[a.id] ?? 'claude-opus-5-5';

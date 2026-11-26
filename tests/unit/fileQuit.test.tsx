@@ -15,6 +15,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: native.listen }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseRequested: native.onCloseRequested }) }));
 vi.mock('@/components/layout/PullRequests', () => ({ usePullRequests: () => ({ unread: 0, projectQuery: { data: [] } }) }));
 vi.mock('@/components/layout/NavigationRail', () => ({ NavigationRail: () => null }));
+vi.mock('@/components/layout/StatusBar', () => ({ StatusBar: () => null }));
 vi.mock('@/components/layout/Sidebar', () => ({ Sidebar: () => null }));
 vi.mock('@/components/layout/WorkspaceView', () => ({ WorkspaceView: () => null }));
 vi.mock('@/components/layout/ZoomIndicator', () => ({ ZoomIndicator: () => null }));

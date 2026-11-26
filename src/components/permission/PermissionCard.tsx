@@ -1,6 +1,6 @@
 import { TruncatedText } from '@/components/ui/truncated-text';
 // Allow/Deny card (FR-021): diff for Edit/Write, the full command for Bash. Never expires on its own (FR-023).
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { api, errMsg } from '@/lib/api';
 import type { PermissionReq } from '@/stores/useSessionStore';
@@ -20,7 +20,7 @@ function askTitle(agent: string, tool: string) {
 
 export function PermissionCard({ sessionId, req, agentName = 'Agent' }: { sessionId: string; req: PermissionReq; agentName?: string }) {
   const [busy, setBusy] = useState<'allow' | 'deny' | null>(null);
-  const diff = toolDiff(req.tool, req.input);
+  const diff = useMemo(() => toolDiff(req.tool, req.input), [req.tool, req.input]);
   const command = typeof req.input.command === 'string' ? req.input.command : null;
   const where = diff?.file || req.cwd;
 
@@ -44,7 +44,7 @@ export function PermissionCard({ sessionId, req, agentName = 'Agent' }: { sessio
         </div>
         {diff ? (
           <div className="overflow-hidden rounded-md border border-border bg-background">
-            <Diff lines={diff.lines} maxHeight={280} bare />
+            <Diff file={diff.file} lines={diff.lines} maxHeight={280} bare />
           </div>
         ) : command ? (
           <div className="flex flex-col gap-1">

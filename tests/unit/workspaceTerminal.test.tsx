@@ -32,18 +32,23 @@ vi.mock('@/components/terminal/WorkspaceTerminal', () => ({
   default: ({ address }: { address: string }) => <div>Connected to {address}</div>,
 }));
 
-function renderWorkspace() {
+function mountWorkspace(empty = false) {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(qk.projects, [{ id: 'p1', name: 'Project' }]);
   client.setQueryData(qk.workspaces('p1', true), [{ id: 'w1', project_id: 'p1', name: 'Workspace' }]);
   const existing = { id: 's1', title: 'Existing agent', status: 'idle', pinned_tab: true, engine: 'claude' } as Awaited<ReturnType<typeof api.sessionCreate>>;
-  client.setQueryData(qk.sessions('w1'), [existing]);
-  vi.mocked(api.sessionHistory).mockImplementation(async () => [existing, ...await Promise.all(vi.mocked(api.sessionCreate).mock.results.map((result) => result.value))]);
+  const sessions = empty ? [] : [existing];
+  client.setQueryData(qk.sessions('w1'), sessions);
+  vi.mocked(api.sessionHistory).mockImplementation(async () => [...sessions, ...await Promise.all(vi.mocked(api.sessionCreate).mock.results.map((result) => result.value))]);
   render(
     <QueryClientProvider client={client}>
       <TooltipProvider><WorkspaceView /><CommandDialog /><Toaster /></TooltipProvider>
     </QueryClientProvider>,
   );
+}
+
+function renderWorkspace() {
+  mountWorkspace();
   return screen.getByRole('button', { name: 'New session in workspace' });
 }
 
@@ -53,6 +58,25 @@ describe('workspace launcher', () => {
     useUiStore.setState({
       projectId: 'p1', workspaceId: 'w1', sessionLauncherOpen: false, sessionByWorkspace: { w1: 's1' }, tempTabs: {}, statuses: {},
     });
+  });
+
+  it('launches a session from the empty workspace and moves the launcher back to the tab bar', async () => {
+    mountWorkspace(true);
+    const trigger = await screen.findByRole('button', { name: 'Create new session' });
+    expect(trigger.closest('header')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create new workspace' })).toBeNull();
+
+    const shortcut = IS_MAC ? { metaKey: true } : { ctrlKey: true };
+    fireEvent.keyDown(trigger, { ...shortcut, code: 'KeyT', key: 't' });
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+    fireEvent.click(trigger, { detail: 0 });
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Codex(?: Codex)?$/ }));
+    expect((await screen.findByRole('tab', { name: /New session/ })).getAttribute('aria-selected')).toBe('true');
+    expect(api.sessionCreate).toHaveBeenCalledWith('w1', 'codex', undefined, undefined);
+    expect(screen.queryByRole('button', { name: 'Create new session' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'New session in workspace' }).closest('header')).toBeTruthy();
   });
 
   it.each([

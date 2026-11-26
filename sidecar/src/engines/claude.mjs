@@ -43,6 +43,8 @@ function toolResultText(content) {
 /**
  * @param {{cwd: string, mode: string, model?: string, inheritedModel?: boolean, resumeId?: string,
  *   projectSkillsPlugin?: string,
+ *   mcpServers?: Record<string, object>,
+ *   mcpDenied?: string[],
  *   emit: (type: string, fields?: object, opts?: {live?: boolean}) => void,
  *   requestPermission: (tool: string, input: object, extra: object) => Promise<{decision: string, updated_input?: object}>,
  *   onEngineSession: (id: string, model?: string) => void,
@@ -112,6 +114,9 @@ export function createClaudeEngine(ctx, runQuery = query) {
     if (ctx.projectSkillsPlugin) {
       options.plugins = [{ type: 'local', path: ctx.projectSkillsPlugin, skipMcpDiscovery: true }];
     }
+    if (ctx.mcpServers && Object.keys(ctx.mcpServers).length) options.mcpServers = ctx.mcpServers;
+    // spec 072: flag settings, so Claude skips these servers without any config file being edited.
+    if (ctx.mcpDenied?.length) options.settings = { deniedMcpServers: ctx.mcpDenied.map((serverName) => ({ serverName })) };
     if (resumeId) options.resume = resumeId;
     if (model) options.model = model;
     if (process.env.HERDSMAN_CLAUDE_PATH) options.pathToClaudeCodeExecutable = process.env.HERDSMAN_CLAUDE_PATH;
@@ -171,6 +176,12 @@ export function createClaudeEngine(ctx, runQuery = query) {
             resumeId = msg.session_id;
             model = msg.model || model;
             ctx.onEngineSession(msg.session_id, msg.model);
+            // spec 071: say which Herdsman MCP servers could not start; the session keeps going.
+            for (const server of Array.isArray(msg.mcp_servers) ? msg.mcp_servers : []) {
+              if (server?.status === 'failed' && ctx.mcpServers && Object.hasOwn(ctx.mcpServers, server.name)) {
+                ctx.emit('project_skills_warning', { message: `${server.name}: MCP server failed to connect` });
+              }
+            }
           } else if (msg.subtype === 'commands_changed' && Array.isArray(msg.commands)) {
             commands = mapCommands(msg.commands);
           } else if (msg.subtype === 'task_started') {
@@ -252,6 +263,8 @@ export function createClaudeEngine(ctx, runQuery = query) {
             is_error: isError,
             usage: {
               input_tokens: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0),
+              cache_read_input_tokens: u.cache_read_input_tokens || 0,
+              cache_creation_input_tokens: u.cache_creation_input_tokens || 0,
               output_tokens: u.output_tokens || 0,
             },
             cost_usd: msg.total_cost_usd ?? null,
@@ -346,7 +359,12 @@ function mapCommands(list) {
     if (!c?.name) continue;
     const prev = byName.get(c.name);
     if (prev && !c.builtin) continue;
-    byName.set(c.name, { name: c.name, description: c.description ?? '', argument_hint: c.argumentHint ?? '', builtin: !!c.builtin });
+    const cut = c.name.lastIndexOf(':');
+    byName.set(c.name, {
+      name: c.name, description: c.description ?? '', argument_hint: c.argumentHint ?? '', builtin: !!c.builtin,
+      // Plugin skills come back namespaced ("herdsman-project:delivery"); the UI matches on the part after it.
+      ...(cut > 0 ? { plugin: c.name.slice(0, cut) } : {}),
+    });
   }
   return [...byName.values()];
 }

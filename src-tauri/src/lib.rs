@@ -2,6 +2,8 @@ pub mod agent;
 pub mod commands;
 mod project_files;
 mod project_skills;
+mod mcp;
+pub mod secrets;
 mod editor_lsp;
 mod workspace_terminal;
 mod hc_output;
@@ -223,7 +225,11 @@ pub fn run() {
                 terminals: Mutex::new(HashMap::new()),
                 hc_connected: AtomicBool::new(false),
                 hc_version: Mutex::new(None),
+                secrets: Arc::new(secrets::Keychain),
             });
+            if let Err(error) = tauri::async_runtime::block_on(commands::workspaces::import_startup_worktrees(&st)) {
+                eprintln!("Could not import worktrees: {error}");
+            }
             install_shortcut_menu(app)?;
             #[cfg(target_os = "macos")]
             request_notification_permission();
@@ -242,8 +248,13 @@ pub fn run() {
             pull_requests::github_accounts,
             pull_requests::pull_requests_refresh,
             pull_requests::pull_requests_read,
+            pull_requests::pull_requests_set_read,
             pull_requests::pull_request_open,
             pull_requests::detail::pull_request_detail,
+            workspace_terminal::floating_terminal_create,
+            workspace_terminal::floating_terminal_list,
+            workspace_terminal::floating_terminal_attach,
+            workspace_terminal::floating_terminal_stop,
             workspace_terminal::workspace_terminal_create,
             workspace_terminal::workspace_terminal_list,
             workspace_terminal::workspace_terminal_stop,
@@ -260,6 +271,11 @@ pub fn run() {
             commands::workspaces::project_list,
             project_skills::project_skill_catalog,
             project_skills::project_skill_change,
+            mcp::mcp_catalog,
+            mcp::mcp_server_save,
+            mcp::mcp_server_remove,
+            mcp::mcp_project_toggle,
+            mcp::mcp_native_toggle,
             commands::workspaces::project_add,
             commands::workspaces::project_rename,
             commands::workspaces::project_delete,

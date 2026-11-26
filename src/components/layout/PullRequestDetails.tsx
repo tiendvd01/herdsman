@@ -1,5 +1,5 @@
 import { forwardRef, type ComponentProps } from 'react';
-import { Activity, ArrowDownToLine, ArrowLeft, ChevronRight, GitBranch, Check, CircleAlert, CircleHelp, Clock, ExternalLink, GitPullRequest, GitPullRequestDraft, X } from 'lucide-react';
+import { Activity, ArrowDownToLine, ChevronRight, GitBranch, Check, CircleAlert, CircleHelp, Clock, ExternalLink, GitPullRequest, GitPullRequestDraft, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PullRequestActivityFeedback, PullRequestCi, PullRequestDescription, PullRequestReview, PullRequestStatusChip, usePullRequestActivity } from './PullRequestActivity';
 
@@ -66,9 +66,8 @@ export const PullRequestDetails = forwardRef<HTMLHeadingElement, {
   repository: string;
   account: string;
   summaryUpdatedAt: number;
-  onBack: () => void;
   onOpen: () => void;
-}>(function PullRequestDetails({ pull, repository, account, summaryUpdatedAt, onBack, onOpen }, ref) {
+}>(function PullRequestDetails({ pull, repository, account, summaryUpdatedAt, onOpen }, ref) {
   const activity = usePullRequestActivity(repository, pull.number, account);
   const current = activity.data?.data;
   const previousCommit = Boolean(current && pull.headRefOid && current.headSha !== pull.headRefOid && summaryUpdatedAt > activity.dataUpdatedAt);
@@ -84,8 +83,7 @@ export const PullRequestDetails = forwardRef<HTMLHeadingElement, {
           <span className="py-1"><PullRequestUpdated updatedAt={pull.updatedAt} /></span>
         </p>
       </header>
-      <div className="flex flex-wrap justify-between gap-2">
-        <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft data-icon="inline-start" />Back to list</Button>
+      <div className="flex justify-end">
         <Button variant="outline" size="sm" onClick={onOpen}>Open on GitHub<ExternalLink data-icon="inline-end" /></Button>
       </div>
       <section aria-label="Progress" className="min-w-0 rounded-lg border border-border bg-surface">

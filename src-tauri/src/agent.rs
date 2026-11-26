@@ -62,15 +62,20 @@ pub async fn codex_probe(st: &AppState, cwd: &str, action: &str, thread_id: Opti
 }
 
 pub async fn spawn_sidecar(st: &AppState, s: &Session, ws: &Workspace) -> AppResult<Terminal> {
-    spawn_with_skills(st, s, ws, Vec::new()).await
+    let mut warnings = Vec::new();
+    if s.engine == "claude" {
+        warnings = crate::project_skills::prepare_missing(st, ws, &s.id).await;
+        warnings.extend(crate::mcp::prepare_launch(st, ws, &s.id, false));
+    }
+    spawn_with_skills(st, s, ws, warnings).await
 }
 
 pub async fn spawn_new_sidecar(st: &AppState, s: &Session, ws: &Workspace) -> AppResult<Terminal> {
-    let warnings = if s.engine == "claude" {
-        crate::project_skills::prepare(st, ws, &s.id).await
-    } else {
-        Vec::new()
-    };
+    let mut warnings = Vec::new();
+    if s.engine == "claude" {
+        warnings = crate::project_skills::prepare(st, ws, &s.id).await;
+        warnings.extend(crate::mcp::prepare_launch(st, ws, &s.id, true));
+    }
     spawn_with_skills(st, s, ws, warnings).await
 }
 
@@ -112,6 +117,14 @@ async fn spawn_with_skills(st: &AppState, s: &Session, ws: &Workspace, warnings:
         if plugin.is_dir() {
             argv.extend(["--project-skills-plugin".into(), plugin.to_string_lossy().into()]);
         }
+        let mcp = crate::mcp::launch_path(&st.session_dir(&s.id));
+        if mcp.is_file() {
+            argv.extend(["--mcp-servers-file".into(), mcp.to_string_lossy().into()]);
+        }
+        let denied = crate::mcp::denied_path(&st.session_dir(&s.id));
+        if denied.is_file() {
+            argv.extend(["--mcp-denied-file".into(), denied.to_string_lossy().into()]);
+        }
         if !warnings.is_empty() {
             argv.extend(["--project-skills-warning".into(), warnings.join("\n")]);
         }
@@ -124,7 +137,14 @@ async fn spawn_with_skills(st: &AppState, s: &Session, ws: &Workspace, warnings:
         ("herdsman.session", s.id.clone()),
         ("herdsman.engine", s.engine.clone()),
     ];
-    let term = hc.run(&argv, &ws.work_dir, &labels).await?;
+    let term = match hc.run(&argv, &ws.work_dir, &labels).await {
+        Ok(term) => term,
+        Err(error) => {
+            // The sidecar never started, so nobody will delete the secrets file it was meant to read.
+            let _ = std::fs::remove_file(crate::mcp::launch_path(&st.session_dir(&s.id)));
+            return Err(error);
+        }
+    };
     store::session_set_terminal(&st.db.lock(), &s.id, Some(&term.address))?;
     st.terminals.lock().insert(term.address.clone(), term.clone());
     Ok(term)

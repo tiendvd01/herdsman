@@ -1,12 +1,15 @@
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandDialog } from '@/components/command/CommandDialog';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { openOriginal } from '@/components/layout/PullRequests';
 import { api } from '@/lib/api';
 import type { SearchHit, Session, Workspace } from '@/lib/types';
 import { useUiStore } from '@/stores/useUiStore';
+
+vi.mock('@/components/layout/PullRequests', () => ({ openOriginal: vi.fn() }));
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -178,4 +181,38 @@ describe('CommandDialog', () => {
     expect(await screen.findByText('Session w2')).toBeTruthy();
     expect(api.search).toHaveBeenLastCalledWith('shared', undefined, 'p1');
   });
+});
+
+it('shows project-scoped PR statuses under the matching worktree and opens GitHub without selecting it', async () => {
+  const branch = 'feature/sidebar';
+  const worktree = { ...workspaces[0], id: 'wt', name: 'Feature worktree', dir_kind: 'worktree' as const, branch };
+  const projectFolder = { ...workspaces[0], branch };
+  const other = { ...worktree, id: 'other', project_id: 'p2', name: 'Other worktree' };
+  vi.mocked(api.workspaceList).mockImplementation(async (id) => id === 'p1' ? [projectFolder, worktree] : [other]);
+  useUiStore.setState({ collapsed: {} });
+  const worktreePulls = [
+    { number: 11, headRefName: branch, state: 'OPEN', isDraft: false },
+    { number: 12, headRefName: branch, state: 'OPEN', isDraft: true },
+    { number: 13, headRefName: branch, state: 'MERGED', isDraft: false },
+    { number: 14, headRefName: branch, state: 'CLOSED', isDraft: false },
+    { number: 15, headRefName: branch.toUpperCase(), state: 'OPEN', isDraft: false },
+  ] as const;
+  const projectPulls = { repository: 'org/repo', worktreePulls: [...worktreePulls] };
+  const client = new QueryClient();
+  const { rerender } = render(<QueryClientProvider client={client}><TooltipProvider>
+    <Sidebar pullRequestsByProject={{ p1: projectPulls }} />
+  </TooltipProvider></QueryClientProvider>);
+
+  const row = (await screen.findByText('Feature worktree')).closest('li')!;
+  const links = within(row).getAllByRole('button', { name: /Open pull request/ });
+  expect(links.map((link) => link.getAttribute('aria-label')?.split(' · ')[1])).toEqual(['Draft', 'Open', 'Closed', 'Merged']);
+  expect(screen.getAllByRole('button', { name: /Open pull request/ })).toHaveLength(4);
+  fireEvent.click(links[0]);
+  expect(openOriginal).toHaveBeenCalledWith('org/repo', 12);
+  expect(useUiStore.getState().workspaceId).toBe('w1');
+
+  rerender(<QueryClientProvider client={client}><TooltipProvider>
+    <Sidebar pullRequestsByProject={{ p1: { ...projectPulls, error: 'Access revoked' } }} />
+  </TooltipProvider></QueryClientProvider>);
+  expect(screen.queryByRole('button', { name: /Open pull request/ })).toBeNull();
 });

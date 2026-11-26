@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, ChevronRight, GitPullRequest, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, Bell, ChevronRight, CircleCheck, CircleX, GitPullRequest, Info, RefreshCw, TriangleAlert } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,13 +17,51 @@ import { PullRequestDetails, PullRequestUpdated, pullRequestProgress, type PullR
 interface Notification {
   repository: string;
   projects: { id: string; name: string }[];
-  event: { key: string; title: string; number: number; kind: string; read: boolean };
+  event: { key: string; title: string; number: number; kind: string; read: boolean; at?: string };
 }
+
+const notificationTypes = {
+  warning: { label: 'Warning', variant: 'warn', Icon: TriangleAlert },
+  approved: { label: 'Approved', variant: 'success', Icon: CircleCheck },
+  info: { label: 'Info', variant: 'info', Icon: Info },
+  error: { label: 'Error', variant: 'danger', Icon: CircleX },
+} as const;
+
+const notificationTypeByEvent = new Map<string, keyof typeof notificationTypes>([
+  ['Review requested', 'warning'],
+  ['Changes requested', 'warning'],
+  ['Base branch update required', 'warning'],
+  ['Approved', 'approved'],
+  ['CI failed', 'error'],
+]);
+
+function NotificationTypeBadge({ kind }: { kind: string }) {
+  const { label, variant, Icon } = notificationTypes[notificationTypeByEvent.get(kind) ?? 'info'];
+  return <Badge variant={variant}><Icon aria-hidden="true" />{label}</Badge>;
+}
+
+const notificationTimeFormatter = new Intl.DateTimeFormat('en', {
+  month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+});
+
+function NotificationTime({ at }: { at?: string }) {
+  if (!at) return null;
+  const date = new Date(at);
+  if (!Number.isFinite(date.getTime())) return null;
+  return <time dateTime={at} title={date.toLocaleString('en')}>{notificationTimeFormatter.format(date)}</time>;
+}
+
+export type WorktreePull = {
+  number: number;
+  headRefName: string;
+  state: 'OPEN' | 'MERGED' | 'CLOSED';
+  isDraft: boolean;
+};
 
 interface Snapshot {
   account?: string;
   error?: string;
-  projects: Record<string, { repository?: string; error?: string; stale?: boolean; pulls: PullRequest[] }>;
+  projects: Record<string, { repository?: string; error?: string; stale?: boolean; pulls: PullRequest[]; worktreePulls?: WorktreePull[] }>;
   notifications: Notification[];
 }
 
@@ -42,7 +80,7 @@ function rowId(projectId: string, repository: string, number: number) {
   return `pull-request-${projectId}-${repository}-${number}`;
 }
 
-function openOriginal(repository: string, number: number) {
+export function openOriginal(repository: string, number: number) {
   return invoke('pull_request_open', { repository, number }).catch((error) => toast(errMsg(error), 'error'));
 }
 
@@ -58,6 +96,7 @@ export function usePullRequests() {
   const [view, setView] = useState<ContentView>('overview');
   const [target, setTarget] = useState<Target>();
   const [choice, setChoice] = useState<Notification>();
+  const [updatingReadStatus, setUpdatingReadStatus] = useState(false);
   const client = useQueryClient();
   const previous = useRef<{ account?: string; keys: Set<string> }>();
   const openNotification = useRef<(item: Notification, account?: string) => void>();
@@ -124,6 +163,49 @@ export function usePullRequests() {
     return eligible.length ? [{ ...item, projects: eligible }] : [];
   });
   const unread = notifications.filter(({ event }) => !event.read).length;
+  const visibleNotifications = notifications.filter((item) =>
+    projectId === allProjects || item.projects.some((project) => project.id === projectId));
+  const canMarkUnread = Boolean(data?.account && visibleNotifications.some(({ event }) => event.read));
+
+  const canMarkRead = Boolean(data?.account && visibleNotifications.some(({ event }) => !event.read));
+
+  async function markAllNotifications(read: boolean) {
+    const account = data?.account;
+    if (!account || updatingReadStatus || !(read ? canMarkRead : canMarkUnread)) return;
+    const eventsByRepository = new Map<string, Set<string>>();
+    for (const { repository, event } of visibleNotifications) {
+      const events = eventsByRepository.get(repository) ?? new Set<string>();
+      events.add(event.key);
+      eventsByRepository.set(repository, events);
+    }
+
+    setUpdatingReadStatus(true);
+    try {
+      await invoke('pull_requests_set_read', {
+        account,
+        read,
+        eventsByRepository: Object.fromEntries(
+          Array.from(eventsByRepository, ([repository, events]) => [repository, [...events]]),
+        ),
+      });
+      if (useUiStore.getState().githubAccount !== githubAccount) return;
+      await client.cancelQueries({ queryKey: accountQueryKey, exact: true });
+      client.setQueryData<Snapshot>(accountQueryKey, (snapshot) => {
+        if (!snapshot || snapshot.account !== account) return snapshot;
+        return {
+          ...snapshot,
+          notifications: snapshot.notifications.map((notification) =>
+            notification.event.read !== read && eventsByRepository.get(notification.repository)?.has(notification.event.key)
+              ? { ...notification, event: { ...notification.event, read } }
+              : notification),
+        };
+      });
+    } catch (error) {
+      toast(`Could not mark notifications as ${read ? 'read' : 'unread'}. Try again. ${errMsg(error)}`, 'error');
+    } finally {
+      setUpdatingReadStatus(false);
+    }
+  }
 
   async function showNotification(item: Notification, destination?: string, fromToast = false) {
     if (!data?.account) return;
@@ -185,7 +267,7 @@ export function usePullRequests() {
         toast(`${name} · #${item.event.number} ${item.event.title} · ${item.event.kind}`, 'info', {
           label: 'View',
           run: () => openNotification.current?.(item, data.account),
-        });
+        }, <NotificationTypeBadge kind={item.event.kind} />);
       }
       keys.add(key(item));
     }
@@ -193,6 +275,8 @@ export function usePullRequests() {
   }, [data]);
 
   return { projectQuery, projectId, projectLists, view, unread, detail, choice, showNotification,
+    canMarkRead, canMarkUnread, updatingReadStatus, markAllNotifications,
+    worktreePullsByProject: data?.account && !data.error ? data.projects : undefined,
     selectView: (next: ContentView) => {
       setView(next);
       setTarget(undefined);
@@ -204,7 +288,7 @@ export function usePullRequests() {
       setChoice(undefined);
     },
     closeDetail: () => setTarget(undefined),
-    notifications: notifications.filter((item) => projectId === allProjects || item.projects.some((project) => project.id === projectId)),
+    notifications: visibleNotifications,
     selectProject: (id: string) => {
       setProjectFilter(id);
       setTarget(undefined);
@@ -286,7 +370,6 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
             <RefreshCw aria-hidden="true" className={tracker.loading ? 'motion-safe:animate-spin' : undefined} />
             {tracker.loading ? 'Refreshing…' : 'Refresh'}
           </Button>
-          <Button variant="muted" size="icon-sm" aria-label="Back to workspace" onClick={() => useUiStore.getState().setScreen('projects')}><X /></Button>
         </div>
       </header>
 
@@ -303,6 +386,18 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
             ))}
           </TabsList>
         </div>
+
+        {detail && (
+          <div className="shrink-0 border-b border-border bg-surface px-4 py-2">
+            <Button variant="ghost" size="sm" onClick={() => {
+              resume.current ??= { top: 0, row: '', view, project: tracker.projectId };
+              tracker.closeDetail();
+            }}>
+              <ArrowLeft aria-hidden="true" data-icon="inline-start" />
+              Back to list
+            </Button>
+          </div>
+        )}
 
         <TabsContent ref={scroll} value={view} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
           {tracker.error && (
@@ -322,12 +417,6 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
                 summaryUpdatedAt={tracker.summaryUpdatedAt}
                 pull={detail.pull}
                 repository={detail.repository}
-                onBack={() => {
-                  if (!resume.current) {
-                    resume.current = { top: 0, row: '', view, project: tracker.projectId };
-                  }
-                  tracker.closeDetail();
-                }}
                 onOpen={() => void openOriginal(detail.repository, detail.number)}
               />
             </>
@@ -405,38 +494,62 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
               ))}
               {canShowSnapshot && (waiting || loaded || notifications.length > 0) && projectLists.length > 0 && (view === 'overview' || view === 'notifications') && (
                 <section aria-label="PR Notifications" className="flex min-w-0 flex-col gap-2">
-                  <h3 className="text-sm font-semibold">Notifications</h3>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold">Notifications</h3>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" size="sm" disabled={!tracker.canMarkRead || tracker.updatingReadStatus}
+                        onClick={() => void tracker.markAllNotifications(true)}>
+                        Mark all as read
+                      </Button>
+                      <Button variant="outline" size="sm" disabled={!tracker.canMarkUnread || tracker.updatingReadStatus}
+                        onClick={() => void tracker.markAllNotifications(false)}>
+                        Mark all as unread
+                      </Button>
+                    </div>
+                  </div>
                   {notifications.length === 0 && (
                     <Empty>
                       <EmptyMedia><Bell /></EmptyMedia>
                       <EmptyDescription>{waiting ? 'Loading notifications…' : 'No PR notifications.'}</EmptyDescription>
                     </Empty>
                   )}
-                  {notifications.map((item) => (
-                    <div key={`${item.repository}:${item.event.key}`} className="flex min-w-0 flex-col gap-2">
-                      <Button variant={item.event.read ? 'ghost' : 'secondary'} size="sm"
-                        className="h-auto min-w-0 flex-wrap justify-start whitespace-normal py-2 text-left"
-                        onClick={() => {
-                          resume.current = undefined;
-                          void tracker.showNotification(item);
-                        }}>
-                        <span className="min-w-0 wrap-anywhere">
-                          <span className="block">{item.event.kind} · #{item.event.number} {item.event.title}</span>
-                          <span className="block text-xs text-muted-foreground">{item.projects.map((project) => project.name).join(', ')}</span>
-                        </span>
-                        {!item.event.read && <Badge variant="warn" className="rounded-full"><Bell aria-hidden="true" />Unread</Badge>}
-                      </Button>
-                      {choice?.event.key === item.event.key && choice.repository === item.repository && (
-                        <div role="group" aria-label="Choose a project" className="flex flex-wrap gap-2 pl-2">
-                          {item.projects.map((project, i) => (
-                            <Button key={project.id} ref={i === 0 ? destination : undefined} variant="outline" size="xs" onClick={() => void tracker.showNotification(item, project.id)}>
-                              {project.name}
-                            </Button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                  {notifications.length > 0 && (
+                    <ul className="min-w-0 divide-y divide-border rounded-lg border border-border bg-surface">
+                      {notifications.map((item) => (
+                        <li key={`${item.repository}:${item.event.key}`} className="min-w-0 p-1">
+                          <Button variant={item.event.read ? 'ghost' : 'secondary'} size="sm"
+                            className="grid h-auto w-full min-w-0 grid-cols-[0.375rem_minmax(0,1fr)_auto] items-start gap-2 whitespace-normal py-2 text-left"
+                            onClick={() => {
+                              resume.current = undefined;
+                              void tracker.showNotification(item);
+                            }}>
+                            <span aria-hidden="true" className="mt-1 size-1.5">
+                              {!item.event.read && <span className="block size-full rounded-full bg-st-working" />}
+                            </span>
+                            <span className="flex min-w-0 flex-col gap-0.5 wrap-anywhere">
+                              <span className="font-semibold">{item.event.kind} · #{item.event.number}</span>
+                              <span>{item.event.title}</span>
+                              <span className="text-xs font-normal text-muted-foreground">{item.projects.map((project) => project.name).join(', ')}</span>
+                            </span>
+                            <span className="flex flex-col items-end gap-1 whitespace-nowrap text-[11px] font-normal text-muted-foreground">
+                              <NotificationTypeBadge kind={item.event.kind} />
+                              <NotificationTime at={item.event.at} />
+                              {!item.event.read && <span className="sr-only">Unread</span>}
+                            </span>
+                          </Button>
+                          {choice?.event.key === item.event.key && choice.repository === item.repository && (
+                            <div role="group" aria-label="Choose a project" className="flex flex-wrap gap-2 px-6 py-2">
+                              {item.projects.map((project, i) => (
+                                <Button key={project.id} ref={i === 0 ? destination : undefined} variant="outline" size="xs" onClick={() => void tracker.showNotification(item, project.id)}>
+                                  {project.name}
+                                </Button>
+                              ))}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </section>
               )}
             </div>

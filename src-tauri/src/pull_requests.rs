@@ -38,6 +38,15 @@ struct PullRequest {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreePull {
+    number: u64,
+    head_ref_name: String,
+    state: String,
+    is_draft: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 struct Notification {
     key: String,
     number: u64,
@@ -51,6 +60,8 @@ struct Notification {
 struct Snapshot {
     since: String,
     pulls: BTreeMap<u64, PullRequest>,
+    #[serde(default)]
+    worktree_pulls: Vec<WorktreePull>,
     behind: BTreeSet<u64>,
     notifications: BTreeMap<String, Notification>,
 }
@@ -257,10 +268,13 @@ query($owner:String!, $name:String!, $endCursor:String) {
     pullRequests(states:OPEN,first:50,after:$endCursor) {
       pageInfo { endCursor hasNextPage }
       nodes {
-        number title state isDraft reviewDecision mergeStateStatus baseRefName
+        number headRefName state isDraft headRepository { nameWithOwner }
         author { login }
         reviewRequests(first:100) { nodes { requestedReviewer { ... on User { login } } } }
       }
+    }
+    recent: pullRequests(states:[MERGED,CLOSED],first:50,orderBy:{field:UPDATED_AT,direction:DESC}) {
+      nodes { number headRefName state isDraft headRepository { nameWithOwner } }
     }
   }
 }"#;
@@ -364,6 +378,13 @@ fn add_activity(snapshot: &mut Snapshot, pr: &PullRequest, node: &Value, account
         Some("reviewed")
             if node["state"]
                 .as_str()
+                .is_some_and(|state| state.eq_ignore_ascii_case("changes_requested")) =>
+        {
+            "Changes requested"
+        }
+        Some("reviewed")
+            if node["state"]
+                .as_str()
                 .is_some_and(|state| !state.eq_ignore_ascii_case("pending")) =>
         {
             "New review"
@@ -433,10 +454,34 @@ async fn remote_snapshot(
 ) -> AppResult<Snapshot> {
     let initial = snapshot.since.is_empty();
     let mut roles = BTreeMap::new();
-    for page in graphql(gh, repo, PULLS_QUERY, &[]).await? {
+    let mut worktree_pulls = BTreeMap::new();
+    for (index, page) in graphql(gh, repo, PULLS_QUERY, &[])
+        .await?
+        .into_iter()
+        .enumerate()
+    {
         verify_viewer(&page, account)?;
-        let list = &page["data"]["repository"]["pullRequests"]["nodes"];
-        for node in serde_json::from_value::<Vec<Value>>(list.clone())? {
+        let repository = &page["data"]["repository"];
+        let open = repository["pullRequests"]["nodes"]
+            .as_array()
+            .ok_or_else(|| {
+                error(
+                    "access",
+                    "Could not list pull requests for this repository.",
+                )
+            })?;
+        let recent = repository["recent"]["nodes"]
+            .as_array()
+            .filter(|_| index == 0);
+        for node in open.iter().chain(recent.into_iter().flatten()) {
+            if same_account(&node["headRepository"]["nameWithOwner"], repo) {
+                let pull: WorktreePull = serde_json::from_value(node.clone())?;
+                if pull.number > 0 && !pull.head_ref_name.is_empty() {
+                    worktree_pulls.insert(pull.number, pull);
+                }
+            }
+        }
+        for node in open {
             let Some(number) = node["number"].as_u64() else {
                 continue;
             };
@@ -523,6 +568,7 @@ async fn remote_snapshot(
         }
     }
     snapshot.pulls = pulls;
+    snapshot.worktree_pulls = worktree_pulls.into_values().collect();
     snapshot.since = now.into();
     Ok(snapshot)
 }
@@ -532,7 +578,11 @@ fn snapshot_key(account: &str, repo: &str) -> String {
 }
 
 fn cached(st: &AppState, key: &str) -> AppResult<Option<Snapshot>> {
-    store::setting_get(&st.db.lock(), key)?
+    read_snapshot(&st.db.lock(), key)
+}
+
+fn read_snapshot(db: &rusqlite::Connection, key: &str) -> AppResult<Option<Snapshot>> {
+    store::setting_get(db, key)?
         .map(|raw| serde_json::from_str(&raw).map_err(Into::into))
         .transpose()
 }
@@ -625,10 +675,14 @@ pub async fn pull_requests_refresh(
             .iter()
             .flat_map(|state| state.pulls.values())
             .collect();
+        let worktree_pulls = snapshot
+            .as_ref()
+            .map(|state| state.worktree_pulls.as_slice())
+            .unwrap_or_default();
         for project in &projects {
             results.insert(
                 project.id.clone(),
-                serde_json::json!({"repository": repo, "error": issue, "stale": issue.is_some() && snapshot.is_some(), "pulls": pulls}),
+                serde_json::json!({"repository": repo, "error": issue, "stale": issue.is_some() && snapshot.is_some(), "pulls": pulls, "worktreePulls": worktree_pulls}),
             );
         }
         let destinations: Vec<_> = projects
@@ -682,6 +736,47 @@ pub async fn pull_requests_read(
 }
 
 #[tauri::command]
+pub async fn pull_requests_set_read(
+    st: State<'_, Arc<AppState>>,
+    tracker: State<'_, PullRequests>,
+    account: String,
+    read: bool,
+    events_by_repository: BTreeMap<String, BTreeSet<String>>,
+) -> AppResult<()> {
+    let _guard = tracker.0.lock().await;
+    set_notifications_read(&mut st.db.lock(), &account, read, events_by_repository)
+}
+
+fn set_notifications_read(
+    db: &mut rusqlite::Connection,
+    account: &str,
+    read: bool,
+    events_by_repository: BTreeMap<String, BTreeSet<String>>,
+) -> AppResult<()> {
+    let tx = db.transaction()?;
+    for (repository, events) in events_by_repository {
+        let repository = repository_name(&repository)
+            .ok_or_else(|| error("repository", "Invalid pull request repository."))?;
+        let key = snapshot_key(account, &repository);
+        let Some(mut snapshot) = read_snapshot(&tx, &key)? else {
+            continue;
+        };
+        let mut changed = false;
+        for event in events {
+            if let Some(notification) = snapshot.notifications.get_mut(&event) {
+                changed |= notification.read != read;
+                notification.read = read;
+            }
+        }
+        if changed {
+            store::setting_set(&tx, &key, &serde_json::to_string(&snapshot)?)?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn pull_request_open(repository: String, number: u64) -> AppResult<()> {
     let repo = repository_name(&repository)
         .filter(|_| number > 0)
@@ -708,6 +803,96 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::Path;
+
+    fn store_read_notifications(db: &rusqlite::Connection, account: &str, repository: &str) {
+        let mut snapshot = Snapshot::default();
+        for key in ["selected", "other"] {
+            snapshot.notifications.insert(
+                key.into(),
+                Notification {
+                    key: key.into(),
+                    number: 1,
+                    title: "Pull request".into(),
+                    kind: "New comment".into(),
+                    read: true,
+                    at: String::new(),
+                },
+            );
+        }
+        store::setting_set(
+            db,
+            &snapshot_key(account, repository),
+            &serde_json::to_string(&snapshot).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn set_notifications_read_persists_only_selected_events_for_the_account() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("test.db");
+        {
+            let mut db = store::open(&path).unwrap();
+            store_read_notifications(&db, "alice", "org/a");
+            store_read_notifications(&db, "alice", "org/b");
+            store_read_notifications(&db, "alice", "org/c");
+            store_read_notifications(&db, "bob", "org/a");
+            let events = BTreeMap::from([
+                ("org/a".into(), BTreeSet::from(["selected".into()])),
+                (
+                    "org/b".into(),
+                    BTreeSet::from(["selected".into(), "gone".into()]),
+                ),
+            ]);
+            set_notifications_read(&mut db, "alice", false, events.clone()).unwrap();
+            set_notifications_read(&mut db, "alice", false, events).unwrap();
+            set_notifications_read(
+                &mut db,
+                "alice",
+                true,
+                BTreeMap::from([("org/b".into(), BTreeSet::from(["selected".into()]))]),
+            )
+            .unwrap();
+        }
+        let db = store::open(&path).unwrap();
+        for (account, repository, expected_read) in [
+            ("alice", "org/a", false),
+            ("alice", "org/b", true),
+            ("alice", "org/c", true),
+            ("bob", "org/a", true),
+        ] {
+            let snapshot = read_snapshot(&db, &snapshot_key(account, repository))
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.notifications["selected"].read, expected_read);
+            assert!(snapshot.notifications["other"].read);
+            assert_eq!(snapshot.notifications.len(), 2);
+        }
+    }
+
+    #[test]
+    fn set_notifications_read_rolls_back_on_a_later_write_failure() {
+        let mut db = store::open_memory().unwrap();
+        store_read_notifications(&db, "alice", "org/a");
+        store_read_notifications(&db, "alice", "org/b");
+        db.execute_batch(
+            "CREATE TRIGGER fail_second_write BEFORE UPDATE ON settings
+             WHEN OLD.key = 'pull_requests:alice:org/b'
+             BEGIN SELECT RAISE(ABORT, 'write failed'); END;",
+        )
+        .unwrap();
+        let events = BTreeMap::from([
+            ("org/a".into(), BTreeSet::from(["selected".into()])),
+            ("org/b".into(), BTreeSet::from(["selected".into()])),
+        ]);
+        assert!(set_notifications_read(&mut db, "alice", false, events).is_err());
+        for repository in ["org/a", "org/b"] {
+            let snapshot = read_snapshot(&db, &snapshot_key("alice", repository))
+                .unwrap()
+                .unwrap();
+            assert!(snapshot.notifications["selected"].read);
+        }
+    }
 
     #[test]
     fn validates_origins_and_browser_paths() {
@@ -780,6 +965,18 @@ mod tests {
     }
 
     #[test]
+    fn older_snapshots_load_without_worktree_pulls() {
+        let snapshot: Snapshot = serde_json::from_value(json!({
+            "since": "2026-11-26T00:00:00Z",
+            "pulls": {},
+            "behind": [],
+            "notifications": {}
+        }))
+        .unwrap();
+        assert!(snapshot.worktree_pulls.is_empty());
+    }
+
+    #[test]
     fn activity_deduplicates_after_reopening_and_preserves_read_status() {
         let mut snapshot = Snapshot {
             since: "2026-11-26T00:00:00Z".into(),
@@ -808,6 +1005,10 @@ mod tests {
         let key = "1:reviewed:2";
         assert_eq!(snapshot.notifications.len(), 5);
         assert_eq!(snapshot.notifications[key].kind, "Approved");
+        assert_eq!(
+            snapshot.notifications["1:reviewed:3"].kind,
+            "Changes requested"
+        );
         snapshot.notifications.get_mut(key).unwrap().read = true;
         let file = tempfile::tempdir().unwrap();
         let path = file.path().join("herdsman.sqlite");
@@ -870,7 +1071,15 @@ esac
                 vec![]
             };
             json!([{"data":{"viewer":{"login":"me"},"repository":{"pullRequests":{"nodes":[
-                {"number":1,"author":{"login":"other"},"reviewRequests":{"nodes":reviewers}}
+                {"number":1,"headRefName":"feature/work","state":"OPEN","isDraft":false,
+                 "headRepository":{"nameWithOwner":"Org/Repo"},"author":{"login":"other"},"reviewRequests":{"nodes":reviewers}},
+                {"number":2,"headRefName":"feature/work","state":"OPEN","isDraft":false,
+                 "headRepository":{"nameWithOwner":"other/repo"}}
+            ]},"recent":{"nodes":[
+                {"number":3,"headRefName":"feature/work","state":"MERGED","isDraft":false,
+                 "headRepository":{"nameWithOwner":"org/repo"}},
+                {"number":4,"headRefName":"feature/closed","state":"CLOSED","isDraft":false,
+                 "headRepository":{"nameWithOwner":"org/repo"}}
             ]}}}}])
         };
         let detail = |behind, failed| {
@@ -895,6 +1104,14 @@ esac
         .await
         .unwrap();
         assert_eq!(baseline.pulls[&1].role, "requested");
+        assert_eq!(
+            baseline
+                .worktree_pulls
+                .iter()
+                .map(|pull| (pull.number, pull.state.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, "OPEN"), (3, "MERGED"), (4, "CLOSED")]
+        );
         assert_eq!(
             baseline.pulls[&1].head_ref_name.as_deref(),
             Some("feature/work")
@@ -933,11 +1150,24 @@ esac
             BTreeSet::from(["Approved", "Base branch update required", "CI failed"])
         );
 
-        write("pulls", list(false));
+        let mut merged = list(false);
+        let repository = &mut merged[0]["data"]["repository"];
+        let mut merged_pull = repository["pullRequests"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+        merged_pull["state"] = json!("MERGED");
+        repository["recent"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(merged_pull);
+        write("pulls", merged);
         let complete = remote_snapshot(&gh, "org/repo", "me", resumed, "2026-11-26T00:02:00Z")
             .await
             .unwrap();
         assert!(complete.pulls.is_empty());
+        assert_eq!(complete.worktree_pulls[0].number, 1);
+        assert_eq!(complete.worktree_pulls[0].state, "MERGED");
         assert_eq!(complete.notifications.len(), 3);
     }
 }

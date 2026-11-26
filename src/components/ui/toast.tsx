@@ -1,5 +1,5 @@
 // Small toasts in the bottom-right corner (action errors, confirmations).
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { create } from 'zustand';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -9,6 +9,7 @@ interface Toast {
   text: string;
   tone: 'info' | 'error';
   action?: { label: string; run: () => void };
+  badge?: ReactNode;
 }
 const useToasts = create<{ items: Toast[]; push: (t: Omit<Toast, 'id'>) => void; drop: (id: number) => void }>((set) => ({
   items: [],
@@ -16,8 +17,8 @@ const useToasts = create<{ items: Toast[]; push: (t: Omit<Toast, 'id'>) => void;
   drop: (id) => set((s) => ({ items: s.items.filter((x) => x.id !== id) })),
 }));
 
-export function toast(text: string, tone: 'info' | 'error' = 'info', action?: Toast['action']) {
-  useToasts.getState().push({ text, tone, action });
+export function toast(text: string, tone: 'info' | 'error' = 'info', action?: Toast['action'], badge?: ReactNode) {
+  useToasts.getState().push({ text, tone, action, badge });
 }
 
 function ToastItem({ t }: { t: Toast }) {
@@ -34,7 +35,10 @@ function ToastItem({ t }: { t: Toast }) {
         t.tone === 'error' ? 'border-destructive/40 text-destructive' : 'border-border',
       )}
     >
-      <span className="flex-1">{t.text}</span>
+      <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
+        {t.badge}
+        <span className="wrap-anywhere">{t.text}</span>
+      </span>
       {t.action && <button type="button" className="shrink-0 font-medium underline" onClick={() => {
         t.action?.run();
         drop(t.id);

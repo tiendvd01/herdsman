@@ -1,10 +1,8 @@
 import type { ThemedTokenWithVariants } from 'shiki';
-import type { DiffLine } from '@/components/conversation/lineDiff';
+import type { DiffLine } from './lineDiff';
 import { loadCodeLanguage } from '@/lib/highlightCode';
 
-export type PatchLine = DiffLine & { hunk?: number };
-
-export async function highlightPatch(lines: PatchLine[], path: string, original = path) {
+export async function highlightPatch(lines: DiffLine[], path: string, original = path) {
   const hunks = new Map<number, number[]>();
   for (const [index, line] of lines.entries()) {
     if (line.hunk === undefined) continue;
@@ -16,11 +14,12 @@ export async function highlightPatch(lines: PatchLine[], path: string, original 
   if (!hunks.size) return result;
 
   async function highlightSide(file: string, excluded: DiffLine['kind']) {
-    const name = file.slice(file.lastIndexOf('/') + 1).toLowerCase();
-    const lang = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : name;
-    const { h, id } = await loadCodeLanguage(lang);
-    if (id === 'text') return;
     for (const rows of hunks.values()) {
+      const path = lines[rows[0]].path ?? file;
+      const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
+      const lang = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : name;
+      const { h, id } = await loadCodeLanguage(lang);
+      if (id === 'text') continue;
       const indices = rows.filter((index) => lines[index].kind !== excluded);
       if (!indices.length) continue;
       const code = indices.map((index) => lines[index].text).join('\n');

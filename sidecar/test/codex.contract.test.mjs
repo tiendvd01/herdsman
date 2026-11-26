@@ -27,6 +27,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   switch (msg.method) {
     case 'initialize': result(); break;
     case 'account/read': result({ requiresOpenaiAuth: true, account: { type: 'chatgpt' } }); break;
+    case 'account/rateLimits/read': result({ rateLimits: {
+      primary: { usedPercent: 41, windowDurationMins: 300, resetsAt: 1900000000 },
+      secondary: { usedPercent: 6, windowDurationMins: 10080 },
+    } }); break;
     case 'thread/list': result({ data: [thread, { id: 'other', cwd: '/' }], nextCursor: null }); break;
     case 'thread/read': result({ thread }); break;
     case 'thread/start': result({ thread, model: 'test-model' }); break;
@@ -34,13 +38,36 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       if (msg.params.threadId === 'unused-thread') send({ id: msg.id, error: { code: -32602, message: 'no rollout found' } });
       else result({ thread, model: 'test-model' });
       break;
+    case 'thread/compact/start':
+      result();
+      turn++;
+      notify('turn/started', { turn: { id: String(turn) } });
+      notify('item/completed', { item: { type: 'contextCompaction', id: 'compacted' } });
+      complete('completed');
+      break;
     case 'turn/start': {
       turn++;
       const itemId = textId(msg.params.input[0].text, turn);
       result({ turn: { id: String(turn) } });
+      send({ method: 'account/rateLimits/updated', params: { rateLimits: {
+        primary: { usedPercent: 43, windowDurationMins: 300, resetsAt: 1900000000 },
+      } } });
       notify('turn/started', { turn: { id: String(turn) } });
       notify('item/agentMessage/delta', { itemId, delta: 'Streaming reply' });
       const text = msg.params.input[0].text;
+      if (text === 'measure usage') {
+        const first = { inputTokens: 450, cachedInputTokens: 300, outputTokens: 30, totalTokens: 480 };
+        const last = { inputTokens: 700, cachedInputTokens: 500, outputTokens: 100, totalTokens: 800 };
+        const prior = { inputTokens: 1200, cachedInputTokens: 900, outputTokens: 200, totalTokens: 1400 };
+        const sum = (...calls) => Object.fromEntries(Object.keys(first).map((key) => [
+          key, calls.reduce((total, call) => total + call[key], 0),
+        ]));
+        for (const [latest, total] of [[first, sum(prior, first)], [last, sum(prior, first, last)]]) {
+          notify('thread/tokenUsage/updated', {
+            turnId: String(turn), tokenUsage: { last: latest, total, modelContextWindow: 1000 },
+          });
+        }
+      }
       if (text === 'approve command') {
         send({ id: 'command', method: 'item/commandExecution/requestApproval', params: {
           threadId: thread.id, itemId, command: 'printf test', cwd,
@@ -92,7 +119,14 @@ test('Codex history, live turns, approval reconnect and interrupt use the existi
     await client.waitFor((e) => e.type === 'engine_session' && e.engine_session_id === 'thread-from-cli');
     assert.equal(client.events.filter((e) => e.type === 'user_message' && e.text === 'Old prompt').length, 1);
 
+    const usage = await client.waitFor((e) => e.type === 'usage_snapshot' && e.provider === 'codex');
+    assert.deepEqual(usage.limits, {
+      five_hour: { pct: 41, resets_at: new Date(1900000000 * 1000).toISOString() },
+      seven_day: { pct: 6, resets_at: null },
+    });
     client.send({ cmd: 'prompt', text: 'approve command' });
+    const updated = await client.waitFor((e) => e.type === 'usage_snapshot' && e.limits?.five_hour?.pct === 43);
+    assert.equal(updated.limits.seven_day.pct, 6);
     await client.waitFor((e) => e.type === 'delta' && e.text === 'Streaming reply');
     const request = await client.waitFor((e) => e.type === 'permission_request');
     assert.equal(request.input.command, 'printf test');
@@ -132,6 +166,18 @@ test('Codex history, live turns, approval reconnect and interrupt use the existi
       if (mode === 'custom') assert.notEqual(params.serverPid, previousServerPid);
       previousServerPid = params.serverPid;
     }
+
+    client.send({ cmd: 'prompt', text: 'measure usage' });
+    const snapshot = await client.waitFor((e) => e.type === 'usage_snapshot' && e.context_pct === 80);
+    const measured = await client.waitFor((e) => e.type === 'turn_end' && e.seq > snapshot.seq);
+    assert.deepEqual(measured.usage, {
+      input_tokens: 1150, cache_read_input_tokens: 800, output_tokens: 130,
+    });
+
+    client.send({ cmd: 'prompt', text: '/compact' });
+    const compacted = await client.waitFor((e) => e.type === 'usage_snapshot' && e.seq > measured.seq
+      && e.context_pct === null && e.limits === null);
+    await client.waitFor((e) => e.type === 'turn_end' && e.seq > compacted.seq && !e.is_error);
   } finally {
     client?.close();
     await first.stop();

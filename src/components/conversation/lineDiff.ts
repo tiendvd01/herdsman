@@ -1,5 +1,5 @@
 // Diff theo dòng (LCS) cho Edit/Write — đủ cho đoạn sửa của agent, không cần thư viện nặng.
-export type DiffLine = { kind: 'ctx' | 'add' | 'del'; text: string };
+export type DiffLine = { kind: 'ctx' | 'add' | 'del'; text: string; hunk?: number; path?: string };
 
 export function lineDiff(before: string, after: string): DiffLine[] {
   const a = before.split('\n');
@@ -29,21 +29,39 @@ export function lineDiff(before: string, after: string): DiffLine[] {
 export function toolDiff(tool: string, input: Record<string, unknown>): { file: string; lines: DiffLine[] } | null {
   const file = String(input.file_path ?? input.path ?? '');
   if (tool === 'Edit' && typeof input.unified_diff === 'string') {
-    const lines: DiffLine[] = input.unified_diff.split('\n').map((line) => {
-      if (/^(---|\+\+\+) /.test(line)) return { kind: 'ctx', text: line };
-      if (line.startsWith('+')) return { kind: 'add', text: line.slice(1) };
-      if (line.startsWith('-')) return { kind: 'del', text: line.slice(1) };
+    const rows = input.unified_diff.split('\n');
+    let path: string | undefined;
+    let hunk = 0;
+    const lines = rows.map((line, index): DiffLine => {
+      const next = rows[index + 1];
+      if (line.startsWith('--- ') && (next?.startsWith('@@') || next?.startsWith('+++ ') || index === 0)) {
+        path = line.slice(4);
+        hunk = index + 1;
+        return { kind: 'ctx', text: line };
+      }
+      if (line.startsWith('@@')) {
+        hunk = index + 1;
+        return { kind: 'ctx', text: line };
+      }
+      if (line.startsWith('+++ ') && rows[index - 1]?.startsWith('--- ')) {
+        if (line !== '+++ /dev/null') path = line.slice(4);
+        return { kind: 'ctx', text: line };
+      }
+      if (line.startsWith('+')) return { kind: 'add', text: line.slice(1), hunk, path };
+      if (line.startsWith('-')) return { kind: 'del', text: line.slice(1), hunk, path };
+      if (line.startsWith(' ')) return { kind: 'ctx', text: line.slice(1), hunk, path };
       return { kind: 'ctx', text: line };
     });
     return { file, lines };
   }
-  if (tool === 'Edit' && typeof input.old_string === 'string') return { file, lines: lineDiff(input.old_string, String(input.new_string ?? '')) };
-  if (tool === 'Write' && typeof input.content === 'string') return { file, lines: input.content.split('\n').map((t) => ({ kind: 'add', text: t })) };
+  if (tool === 'Edit' && typeof input.old_string === 'string') return { file, lines: lineDiff(input.old_string, String(input.new_string ?? '')).map((line) => ({ ...line, hunk: 0 })) };
+  if (tool === 'Write' && typeof input.content === 'string') return { file, lines: input.content.split('\n').map((t) => ({ kind: 'add', text: t, hunk: 0 })) };
   if (tool === 'MultiEdit' && Array.isArray(input.edits)) {
     const lines: DiffLine[] = [];
     for (const e of input.edits as { old_string: string; new_string: string }[]) {
       if (lines.length) lines.push({ kind: 'ctx', text: '⋯' });
-      lines.push(...lineDiff(e.old_string ?? '', e.new_string ?? ''));
+      const hunk = lines.length;
+      lines.push(...lineDiff(e.old_string ?? '', e.new_string ?? '').map((line) => ({ ...line, hunk })));
     }
     return { file, lines };
   }

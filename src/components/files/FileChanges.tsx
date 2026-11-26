@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { FileDiff } from 'lucide-react';
 import { Diff, DiffStat, diffStats } from '@/components/conversation/Diff';
@@ -7,16 +7,16 @@ import { Empty, EmptyDescription, EmptyHeader } from '@/components/ui/empty';
 import { Spinner } from '@/components/ui/spinner';
 import { TruncatedText } from '@/components/ui/truncated-text';
 import { filePanelHeader } from './fileRows';
-import { highlightPatch, type PatchLine } from './highlightPatch';
+import type { DiffLine } from '@/components/conversation/lineDiff';
 import { api, errMsg } from '@/lib/api';
 import type { DiffTab } from '@/stores/useFileStore';
 
-function parsePatch(patch: string): PatchLine[] {
+function parsePatch(patch: string): DiffLine[] {
   if (!patch) return [];
   const rows = patch.split('\n');
   if (rows[rows.length - 1] === '') rows.pop();
   let hunk: number | undefined = patch.startsWith('diff --git ') ? undefined : 0;
-  return rows.flatMap((row, index): PatchLine[] => {
+  return rows.flatMap((row, index): DiffLine[] => {
     if (row.startsWith('diff --git ')) {
       hunk = undefined;
       return [];
@@ -43,17 +43,6 @@ export function FileChanges({ tab }: { tab: DiffTab }) {
       : api.fileDiff(tab.workspaceId, tab.path),
   });
   const lines = useMemo(() => parsePatch(data ?? ''), [data]);
-  const [highlight, setHighlight] = useState<{
-    lines: PatchLine[];
-    tokens: Awaited<ReturnType<typeof highlightPatch>>;
-  }>();
-  useEffect(() => {
-    let active = true;
-    void highlightPatch(lines, tab.path, tab.commit?.original).then((tokens) => {
-      if (active) setHighlight({ lines, tokens });
-    }).catch(() => {});
-    return () => { active = false; };
-  }, [lines, tab.path, tab.commit?.original]);
   const directory = tab.path.slice(0, tab.path.lastIndexOf('/') + 1);
   return (
     <section aria-label="File changes" className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -69,16 +58,7 @@ export function FileChanges({ tab }: { tab: DiffTab }) {
         {isPending ? <p role="status" className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><Spinner />Loading changes…</p>
           : isError ? <Alert variant="destructive"><AlertDescription>{errMsg(error)}</AlertDescription></Alert>
           : lines.length === 0 ? <Empty><EmptyHeader><EmptyDescription>No changes to display.</EmptyDescription></EmptyHeader></Empty>
-          : <Diff lines={lines} maxHeight={100000} bare renderLine={(index) => {
-            const tokens = highlight?.lines === lines ? highlight.tokens.get(index) : undefined;
-            if (!tokens?.length) return undefined;
-            return tokens.map((token, position) => (
-              <span key={position} className="text-(--patch-light) dark:text-(--patch-dark)" style={{
-                '--patch-light': token.variants.light.color,
-                '--patch-dark': token.variants.dark.color,
-              } as CSSProperties}>{token.content}</span>
-            ));
-          }} />}
+          : <Diff file={tab.path} original={tab.commit?.original} lines={lines} maxHeight={100000} bare />}
       </div>
     </section>
   );

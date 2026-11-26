@@ -12,11 +12,13 @@ export function tmpDataDir() {
   return fs.mkdtempSync(path.join('/tmp', 'hsa-'));
 }
 
-export async function startSidecar({ dataDir, sid = 's1', mode = 'ask', engine = 'echo', inheritedModel, codexBinary, cwd = os.tmpdir(), projectSkillsPlugin, projectSkillsWarning } = {}) {
+export async function startSidecar({ dataDir, sid = 's1', mode = 'ask', engine = 'echo', inheritedModel, codexBinary, cwd = os.tmpdir(), projectSkillsPlugin, projectSkillsWarning, mcpServersFile, mcpDeniedFile } = {}) {
   fs.rmSync(path.join(dataDir, 'sock', `${sid}.sock`), { force: true }); // socket cũ của tiến trình đã chết
   const args = [ENTRY, '--session', sid, '--cwd', cwd, '--engine', engine, '--permission-mode', mode, '--data-dir', dataDir];
   if (projectSkillsPlugin) args.push('--project-skills-plugin', projectSkillsPlugin);
   if (projectSkillsWarning) args.push('--project-skills-warning', projectSkillsWarning);
+  if (mcpServersFile) args.push('--mcp-servers-file', mcpServersFile);
+  if (mcpDeniedFile) args.push('--mcp-denied-file', mcpDeniedFile);
   if (codexBinary) args.push('--codex-binary', codexBinary);
   if (inheritedModel) args.push('--model', inheritedModel, '--inherited-model');
   const child = spawn(process.execPath, args, {

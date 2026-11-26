@@ -20,6 +20,26 @@ pub async fn is_repo(dir: &Path) -> bool {
     git(dir, &["rev-parse", "--git-dir"]).await.is_ok()
 }
 
+pub async fn linked_worktrees(dir: &Path) -> AppResult<Vec<(PathBuf, Option<String>)>> {
+    let output = git(dir, &["worktree", "list", "--porcelain", "-z"]).await?;
+    let project = tokio::fs::canonicalize(dir).await?;
+    let mut worktrees = Vec::new();
+    // Git lists the primary checkout (or bare repository) first.
+    for record in output.split("\0\0").skip(1) {
+        let Some((path, fields)) = record.split_once('\0') else { continue };
+        let Some(path) = path.strip_prefix("worktree ") else { continue };
+        if fields.split('\0').any(|field| field == "prunable" || field.starts_with("prunable ")) {
+            continue;
+        }
+        let branch = fields.split('\0').find_map(|field| field.strip_prefix("branch refs/heads/"));
+        let Ok(path) = tokio::fs::canonicalize(path).await else { continue };
+        if path.is_dir() && !project.starts_with(&path) {
+            worktrees.push((path, branch.map(str::to_owned)));
+        }
+    }
+    Ok(worktrees)
+}
+
 const HISTORY_LIMIT: usize = 200;
 
 #[derive(serde::Serialize)]
@@ -384,6 +404,38 @@ mod tests {
         git(p, &["add", "."]).await.unwrap();
         git(p, &["commit", "-m", "init"]).await.unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn imports_linked_worktrees_once_and_respects_removed_workspaces() {
+        use crate::store;
+
+        let repo = init_repo().await;
+        let worktrees = tempfile::tempdir().unwrap();
+        let feature = worktrees.path().join("feature\ncheckout");
+        let detached = worktrees.path().join("detached");
+        let missing = worktrees.path().join("missing");
+        worktree_add(repo.path(), &feature, "feature/login", "main").await.unwrap();
+        worktree_add(repo.path(), &missing, "missing", "main").await.unwrap();
+        git(repo.path(), &["worktree", "add", "--detach", detached.to_str().unwrap()]).await.unwrap();
+        std::fs::remove_dir_all(missing).unwrap();
+
+        let mut db = store::open_memory().unwrap();
+        let project = store::project_add(&db, "repo", repo.path().to_str().unwrap()).unwrap();
+        let discovered = linked_worktrees(repo.path()).await.unwrap();
+        assert_eq!(discovered.len(), 2);
+        assert_eq!(linked_worktrees(&feature).await.unwrap(), vec![(detached.canonicalize().unwrap(), None)]);
+        store::import_worktrees(&mut db, &project.id, discovered.clone()).unwrap();
+        let imported = store::workspace_list(&db, Some(&project.id), false).unwrap();
+        let feature = imported.iter().find(|ws| ws.branch.as_deref() == Some("feature/login")).unwrap();
+        assert_eq!(feature.name.as_deref(), Some("feature/login"));
+        assert!(imported.iter().any(|ws| ws.name.as_deref() == Some("detached") && ws.branch.is_none()));
+        assert!(store::session_list(&db, &feature.id).unwrap().is_empty());
+
+        store::workspace_keep_history(&db, &feature.id, false).unwrap();
+        store::import_worktrees(&mut db, &project.id, discovered).unwrap();
+        assert_eq!(store::workspace_list(&db, Some(&project.id), true).unwrap().len(), 2);
+        assert_eq!(store::workspace_list(&db, Some(&project.id), false).unwrap().len(), 1);
     }
 
     #[tokio::test]

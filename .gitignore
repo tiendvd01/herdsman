@@ -9,3 +9,4 @@ src-tauri/target/
 .idea/
 *.tmp
 *.swp
+.playwright-cli

@@ -8,6 +8,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::Path;
 
+pub async fn import_startup_worktrees(st: &AppState) -> AppResult<()> {
+    let projects = store::project_list(&st.db.lock())?;
+    for project in projects.into_iter().filter(|project| !project.missing) {
+        let repo = Path::new(&project.path);
+        if !git::is_repo(repo).await {
+            continue;
+        }
+        let result = match git::linked_worktrees(repo).await {
+            Ok(worktrees) if !worktrees.is_empty() => store::import_worktrees(&mut st.db.lock(), &project.id, worktrees),
+            Ok(_) => Ok(()),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
+            eprintln!("Could not import worktrees for {}: {error}", project.path);
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn project_list(st: St<'_>) -> AppResult<Vec<Project>> {
     store::project_list(&st.db.lock())

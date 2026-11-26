@@ -13,13 +13,17 @@ async function render(code: string, lang: string) {
   const hit = cache.get(key);
   if (hit) return hit;
   const { h, id } = await loadCodeLanguage(lang);
+  if (id === 'text') return;
   const html = h.codeToHtml(code, { lang: id, themes: { light: 'github-light', dark: 'github-dark' }, defaultColor: 'light' });
   cache.set(key, html);
   return html;
 }
 
 export function CodeBlock({ code, lang, plain }: { code: string; lang?: string; plain?: boolean }) {
-  const [html, setHtml] = useState<string | null>(() => cache.get(`${lang ?? 'text'}\0${code}`) ?? null);
+  const [highlight, setHighlight] = useState<{ code: string; lang: string; html: string }>();
+  const html = lang && !plain
+    ? cache.get(`${lang}\0${code}`) ?? (highlight?.code === code && highlight.lang === lang ? highlight.html : undefined)
+    : undefined;
   const [copyState, setCopyState] = useState<'idle' | 'pending' | 'copied'>('idle');
   useEffect(() => {
     if (copyState !== 'copied') return;
@@ -39,10 +43,10 @@ export function CodeBlock({ code, lang, plain }: { code: string; lang?: string; 
     }
   }
   useEffect(() => {
-    if (plain) return;
+    if (plain || !lang) return;
     let alive = true;
-    render(code, lang ?? 'text')
-      .then((h) => alive && setHtml(h))
+    render(code, lang)
+      .then((html) => alive && html && setHighlight({ code, lang, html }))
       .catch(() => {});
     return () => {
       alive = false;
@@ -59,7 +63,7 @@ export function CodeBlock({ code, lang, plain }: { code: string; lang?: string; 
           <span aria-live="polite">{copyState === 'pending' ? 'Copying…' : copyState === 'copied' ? 'Copied' : 'Copy'}</span>
         </Button>
       </div>
-      {html && !plain ? (
+      {html ? (
         <div className="overflow-x-auto p-3 text-content-code leading-[1.7] [&_pre]:m-0 [&_:is(pre,code)]:font-mono" dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
         <pre className="m-0 overflow-x-auto p-3 font-mono text-content-code leading-[1.7]">{code}</pre>

@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
+import { highlightPatch } from './highlightPatch';
 import { TruncatedText } from '@/components/ui/truncated-text';
 import { cn } from '@/lib/utils';
 import type { DiffLine } from './lineDiff';
@@ -16,11 +17,27 @@ export function DiffStat({ add, del, className }: { add: number; del: number; cl
 }
 
 /** Line diff. `bare` drops the outer border/header so it can sit inside a card. */
-export function Diff({ file, lines, maxHeight = 360, bare, renderLine }: {
+export function Diff({ file, lines, maxHeight = 360, bare, original }: {
   file?: string; lines: DiffLine[]; maxHeight?: number; bare?: boolean;
-  renderLine?: (index: number) => ReactNode;
+  original?: string;
 }) {
   const { add, del } = diffStats(lines);
+  const [highlight, setHighlight] = useState<{
+    lines: DiffLine[];
+    file: string;
+    original?: string;
+    tokens: Awaited<ReturnType<typeof highlightPatch>>;
+  }>();
+  useEffect(() => {
+    if (!file) return;
+    let active = true;
+    void highlightPatch(lines, file, original).then((tokens) => {
+      if (active) setHighlight({ lines, file, original, tokens });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [lines, file, original]);
+  const tokens = highlight?.lines === lines && highlight.file === file && highlight.original === original
+    ? highlight.tokens : undefined;
   return (
     <div className={cn('overflow-hidden', !bare && 'rounded-md border border-border')} data-testid="diff">
       {file && !bare ? (
@@ -40,8 +57,13 @@ export function Diff({ file, lines, maxHeight = 360, bare, renderLine }: {
               l.kind === 'ctx' && 'text-muted-foreground',
             )}
           >
-            <span className="inline-block w-3.5 select-none">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
-            {renderLine?.(i) ?? (l.text || ' ')}
+            <span className="inline-block w-[1.5ch] select-none">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
+            {tokens?.get(i)?.map((token, position) => (
+              <span key={position} className="text-(--patch-light) dark:text-(--patch-dark)" style={{
+                '--patch-light': token.variants.light.color,
+                '--patch-dark': token.variants.dark.color,
+              } as CSSProperties}>{token.content}</span>
+            )) ?? (l.text || ' ')}
           </div>
         ))}
       </pre>

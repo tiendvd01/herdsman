@@ -27,3 +27,24 @@ test('list_commands trả danh sách slash command của engine', async () => {
     await sc.stop();
   }
 });
+
+test('plugin skills report their namespace so the composer can match the short name', async (t) => {
+  const { createClaudeEngine } = await import('../src/engines/claude.mjs');
+  const engine = createClaudeEngine({
+    cwd: '/tmp', mode: 'ask', emit() {}, onEngineSession() {}, onTurnState() {},
+  }, () => ({
+    async supportedCommands() {
+      return [
+        { name: 'herdsman-project:delivery', description: 'Delivery', argumentHint: '' },
+        { name: 'review', description: 'Review', argumentHint: '', builtin: true },
+      ];
+    },
+    async *[Symbol.asyncIterator]() {},
+  }));
+  t.after(() => engine.shutdown());
+  const [skill, review] = await engine.listCommands();
+  assert.equal(skill.name, 'herdsman-project:delivery');
+  assert.equal(skill.plugin, 'herdsman-project');
+  assert.equal(review.name, 'review');
+  assert.ok(!('plugin' in review));
+});

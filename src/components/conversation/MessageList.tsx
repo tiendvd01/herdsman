@@ -211,18 +211,30 @@ function ItemView({ item, sessionId, onSelect, openFile }: {
           <SessionToolCard item={item} sessionId={sessionId} />
         </div>
       );
-    case 'turn_end':
+    case 'turn_end': {
+      const usage = item.usage;
+      const cacheRead = usage?.cache_read_input_tokens;
+      const cacheWrite = usage?.cache_creation_input_tokens;
       return (
         <div className="flex items-center gap-3 pt-6 text-[11px] text-muted-foreground">
           <div className="h-px flex-1 bg-border" />
-          <span className="font-mono">
+          <span className="text-center font-mono">
             {item.interrupted ? 'interrupted · ' : ''}
             {item.tokens != null ? `${item.tokens.toLocaleString('en-US')} tokens` : 'turn complete'}
+            {usage && (cacheRead != null || cacheWrite != null) && (
+              <span className="block">
+                {Math.max(0, usage.input_tokens - (cacheRead ?? 0) - (cacheWrite ?? 0)).toLocaleString('en-US')} new input
+                {cacheRead != null && ` · ${cacheRead.toLocaleString('en-US')} cache read`}
+                {cacheWrite != null && ` · ${cacheWrite.toLocaleString('en-US')} cache write`}
+                {` · ${usage.output_tokens.toLocaleString('en-US')} output`}
+              </span>
+            )}
             {item.cost != null ? ` · $${item.cost.toFixed(4)}` : ''}
           </span>
           <div className="h-px flex-1 bg-border" />
         </div>
       );
+    }
     case 'notice':
       return (
         <div className="pt-6">

@@ -2,7 +2,7 @@
 use crate::error::{AppError, AppResult};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_MODE: &str = "auto";
 
@@ -14,6 +14,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0005_workspace_history.sql"),
     include_str!("../migrations/0006_project_skills.sql"),
     include_str!("../migrations/0007_removed_projects.sql"),
+    include_str!("../migrations/0008_mcp_servers.sql"),
+    include_str!("../migrations/0009_mcp_native_disabled.sql"),
 ];
 
 pub fn now_ms() -> i64 {
@@ -166,6 +168,32 @@ pub fn workspace_list(c: &Connection, project_id: Option<&str>, include_archived
 
 pub fn workspace_get(c: &Connection, id: &str) -> AppResult<Workspace> {
     Ok(c.query_row(&format!("SELECT {WS_COLS} FROM workspaces WHERE id = ?1"), [id], ws_row)?)
+}
+
+pub fn import_worktrees(
+    c: &mut Connection,
+    project_id: &str,
+    worktrees: Vec<(PathBuf, Option<String>)>,
+) -> AppResult<()> {
+    let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut known = workspace_list(&tx, Some(project_id), true)?;
+    for (path, branch) in worktrees {
+        if known.iter().any(|ws| {
+            !ws.worktree_removed && (Path::new(&ws.work_dir) == path
+                || std::fs::canonicalize(&ws.work_dir).is_ok_and(|existing| existing == path))
+        }) {
+            continue;
+        }
+        let Some(work_dir) = path.to_str() else { continue };
+        let name = branch.as_deref().or_else(|| path.file_name()?.to_str());
+        // A saved workspace can still reserve the branch after an external move or removal.
+        let available_branch = branch.as_deref().filter(|branch| !known.iter().any(|ws| {
+            ws.dir_kind == "worktree" && ws.deleted_at.is_none() && ws.branch.as_deref() == Some(*branch)
+        }));
+        known.push(workspace_insert(&tx, &new_id(), project_id, name, "worktree", work_dir, available_branch, None)?);
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -18,6 +18,7 @@ vi.mock('@/components/settings/ProjectSkillsSection', () => ({ ProjectSkillsSect
 vi.mock('@/components/layout/ZoomIndicator', () => ({ ZoomIndicator: () => null }));
 vi.mock('@/lib/zoomShortcuts', () => ({ useZoomEffect: () => {} }));
 vi.mock('@/lib/queries', () => ({
+  useAppInfo: () => ({ data: { hc_connected: true, node_path: '/bin/node' } }),
   useProjects: () => ({ data: [{ id: 'a', name: 'Project A' }, { id: 'b', name: 'Project B' }], isSuccess: true }),
 }));
 
@@ -31,6 +32,84 @@ function chooseView(label: RegExp) {
   fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
   expect(tab.getAttribute('aria-selected')).toBe('true');
 }
+
+it('sets PR notifications read or unread in the selected scope', async () => {
+  useUiStore.getState().setScreen('projects');
+  useUiStore.getState().selectWorkspace('a', 'workspace-a');
+  const a = { id: 'a', name: 'Project A' };
+  const b = { id: 'b', name: 'Project B' };
+  const snapshot = {
+    account: 'developer',
+    projects: {
+      a: { repository: 'me/shared', pulls: [] },
+      b: { repository: 'me/shared', pulls: [] },
+    },
+    notifications: [
+      { repository: 'me/shared', projects: [a, b], event: { key: 'shared', title: 'Shared change', number: 1, kind: 'New comment', read: true } },
+      { repository: 'me/a', projects: [a], event: { key: 'same', title: 'Change A', number: 2, kind: 'New comment', read: true } },
+      { repository: 'me/b', projects: [b], event: { key: 'same', title: 'Change B', number: 3, kind: 'New comment', read: true } },
+    ],
+  };
+  let fail = true;
+  native.invoke.mockImplementation(async (command, params) => {
+    if (command === 'pull_requests_refresh') return structuredClone(snapshot);
+    if (command !== 'pull_requests_set_read') return;
+    if (fail) throw new Error('Write failed');
+    for (const { repository, event } of snapshot.notifications) {
+      if (params.eventsByRepository[repository]?.includes(event.key)) event.read = params.read;
+    }
+  });
+  render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><AppShell /><Toaster /></TooltipProvider></QueryClientProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Pull Requests' }));
+  const button = await screen.findByRole<HTMLButtonElement>('button', { name: 'Mark all as unread' });
+  await waitFor(() => expect(button.disabled).toBe(false));
+  fireEvent.click(button);
+  const error = await screen.findByRole('alert');
+  expect(error.textContent).toContain('Try again');
+  fireEvent.click(within(error).getByRole('button', { name: 'Dismiss' }));
+  expect(screen.queryByText('Unread', { exact: true })).toBeNull();
+  expect(button.disabled).toBe(false);
+
+  fail = false;
+  fireEvent.click(button);
+  expect(native.invoke).toHaveBeenLastCalledWith('pull_requests_set_read', {
+    account: 'developer', read: false, eventsByRepository: { 'me/a': ['same'], 'me/shared': ['shared'] },
+  });
+  await screen.findByRole('button', { name: 'Pull Requests, 2 unread' });
+  expect(screen.getByRole('tab', { name: /^Notifications.*2/ })).toBeTruthy();
+  expect(button.disabled).toBe(true);
+
+  const picker = within(screen.getByRole('navigation', { name: 'Select project' }));
+  fireEvent.click(picker.getByRole('button', { name: 'Project B' }));
+  chooseView(/^Notifications.*1/);
+  expect(within(screen.getByRole('button', { name: /Shared change/ })).getByText('Unread')).toBeTruthy();
+  expect(within(screen.getByRole('button', { name: /Change B/ })).queryByText('Unread')).toBeNull();
+  fireEvent.click(picker.getByRole('button', { name: 'All projects' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Mark all as unread' }));
+  expect(native.invoke).toHaveBeenLastCalledWith('pull_requests_set_read', {
+    account: 'developer', read: false, eventsByRepository: { 'me/a': ['same'], 'me/b': ['same'], 'me/shared': ['shared'] },
+  });
+  await screen.findByRole('button', { name: 'Pull Requests, 3 unread' });
+  expect(screen.getByRole('tab', { name: /^Notifications.*3/, selected: true })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await screen.findByRole('button', { name: 'Refresh' });
+  expect(screen.getAllByText('Unread', { exact: true })).toHaveLength(3);
+
+  fireEvent.click(picker.getByRole('button', { name: 'Project A' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Mark all as read' }));
+  expect(native.invoke).toHaveBeenLastCalledWith('pull_requests_set_read', {
+    account: 'developer', read: true, eventsByRepository: { 'me/a': ['same'], 'me/shared': ['shared'] },
+  });
+  const icon = await screen.findByRole('button', { name: 'Pull Requests, 1 unread' });
+  expect(icon.querySelector('[data-slot="unread-dot"]')).toBeTruthy();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Mark all as read' }).disabled).toBe(true);
+
+  fireEvent.click(picker.getByRole('button', { name: 'All projects' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Mark all as read' }));
+  await screen.findByRole('button', { name: 'Pull Requests' });
+  expect(icon.querySelector('[data-slot="unread-dot"]')).toBeNull();
+  expect(screen.queryByText('Unread', { exact: true })).toBeNull();
+});
 
 it('opens a separate PR screen, filters content and routes unread events without changing the workspace', async () => {
   useUiStore.getState().setScreen('projects');
@@ -54,19 +133,21 @@ it('opens a separate PR screen, filters content and routes unread events without
   const icon = await screen.findByRole('button', { name: 'Pull Requests, 2 unread' });
   const projects = screen.getByRole('button', { name: 'Projects', current: 'page' });
   expect(screen.getByRole('navigation', { name: 'Views' }).querySelector('button')).toBe(projects);
-  expect(icon.textContent).toBe('2');
+  expect(icon.textContent).toBe('');
+  expect(icon.querySelector('[data-slot="unread-dot"]')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Expand navigation' }));
   const collapse = screen.getByRole('button', { name: 'Collapse navigation' });
   expect(collapse.getAttribute('aria-expanded')).toBe('true');
   expect(projects.textContent).toBe('Projects');
-  expect(icon.textContent).toBe('2Pull Requests');
+  expect(icon.textContent).toBe('Pull Requests');
   expect(screen.getByRole('navigation', { name: 'Project sidebar' })).toBeTruthy();
   fireEvent.click(icon);
   expect(icon.getAttribute('aria-current')).toBe('page');
   expect(screen.queryByRole('navigation', { name: 'Project sidebar' })).toBeNull();
-  expect(icon.textContent).toBe('2Pull Requests');
+  expect(icon.textContent).toBe('Pull Requests');
   fireEvent.click(collapse);
-  expect(icon.textContent).toBe('2');
+  expect(icon.textContent).toBe('');
+  expect(icon.querySelector('[data-slot="unread-dot"]')).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Expand navigation' }).getAttribute('aria-expanded')).toBe('false');
   expect(screen.queryByRole('region', { name: 'Active workspace' })).toBeNull();
   expect(screen.queryByRole('complementary', { name: 'Right panel' })).toBeNull();
@@ -78,7 +159,13 @@ it('opens a separate PR screen, filters content and routes unread events without
   fireEvent.click(ownRow);
   expect(screen.getByRole('article', { name: 'Own change' })).toBeTruthy();
   expect(prPanel.scrollTop).toBe(0);
-  fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
+  prPanel.scrollTop = 600;
+  const back = screen.getByRole('button', { name: 'Back to list' });
+  expect(prPanel.contains(back)).toBe(false);
+  back.focus();
+  expect(document.activeElement).toBe(back);
+  fireEvent.click(back);
+  expect(screen.queryByRole('button', { name: 'Back to list' })).toBeNull();
   expect(prPanel.scrollTop).toBe(180);
   expect(document.activeElement).toBe(screen.getByRole('button', { name: /^Own change/ }));
   expect(screen.queryByRole('button', { name: /^Requested change/ })).toBeNull();
@@ -93,7 +180,8 @@ it('opens a separate PR screen, filters content and routes unread events without
   chooseView(/^Notifications.*2/);
   expect(screen.queryByRole('button', { name: /^Requested change/ })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: /^Review requested/ }));
-  expect((await screen.findByRole('button', { name: 'Pull Requests, 1 unread' })).textContent).toBe('1');
+  await screen.findByRole('button', { name: 'Pull Requests, 1 unread' });
+  expect(icon.querySelector('[data-slot="unread-dot"]')).toBeTruthy();
   expect(picker.getByRole('button', { name: 'Project B', current: true })).toBeTruthy();
   expect(useUiStore.getState().projectId).toBe('a');
   expect(useUiStore.getState().workspaceId).toBe('workspace-a');
@@ -105,7 +193,7 @@ it('opens a separate PR screen, filters content and routes unread events without
   expect(within(detail).getByText('Update from main')).toBeTruthy();
   fireEvent.click(within(detail).getByRole('button', { name: 'Open on GitHub' }));
   expect(native.invoke).toHaveBeenCalledWith('pull_request_open', { repository: 'me/b', number: 4 });
-  fireEvent.click(within(detail).getByRole('button', { name: 'Back to list' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
   expect(screen.getByRole('tab', { name: /^Notifications.*0/, selected: true })).toBeTruthy();
   expect(screen.queryByRole('article')).toBeNull();
 
@@ -253,6 +341,61 @@ it('opens a toast from the workspace in the PR detail of its project', async () 
   expect(screen.getByRole('tab', { name: 'Overview', selected: true })).toBeTruthy();
 });
 
+it('shows the same notification types in Overview, Notifications and toasts', async () => {
+  useUiStore.getState().setScreen('projects');
+  useUiStore.getState().selectWorkspace('a', 'workspace-a');
+  const client = new QueryClient();
+  const cases = [
+    ['Review requested', 'Warning'],
+    ['Changes requested', 'Warning'],
+    ['Base branch update required', 'Warning'],
+    ['Approved', 'Approved'],
+    ['New comment', 'Info'],
+    ['New review', 'Info'],
+    ['Unknown event', 'Info'],
+    ['CI failed', 'Error'],
+  ];
+  const notifications = cases.map(([kind], index) => ({
+    repository: 'me/a',
+    projects: [{ id: 'a', name: 'Project A' }],
+    event: { key: String(index), title: `Change ${index}`, number: index + 1, kind, read: false },
+  }));
+  let visible = 0;
+  native.invoke.mockImplementation(async (command) => command === 'pull_requests_refresh' ? {
+    account: 'developer',
+    projects: { a: { repository: 'me/a', pulls: [] }, b: { repository: 'me/b', pulls: [] } },
+    notifications: notifications.slice(0, visible),
+  } : undefined);
+  render(<QueryClientProvider client={client}><TooltipProvider><AppShell /><Toaster /></TooltipProvider></QueryClientProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Pull Requests' }));
+  await screen.findByRole('tab', { name: /^Notifications.*0/ });
+  const section = screen.getByRole('region', { name: 'PR Notifications' });
+
+  for (const [index, [kind, label]] of cases.entries()) {
+    visible += 1;
+    await act(() => client.invalidateQueries({ queryKey: ['pull-requests'] }));
+    const toast = await screen.findByRole('status');
+    expect(within(toast).getByText(label, { exact: true })).toBeTruthy();
+    expect(toast.textContent).toContain(kind);
+    fireEvent.click(within(toast).getByRole('button', { name: 'Dismiss' }));
+    const row = within(section).getByRole('button', { name: new RegExp(`^${kind} · #${index + 1}`) });
+    expect(within(row).getByText(label, { exact: true }).querySelector('svg')).toBeTruthy();
+  }
+
+  chooseView(/^Notifications.*8/);
+  const list = screen.getByRole('region', { name: 'PR Notifications' });
+  for (const [index, [kind, label]] of cases.entries()) {
+    const row = within(list).getByRole('button', { name: new RegExp(`^${kind} · #${index + 1}`) });
+    expect(within(row).getByText(label, { exact: true })).toBeTruthy();
+  }
+  fireEvent.click(within(list).getByRole('button', { name: 'Mark all as read' }));
+  await waitFor(() => expect(within(list).queryByText('Unread', { exact: true })).toBeNull());
+  expect(within(list).getAllByText('Warning', { exact: true })).toHaveLength(3);
+  fireEvent.click(within(list).getByRole('button', { name: 'Mark all as unread' }));
+  await waitFor(() => expect(within(list).getAllByText('Unread', { exact: true })).toHaveLength(8));
+  expect(within(list).getAllByText('Warning', { exact: true })).toHaveLength(3);
+});
+
 const emptyDetail = {
   headSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   body: '',
@@ -280,6 +423,22 @@ function renderDetailsShell() {
   render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><AppShell /></TooltipProvider></QueryClientProvider>);
   fireEvent.click(screen.getByRole('button', { name: 'Pull Requests' }));
 }
+
+it.each(['loading', 'failed'])('returns to the list when PR detail status is %s', async (state) => {
+  native.invoke.mockImplementation(async (command) => {
+    if (command === 'pull_requests_refresh') return detailFixture();
+    if (command !== 'pull_request_detail') return;
+    if (state === 'failed') throw new Error('Details unavailable');
+    return new Promise(() => {});
+  });
+  renderDetailsShell();
+  fireEvent.click(await screen.findByRole('button', { name: /^Change in A/ }));
+  const message = state === 'failed' ? 'Details unavailable' : 'Loading details…';
+  expect((await screen.findAllByText(message)).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
+  expect(screen.queryByRole('article', { name: 'Change in A' })).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: /^Change in A/ }));
+});
 
 it('reads Markdown and review threads and shows CI steps for parallel jobs and the current attempt', async () => {
   let attempt = 1;

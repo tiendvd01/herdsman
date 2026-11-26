@@ -8,6 +8,7 @@ import { runTabShortcut } from '@/lib/keyboardShortcuts';
 import { api } from '@/lib/api';
 import { qk } from '@/lib/queries';
 import type { Session, SessionStatus } from '@/lib/types';
+import { useFileStore } from '@/stores/useFileStore';
 import { useUiStore } from '@/stores/useUiStore';
 
 vi.mock('@/lib/api', () => ({
@@ -15,6 +16,7 @@ vi.mock('@/lib/api', () => ({
     projectList: vi.fn(),
     workspaceList: vi.fn(),
     sessionHistory: vi.fn(),
+    workspaceTerminalList: vi.fn(async () => []),
     sessionSetPinned: vi.fn(async () => {}),
     sessionClose: vi.fn(async () => {}),
   },
@@ -50,8 +52,9 @@ function requestClose() {
 describe('closing the last workspace session', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useFileStore.setState({ tabs: [], diffs: [], active: {} });
     useUiStore.setState({
-      projectId: 'p1', workspaceId: 'w1', sessionByWorkspace: { w1: 's1' }, tempTabs: {}, statuses: {},
+      screen: 'projects', projectId: 'p1', workspaceId: 'w1', sessionByWorkspace: { w1: 's1' }, tempTabs: {}, statuses: {}, newWorkspaceFor: null,
     });
   });
 
@@ -65,25 +68,75 @@ describe('closing the last workspace session', () => {
     expect(useUiStore.getState().workspaceId).toBe('w1');
   });
 
-  it('keeps the workspace open by default and clears the closed tab', async () => {
+  it('returns to the project after one confirmation and clears the closed tab', async () => {
     renderWorkspace();
+    expect(screen.queryByRole('button', { name: 'Create new workspace' })).toBeNull();
     requestClose();
     fireEvent.click(screen.getByRole('button', { name: 'Close session' }));
     await waitFor(() => expect(screen.queryByRole('tab')).toBeNull());
     expect(api.sessionClose).toHaveBeenCalledWith('s1');
-    expect(useUiStore.getState().workspaceId).toBe('w1');
+    expect(useUiStore.getState().workspaceId).toBeNull();
+    expect(useUiStore.getState().projectId).toBe('p1');
     expect(useUiStore.getState().sessionByWorkspace.w1).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Create new workspace' }));
+    expect(useUiStore.getState().newWorkspaceFor).toBe('p1');
   });
 
-  it('warns about stopping a running agent and closes the workspace view if requested', async () => {
+  it('warns about stopping a running agent and closes the workspace from the keyboard shortcut', async () => {
     renderWorkspace('working');
-    requestClose();
+    act(() => runTabShortcut('close-tab'));
     expect(screen.getByText(/stops the agent/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Also close the workspace view' }));
     fireEvent.click(screen.getByRole('button', { name: 'Stop and close' }));
     await waitFor(() => expect(useUiStore.getState().workspaceId).toBeNull());
     expect(api.sessionClose).toHaveBeenCalledWith('s1');
     expect(useUiStore.getState().sessionByWorkspace.w1).toBeUndefined();
+  });
+
+  it('keeps the workspace open and selects the remaining session', async () => {
+    renderWorkspace('idle', true);
+    requestClose();
+    await waitFor(() => expect(screen.queryByText('Final task')).toBeNull());
+    expect(screen.getByRole('tab', { name: /Other task/ }).getAttribute('aria-selected')).toBe('true');
+    expect(useUiStore.getState().workspaceId).toBe('w1');
+  });
+
+  it('keeps the workspace open when a file tab opens while the session is closing', async () => {
+    let finishClose!: () => void;
+    vi.mocked(api.sessionClose).mockReturnValueOnce(new Promise<void>((resolve) => { finishClose = resolve; }));
+    renderWorkspace();
+    requestClose();
+    fireEvent.click(screen.getByRole('button', { name: 'Close session' }));
+    await waitFor(() => expect(api.sessionClose).toHaveBeenCalledWith('s1'));
+    act(() => useFileStore.setState({ tabs: [{ id: 'file', projectId: 'p1', path: 'README.md', name: 'README.md' }] }));
+    finishClose();
+    await waitFor(() => expect(screen.queryByText('Final task')).toBeNull());
+    expect(useUiStore.getState().workspaceId).toBe('w1');
+    expect(screen.getByRole('tab', { name: 'README.md' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('preserves the newly selected workspace while the close completes', async () => {
+    let finishClose!: () => void;
+    vi.mocked(api.sessionClose).mockReturnValueOnce(new Promise<void>((resolve) => { finishClose = resolve; }));
+    renderWorkspace();
+    requestClose();
+    fireEvent.click(screen.getByRole('button', { name: 'Close session' }));
+    await waitFor(() => expect(api.sessionClose).toHaveBeenCalledWith('s1'));
+    act(() => useUiStore.getState().selectWorkspace('p1', 'w2'));
+    await act(async () => finishClose());
+    expect(useUiStore.getState().workspaceId).toBe('w2');
+  });
+
+  it('keeps the final session and workspace open when closing fails', async () => {
+    vi.mocked(api.sessionClose).mockRejectedValueOnce(new Error('Close failed'));
+    const { sessions } = renderWorkspace();
+    vi.mocked(api.sessionHistory).mockResolvedValue(sessions);
+    requestClose();
+    fireEvent.click(screen.getByRole('button', { name: 'Close session' }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Error: Close failed', 'error'));
+    expect(useUiStore.getState().workspaceId).toBe('w1');
+    expect(screen.getByRole('button', { name: 'Close session' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('tab', { name: /Final task/ })).toBeTruthy();
   });
 });
 

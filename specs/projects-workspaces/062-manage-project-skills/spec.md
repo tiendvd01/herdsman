@@ -109,3 +109,4 @@ Developer thêm thư mục skill có sẵn để dùng riêng cho một project 
 - Phiên bản đầu áp dụng lựa chọn theo project cho session Claude mới, theo bản tham chiếu. Codex, cấp lại skill cho session đang chạy, quản lý MCP, cài từ catalog trực tuyến và chỉnh sửa nội dung skill nằm ngoài phạm vi.
 - Thư viện dùng chung và nguồn bổ sung chứa các thư mục skill local có định nghĩa `SKILL.md`. Có thể bắt đầu với thư viện trống và thêm nguồn đã có.
 - Lựa chọn và nguồn bổ sung là thiết lập local của Herdsman, độc lập với branch Git và dùng chung giữa các workspace thuộc cùng project.
+- Claude báo skill do Herdsman cấp với tiền tố `herdsman-project:`. Menu slash hiện tên ngắn kèm nhãn `Herdsman` và chèn tên đầy đủ khi chọn (spec 071).

@@ -43,6 +43,48 @@ export type ProjectSkillChange =
   | ({ kind: 'set'; enabled: boolean } & ProjectSkillId)
   | { kind: 'remove'; source_id: string; confirmed: string[] };
 
+/** spec 071: MCP servers managed by Herdsman. Secret values never come back from the app. */
+export type McpTransport = 'stdio' | 'http' | 'sse';
+
+export interface McpServerView {
+  id: string;
+  name: string;
+  transport: McpTransport;
+  command: string | null;
+  args: string[];
+  url: string | null;
+  env: { key: string; set: boolean }[];
+  headers: { key: string; set: boolean }[];
+  enabled: boolean;
+  conflict: string | null;
+}
+
+export interface NativeMcpServer {
+  name: string;
+  transport: string;
+  scope: 'project' | 'local' | 'user';
+  source: string;
+  /** spec 072: false when this project turned the server off for new Claude sessions. */
+  enabled: boolean;
+}
+
+export interface McpCatalog {
+  servers: McpServerView[];
+  native: NativeMcpServer[];
+}
+
+export interface McpServerInput {
+  id?: string;
+  name: string;
+  transport: McpTransport;
+  command?: string;
+  args: string[];
+  url?: string;
+  /** Omit or leave `value` empty to keep the stored value of an existing key. */
+  env: { key: string; value?: string }[];
+  headers: { key: string; value?: string }[];
+}
+
 export interface ApiError {
   code: string;
   message: string;
@@ -81,6 +123,13 @@ export interface WorkspaceTerminalRef {
 }
 
 export const api = {
+  floatingTerminalCreate: (workspaceId: string | null, projectId: string | null) =>
+    invoke<WorkspaceTerminalRef>('floating_terminal_create', { workspaceId, projectId }),
+  floatingTerminalStop: (address: string) => invoke<void>('floating_terminal_stop', { address }),
+  floatingTerminalList: () => invoke<WorkspaceTerminalRef[]>('floating_terminal_list'),
+  floatingTerminalAttach: (id: string, address: string, rows: number, cols: number, onOutput: (bytes: ArrayBuffer) => void) =>
+    invoke<void>('floating_terminal_attach', { id, address, rows, cols, output: new Channel(onOutput) }),
+
   workspaceTerminalList: (workspaceId: string) =>
     invoke<WorkspaceTerminalRef[]>('workspace_terminal_list', { workspaceId }),
   workspaceTerminalCreate: (workspaceId: string) =>
@@ -127,6 +176,14 @@ export const api = {
     invoke<ProjectSkillCatalog>('project_skill_catalog', { projectId }),
   projectSkillChange: (projectId: string, change: ProjectSkillChange) =>
     invoke<void>('project_skill_change', { projectId, change }),
+  mcpCatalog: (projectId: string) => invoke<McpCatalog>('mcp_catalog', { projectId }),
+  mcpServerSave: (server: McpServerInput) => invoke<string>('mcp_server_save', { server }),
+  mcpServerRemove: (id: string, dryRun: boolean) =>
+    invoke<{ affected_projects: string[] }>('mcp_server_remove', { id, dryRun }),
+  mcpProjectToggle: (projectId: string, serverId: string, enabled: boolean) =>
+    invoke<void>('mcp_project_toggle', { projectId, serverId, enabled }),
+  mcpNativeToggle: (projectId: string, name: string, enabled: boolean) =>
+    invoke<void>('mcp_native_toggle', { projectId, name, enabled }),
   projectList: () => invoke<Project[]>('project_list'),
   projectAdd: (path: string) => invoke<Project>('project_add', { path }),
   projectRename: (id: string, name: string) => invoke<Project>('project_rename', { id, name }),

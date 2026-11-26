@@ -28,21 +28,24 @@ function makeComponents(streaming: boolean, sessionId?: string, openFile?: (path
         <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>
       );
     },
-    pre: ({ children }) => <>{children}</>,
+    pre: ({ node, children }) => {
+      const code = node?.children[0];
+      if (code?.type !== 'element' || code.tagName !== 'code') return <pre>{children}</pre>;
+      const classes = code.properties.className;
+      const lang = Array.isArray(classes)
+        ? classes.find((name) => typeof name === 'string' && name.startsWith('language-'))
+        : undefined;
+      const language = typeof lang === 'string' ? lang.slice('language-'.length).toLowerCase() : undefined;
+      const text = code.children.map((part) => part.type === 'text' ? part.value : '').join('').replace(/\n$/, '');
+      if (!streaming && language === 'mermaid') return <Mermaid code={text} />;
+      if (!streaming && (language === 'chart' || language === 'vega-lite' || language === 'vega')) return <Chart code={text} />;
+      return <CodeBlock code={text} lang={language} plain={streaming} />;
+    },
     table: ({ children }) => (
       <div className="hs-table">
         <table>{children}</table>
       </div>
     ),
-    code: ({ className, children }) => {
-      const lang = /language-([\w-]+)/.exec(className ?? '')?.[1];
-      const text = String(children ?? '').replace(/\n$/, '');
-      const isBlock = !!lang || text.includes('\n');
-      if (!isBlock) return <code>{children}</code>;
-      if (!streaming && lang === 'mermaid') return <Mermaid code={text} />;
-      if (!streaming && (lang === 'chart' || lang === 'vega-lite' || lang === 'vega')) return <Chart code={text} />;
-      return <CodeBlock code={text} lang={lang} plain={streaming} />;
-    },
   };
 }
 

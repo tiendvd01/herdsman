@@ -9,7 +9,7 @@ import { qk } from '@/lib/queries';
 import { COMPOSER, effectiveComposerHeight } from '@/lib/layout';
 import { useViewportHeight } from '@/lib/useLayoutWidths';
 import { useUiStore } from '@/stores/useUiStore';
-import type { PermissionMode, Session, SessionStatus } from '@/lib/types';
+import type { PermissionMode, Session, SessionStatus, SlashCommandInfo } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { Button, Kbd } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -17,15 +17,34 @@ import { toast } from '@/components/ui/toast';
 import { ImagePreview, ImageThumbnail, type ImageSelection } from '@/components/conversation/ImagePreview';
 import { COLUMN } from '@/components/conversation/MessageList';
 import { ResizeHandle } from '@/components/layout/ResizeHandle';
+import { Badge } from '@/components/ui/badge';
 import { ModeSwitcher } from './ModeSwitcher';
 import { ModelSwitcher } from './ModelSwitcher';
 import { UsageIndicators } from './UsageIndicators';
 
 interface SlashItem {
+  /** Full command inserted into the message, e.g. `/herdsman-project:delivery`. */
   cmd: string;
+  /** What the menu shows and matches, e.g. `/delivery`. Defaults to `cmd`. */
+  label?: string;
   desc: string;
   hint?: string;
+  source?: string;
 }
+
+/** Plugin Herdsman stages for project skills (src-tauri/src/project_skills.rs). */
+const HERDSMAN_PLUGIN = 'herdsman-project';
+
+/** Plugin namespace of `plugin:name`. Older agents send the name without a `plugin` field, so read it from the name. */
+const namespaceOf = (c: SlashCommandInfo) => {
+  if (c.plugin) return c.plugin;
+  const cut = c.name.lastIndexOf(':');
+  return cut > 0 ? c.name.slice(0, cut) : undefined;
+};
+const shortName = (c: SlashCommandInfo) => {
+  const ns = namespaceOf(c);
+  return ns ? c.name.slice(ns.length + 1) : c.name;
+};
 
 const CLEAR: SlashItem = { cmd: '/clear', desc: 'Start a new conversation', hint: '[name]' };
 
@@ -125,8 +144,15 @@ export function Composer({
         ...engineCommands
           // Project/user skills first: they're what people come to the menu for.
           .filter((c) => c.name !== 'clear')
-          .sort((a, b) => Number(a.builtin) - Number(b.builtin) || a.name.localeCompare(b.name))
-          .map((c) => ({ cmd: '/' + c.name, desc: c.description, hint: c.argument_hint || undefined })),
+          .sort((a, b) => Number(a.builtin) - Number(b.builtin) || shortName(a).localeCompare(shortName(b)))
+          .map((c) => ({
+            cmd: '/' + c.name,
+            label: namespaceOf(c) ? '/' + shortName(c) : undefined,
+            // Claude prefixes plugin skill descriptions with "(plugin) "; the badge already says where it comes from.
+            desc: namespaceOf(c) ? c.description.replace(`(${namespaceOf(c)}) `, '') : c.description,
+            hint: c.argument_hint || undefined,
+            source: namespaceOf(c) === HERDSMAN_PLUGIN ? 'Herdsman' : undefined,
+          })),
         CLEAR,
       ]
     : SLASH;
@@ -136,19 +162,19 @@ export function Composer({
   useEffect(() => {
     if (menuShown) refetchCommands();
   }, [menuShown, refetchCommands]);
-  const slash = typedSlash ? all.filter((s) => s.cmd.startsWith(text)) : slashOpen ? all : [];
+  const slash = typedSlash ? all.filter((s) => s.cmd.startsWith(text) || !!s.label?.startsWith(text)) : slashOpen ? all : [];
   const slashListRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     slashListRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' });
   }, [slashIdx, slash.length]);
 
-  async function send() {
-    const body = text.trim();
+  async function send(compact = false) {
+    const body = compact ? '/compact' : text.trim();
     if (!body || disabled || sendInFlight.current) return;
     sendInFlight.current = true;
     setSending(true);
     try {
-      if (clearCommand) {
+      if (clearCommand && !compact) {
         const next = await createWorkspaceSession(qc, session.workspace_id, session.engine, clearCommand[1]);
         drafts.delete(session.id);
         const ui = useUiStore.getState();
@@ -160,12 +186,12 @@ export function Composer({
         await api.sessionPrompt(
           session.id,
           body,
-          images.map(({ media_type, data_b64 }) => ({ media_type, data_b64 })),
+          compact ? [] : images.map(({ media_type, data_b64 }) => ({ media_type, data_b64 })),
         );
         qc.invalidateQueries({ queryKey: qk.sessions(session.workspace_id) });
         qc.invalidateQueries({ queryKey: ['workspaces'] });
       }
-      if (draftOwner.current === session.id) {
+      if (!compact && draftOwner.current === session.id) {
         setText('');
         setImages([]);
         setExpanded(false);
@@ -220,15 +246,16 @@ export function Composer({
                 role="option"
                 aria-selected={i === slashIdx}
                 key={s.cmd}
-                title={s.desc}
+                title={s.label ? `${s.cmd}\n${s.desc}` : s.desc}
                 className={cn('flex h-8 shrink-0 items-center gap-3 rounded px-2 text-left', i === slashIdx ? 'bg-accent' : 'hover:bg-accent')}
                 onMouseMove={() => setSlashIdx(i)}
                 onClick={() => pickSlash(s.cmd)}
               >
                 <span className="shrink-0 font-mono text-[12px]">
-                  {s.cmd}
+                  {s.label ?? s.cmd}
                   {s.hint ? <span className="ml-1.5 text-muted-foreground">{s.hint}</span> : null}
                 </span>
+                {s.source ? <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px]">{s.source}</Badge> : null}
                 <TruncatedText className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">{s.desc}</TruncatedText>
               </button>
             ))}
@@ -369,14 +396,16 @@ export function Composer({
             <ModelSwitcher session={session} disabled={disabled || !!onNeedResume} />
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-3">
-            <UsageIndicators sessionId={session.id} />
+            <UsageIndicators sessionId={session.id}
+              onCompact={session.engine === 'claude' || session.engine === 'codex' ? () => void send(true) : undefined}
+              compactDisabled={disabled || working || sending} />
             {working ? (
               <Button variant="outline" size="sm" className="gap-2" onClick={interrupt}>
                 Interrupt turn
                 <Kbd className="h-[18px] border-0 px-1">Esc</Kbd>
               </Button>
             ) : null}
-            <Button size="icon" onClick={send} disabled={!text.trim() || sending || disabled} aria-label="Send">
+            <Button size="icon" onClick={() => void send()} disabled={!text.trim() || sending || disabled} aria-label="Send">
               <ArrowUp />
             </Button>
           </div>

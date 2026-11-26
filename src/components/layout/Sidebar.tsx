@@ -3,13 +3,14 @@ import { TruncatedText } from '@/components/ui/truncated-text';
 // Left sidebar: app header, ⌘K search, projects → workspaces, hc status (BR 3.1, FR-001–003, FR-019).
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Check, ChevronsUpDown, ChevronRight, GitBranch, MoreHorizontal, Plus, Search, Square } from 'lucide-react';
+import { AlertTriangle, Check, ChevronsUpDown, ChevronRight, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, MoreHorizontal, Plus, Search, Square } from 'lucide-react';
 import { api } from '@/lib/api';
-import { qk, usePaletteWorkspaces, useAppInfo, useProjects, useWorkspaces } from '@/lib/queries';
+import { qk, usePaletteWorkspaces, useProjects, useWorkspaces } from '@/lib/queries';
 import type { Project } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { effectiveShortcut, shortcutLabel, useShortcutBindings } from '@/lib/keyboardShortcuts';
 import { useUiStore } from '@/stores/useUiStore';
+import { Badge } from '@/components/ui/badge';
 import { Button, Kbd } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -23,11 +24,21 @@ import { ResizeHandle } from '@/components/layout/ResizeHandle';
 import { LEFT } from '@/lib/layout';
 import { useLayoutWidths } from '@/lib/useLayoutWidths';
 import { useNavigationOrder } from '@/lib/useNavigationOrder';
+import { openOriginal, type WorktreePull } from './PullRequests';
+
+type ProjectPulls = { repository?: string; error?: string; stale?: boolean; worktreePulls?: WorktreePull[] };
+
+const pullStatuses = {
+  OPEN: { label: 'Open', icon: GitPullRequest, variant: 'success' },
+  DRAFT: { label: 'Draft', icon: GitPullRequestDraft, variant: 'outline' },
+  MERGED: { label: 'Merged', icon: GitMerge, variant: 'outline' },
+  CLOSED: { label: 'Closed', icon: GitPullRequestClosed, variant: 'danger' },
+} as const;
 
 const focusDemo = import.meta.env.DEV
   && new URLSearchParams(location.search).has('mock') && new URLSearchParams(location.search).has('project-focus');
 
-export function Sidebar() {
+export function Sidebar({ pullRequestsByProject }: { pullRequestsByProject?: Record<string, ProjectPulls> } = {}) {
   const paletteKey = effectiveShortcut('palette', useShortcutBindings());
   const { data: projects = [], isSuccess: projectsLoaded } = useProjects();
   const projectOrder = useNavigationOrder('projects', projects.map((p) => p.id), 'vertical', projectsLoaded);
@@ -58,7 +69,7 @@ export function Sidebar() {
 
           {focusDemo && focusedProject ? (
             <nav className="mx-2 flex min-h-0 flex-1 flex-col overflow-y-auto py-1" aria-label="Project workspaces">
-              <ProjectNode key={focusedProject.id} project={focusedProject} reorder={projectOrder}
+              <ProjectNode key={focusedProject.id} project={focusedProject} reorder={projectOrder} pulls={pullRequestsByProject?.[focusedProject.id]}
                 switcher={<FocusProjectSwitcher project={focusedProject} projects={projects} />} />
             </nav>
           ) : <div className="mx-2 flex min-h-0 flex-1 flex-col py-1">
@@ -70,16 +81,15 @@ export function Sidebar() {
                 </Button>
               </Tooltip>
             </div>
-            <nav data-reorder-scroll className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1" aria-label="Projects">
+            <nav data-reorder-scroll className="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-1" aria-label="Projects">
               {projects.length === 0 ? (
                 <p className="px-2 py-6 text-center text-xs text-muted-foreground">No projects yet. Click + and pick a folder on this machine.</p>
               ) : (
-                projectOrder.order.map((id) => <ProjectNode key={id} project={projectsById.get(id)!} reorder={projectOrder} />)
+                projectOrder.order.map((id) => <ProjectNode key={id} project={projectsById.get(id)!} reorder={projectOrder} pulls={pullRequestsByProject?.[id]} />)
               )}
             </nav>
           </div>}
 
-          <HcStatus />
           <ResizeHandle
             side="left"
             label="Resize sidebar"
@@ -135,10 +145,11 @@ function FocusProjectSwitcher({ project, projects }: { project: Project; project
   );
 }
 
-function ProjectNode({ project, reorder, switcher }: {
+function ProjectNode({ project, reorder, switcher, pulls }: {
   project: Project;
   reorder: ReturnType<typeof useNavigationOrder>;
   switcher?: ReactNode;
+  pulls?: ProjectPulls;
 }) {
   const collapsed = useUiStore((s) => !!s.collapsed[project.id]);
   const toggle = useUiStore((s) => s.toggleCollapsed);
@@ -153,15 +164,27 @@ function ProjectNode({ project, reorder, switcher }: {
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const qc = useQueryClient();
+  const repository = !project.missing && (!pulls?.error || pulls.stale) ? pulls?.repository : undefined;
+  const pullsByBranch = new Map<string, WorktreePull[]>();
+  if (repository) {
+    for (const pull of pulls?.worktreePulls ?? []) {
+      const branchPulls = pullsByBranch.get(pull.headRefName) ?? [];
+      branchPulls.push(pull);
+      pullsByBranch.set(pull.headRefName, branchPulls);
+    }
+    for (const branchPulls of pullsByBranch.values()) {
+      branchPulls.sort((a, b) => Number(b.state === 'OPEN') - Number(a.state === 'OPEN') || b.number - a.number);
+    }
+  }
 
   return (
     <div className="flex flex-col">
-      <div {...(switcher ? {} : reorder.row(project.id))} className={cn('group flex items-center gap-0.5 rounded-md hover:bg-accent',
-        selectedProject && 'bg-accent', reorder.indicator)}>
+      <div {...(switcher ? {} : reorder.row(project.id))} className={cn('group flex items-center rounded-lg hover:bg-accent',
+        selectedProject && (selectedWs ? 'bg-muted/60' : 'bg-accent'), reorder.indicator)}>
         {switcher ?? <button
           {...reorder.item(project.id)}
           type="button"
-          className="flex h-9 min-w-0 flex-1 touch-none select-none items-center gap-2 rounded-md px-2 text-left"
+          className="flex h-8 min-w-0 flex-1 touch-none select-none items-center gap-1.5 rounded-lg px-1.5 text-left focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
           aria-current={selectedProject ? 'true' : undefined}
           onClick={() => {
             if (!selectedProject) {
@@ -174,7 +197,7 @@ function ProjectNode({ project, reorder, switcher }: {
           aria-expanded={!collapsed}
         >
           <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-150', !collapsed && 'rotate-90')} />
-          <TruncatedText className="min-w-0 flex-1 truncate text-[13px] font-medium">{project.name}</TruncatedText>
+          <TruncatedText className={cn('min-w-0 flex-1 truncate text-[13px] font-medium', selectedProject && 'font-semibold')}>{project.name}</TruncatedText>
           {project.missing ? (
             <Tooltip content="The project folder no longer exists">
               <AlertTriangle className="size-3.5 shrink-0 text-st-blocked" />
@@ -212,7 +235,7 @@ function ProjectNode({ project, reorder, switcher }: {
         </Tooltip>
       </div>
       {switcher || !collapsed ? (
-        <ul className="mb-1.5 ml-[15px] mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
+        <ul className="ml-3 mt-1 flex flex-col gap-0.5 border-l border-border pl-1">
           {workspaces.length === 0 ? <li className="px-2 py-1.5 text-xs text-muted-foreground">No workspaces yet</li> : null}
           {workspaceOrder.order.map((id) => {
             const w = workspacesById.get(id)!;
@@ -221,27 +244,55 @@ function ProjectNode({ project, reorder, switcher }: {
             const running = mine.some((s) => s.state === 'working');
             const on = selectedWs === w.id;
             const isWt = w.dir_kind === 'worktree';
+            const linkedPulls = isWt && !w.worktree_removed && w.branch ? pullsByBranch.get(w.branch) : undefined;
             return (
-              <li key={w.id} {...workspaceOrder.row(w.id)} className={cn(workspaceOrder.indicator, 'group flex min-h-8 items-center gap-1 rounded-md hover:bg-accent has-[[data-state=open]]:bg-accent', on && 'bg-accent')}>
-                <button
-                  {...workspaceOrder.item(w.id)}
-                  type="button"
-                  aria-current={on ? 'page' : undefined}
-                  title={isWt ? `Worktree · ${w.branch ?? w.work_dir}` : 'Project folder'}
-                  className="flex min-w-0 flex-1 items-center gap-2 self-stretch touch-none select-none rounded-md pl-2 text-left"
-                  onClick={() => useUiStore.getState().selectWorkspace(project.id, w.id)}
-                >
-                  {running ? (
-                    <Spinner className="size-3.5" label="Agent running" />
-                  ) : isWt ? (
-                    <GitBranch className="size-3.5 shrink-0 text-muted-foreground" aria-label="Worktree" />
-                  ) : (
-                    <Square className="size-3.5 shrink-0 text-muted-foreground" aria-label="Project folder" />
-                  )}
-                  <TruncatedText className={cn('min-w-0 flex-1 truncate text-[12px]', on && 'font-medium')}>{w.name ?? 'New workspace'}</TruncatedText>
-                  {needs ? <span className="size-1.5 shrink-0 rounded-full bg-st-blocked" role="img" aria-label="Session awaiting approval" /> : null}
-                </button>
-                <WorkspaceMenu ws={w} variant="sidebar" />
+              <li key={w.id} {...workspaceOrder.row(w.id)} className={cn(workspaceOrder.indicator,
+                'group rounded-md hover:bg-accent has-[[data-state=open]]:bg-accent',
+                on && 'bg-primary/10 ring-1 ring-inset ring-primary/25')}>
+                <div className="flex min-h-8 items-center">
+                  <button
+                    {...workspaceOrder.item(w.id)}
+                    type="button"
+                    aria-current={on ? 'page' : undefined}
+                    title={isWt ? `Worktree · ${w.branch ?? w.work_dir}` : 'Project folder'}
+                    className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch touch-none select-none rounded-md pl-1.5 text-left focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+                    onClick={() => useUiStore.getState().selectWorkspace(project.id, w.id)}
+                  >
+                    {running ? (
+                      <Spinner className="size-3.5" label="Agent running" />
+                    ) : isWt ? (
+                      <GitBranch className="size-3.5 shrink-0 text-muted-foreground" aria-label="Worktree" />
+                    ) : (
+                      <Square className="size-3.5 shrink-0 text-muted-foreground" aria-label="Project folder" />
+                    )}
+                    <TruncatedText className={cn('min-w-0 flex-1 truncate text-[12px]', on && 'font-medium')}>{w.name ?? 'New workspace'}</TruncatedText>
+                    {needs ? <span className="size-1.5 shrink-0 rounded-full bg-st-blocked" role="img" aria-label="Session awaiting approval" /> : null}
+                  </button>
+                  <WorkspaceMenu ws={w} variant="sidebar" />
+                </div>
+                {repository && linkedPulls?.length ? (
+                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pb-1 pl-6 pr-1.5">
+                    {linkedPulls.map((pull) => {
+                      const status = pullStatuses[pull.state === 'OPEN' && pull.isDraft ? 'DRAFT' : pull.state];
+                      return (
+                        <button
+                          key={pull.number}
+                          type="button"
+                          aria-label={`Open pull request #${pull.number} on GitHub · ${status.label}`}
+                          title={`${status.label} pull request #${pull.number}`}
+                          className={cn('inline-flex min-h-6 cursor-pointer items-center rounded-full hover:underline focus-visible:outline-2 focus-visible:outline-ring',
+                            pull.state === 'MERGED' && 'text-[color:color-mix(in_srgb,var(--git-graph-purple),var(--foreground)_25%)]')}
+                          onClick={() => void openOriginal(repository, pull.number)}
+                        >
+                          <Badge variant={status.variant} className={cn('gap-1 rounded-full px-1.5 tabular-nums', pull.state === 'MERGED' && 'text-inherit')}>
+                            <status.icon aria-hidden="true" />
+                            #{pull.number}
+                          </Badge>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </li>
             );
           })}
@@ -258,33 +309,6 @@ function ProjectNode({ project, reorder, switcher }: {
         }}
       />
       <DeleteProjectDialog project={project} open={deleting} onOpenChange={setDeleting} />
-    </div>
-  );
-}
-
-function HcStatus() {
-  const { data } = useAppInfo();
-  const statuses = useUiStore((s) => s.statuses);
-  const ok = data?.hc_connected;
-  const running = Object.values(statuses).filter((s) => s.state === 'working' || s.state === 'blocked').length;
-  const label = ok
-    ? running
-      ? `${running} ${running === 1 ? 'session' : 'sessions'} running`
-      : 'hc connected'
-    : data?.hc_path
-      ? 'hc not connected'
-      : 'hc not installed';
-  return (
-    <div className="flex flex-col gap-0.5 border-t border-border pt-2">
-      <div className="flex h-8 items-center gap-2 px-2 text-xs text-muted-foreground">
-        <span className={cn('size-1.5 shrink-0 rounded-full', ok ? 'bg-st-done' : 'bg-st-error')} aria-hidden="true" />
-        <TruncatedText className="flex-1 truncate">{label}</TruncatedText>
-        {data && !data.node_path ? (
-          <Tooltip content="Node.js not found — agents cannot run">
-            <AlertTriangle className="size-3.5 text-st-blocked" aria-label="Node.js not found" />
-          </Tooltip>
-        ) : null}
-      </div>
     </div>
   );
 }

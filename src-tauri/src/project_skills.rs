@@ -105,7 +105,7 @@ fn claude_home() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
 }
 
-fn git_path(cwd: &Path, option: &str) -> Option<PathBuf> {
+pub(crate) fn git_path(cwd: &Path, option: &str) -> Option<PathBuf> {
     let output = Command::new("git")
         .args(["rev-parse", "--path-format=absolute", option])
         .current_dir(cwd)
@@ -486,17 +486,39 @@ pub fn plugin_path(session_dir: &Path) -> PathBuf {
 }
 
 pub async fn prepare(st: &AppState, workspace: &store::Workspace, sid: &str) -> Vec<String> {
+    prepare_with(st, workspace, sid, stage).await
+}
+
+/// Resume/restart: keep the skills staged when the session was created; rebuild only a lost copy
+/// (spec 071 FR-003).
+pub async fn prepare_missing(st: &AppState, workspace: &store::Workspace, sid: &str) -> Vec<String> {
+    prepare_with(st, workspace, sid, stage_if_missing).await
+}
+
+async fn prepare_with(
+    st: &AppState,
+    workspace: &store::Workspace,
+    sid: &str,
+    run: fn(&Path, &Path, &Path, &Config) -> AppResult<Vec<String>>,
+) -> Vec<String> {
     let result = read_config(st, &workspace.project_id).and_then(|(_, raw)| decode(raw.as_deref()));
     let data = st.data_dir.clone();
     let cwd = PathBuf::from(&workspace.work_dir);
     let session = st.session_dir(sid);
-    match blocking(move || stage(&data, &cwd, &session, &result?)).await {
+    match blocking(move || run(&data, &cwd, &session, &result?)).await {
         Ok(warnings) => warnings,
         Err(error) => vec![format!(
             "Could not attach project skills: {}",
             error.message
         )],
     }
+}
+
+fn stage_if_missing(data: &Path, cwd: &Path, session: &Path, config: &Config) -> AppResult<Vec<String>> {
+    if plugin_path(session).is_dir() {
+        return Ok(Vec::new());
+    }
+    stage(data, cwd, session, config)
 }
 
 fn stage(data: &Path, cwd: &Path, session: &Path, config: &Config) -> AppResult<Vec<String>> {
@@ -661,6 +683,30 @@ mod tests {
             staged.is_dir(),
             "a previously launched session keeps its copy"
         );
+    }
+
+    #[test]
+    fn resume_rebuilds_only_a_lost_plugin() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let managed = root.join("managed");
+        let folder = write_skill(&managed, "herdsman-test-resume", "FIRST");
+        let id = SkillId { source_id: "a-source".into(), directory: "herdsman-test-resume".into() };
+        let config = Config {
+            sources: vec![Source { id: id.source_id.clone(), path: managed }],
+            enabled: vec![id.clone()],
+        };
+        let session = root.join("session");
+        let staged = plugin_path(&session).join("skills").join(&id.directory).join("SKILL.md");
+        assert!(stage(root, root, &session, &config).unwrap().is_empty());
+
+        write_skill(folder.parent().unwrap(), "herdsman-test-resume", "SECOND");
+        assert!(stage_if_missing(root, root, &session, &config).unwrap().is_empty());
+        assert_eq!(frontmatter(&staged).unwrap().1, "FIRST", "an existing copy is kept");
+
+        fs::remove_dir_all(plugin_path(&session)).unwrap();
+        assert!(stage_if_missing(root, root, &session, &config).unwrap().is_empty());
+        assert_eq!(frontmatter(&staged).unwrap().1, "SECOND", "a lost copy is rebuilt");
     }
 
     #[test]

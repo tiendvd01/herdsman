@@ -28,6 +28,8 @@ parking_lot = "0.12"
 tempfile = "3"
 portable-pty = "0.9"
 shell-words = "1"
+# spec 071: MCP secrets in Keychain
+keyring = { version = "3", features = ["apple-native"] }
 
 # spec 010: list installed font families for Settings → Appearance.
 [target.'cfg(target_os = "macos")'.dependencies]

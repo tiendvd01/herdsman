@@ -2,7 +2,14 @@ import type { HighlighterCore } from 'shiki';
 
 let hl: Promise<HighlighterCore> | null = null;
 function highlighter() {
-  hl ??= import('shiki').then((m) => m.createHighlighter({ themes: ['github-light', 'github-dark'], langs: [] }) as Promise<HighlighterCore>);
+  hl ??= Promise.all([import('shiki'), import('shiki/onig.wasm?url&inline')]).then(
+    ([{ createHighlighter, createOnigurumaEngine }, { default: wasm }]) => createHighlighter({
+      // Shiki's default loader uses Response.bytes(), unavailable on older WebKit.
+      engine: createOnigurumaEngine(() => fetch(wasm).then((response) => response.arrayBuffer())),
+      themes: ['github-light', 'github-dark'],
+      langs: [],
+    }),
+  );
   return hl;
 }
 export async function loadCodeLanguage(lang: string) {

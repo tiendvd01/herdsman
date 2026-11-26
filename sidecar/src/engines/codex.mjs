@@ -112,6 +112,30 @@ export async function probeCodex(binary, cwd, action, threadId) {
   }
 }
 
+function turnUsage(total, baseline = {}) {
+  const delta = (key) => Math.max(0, (total[key] ?? 0) - (baseline[key] ?? 0));
+  return {
+    input_tokens: delta('inputTokens'),
+    cache_read_input_tokens: delta('cachedInputTokens'),
+    ...(total.cacheWriteInputTokens == null ? {} : { cache_creation_input_tokens: delta('cacheWriteInputTokens') }),
+    output_tokens: delta('outputTokens'),
+  };
+}
+
+function usageWindows(snapshot) {
+  const limits = {};
+  for (const [fallback, window] of [['five_hour', snapshot?.primary], ['seven_day', snapshot?.secondary]]) {
+    if (!Number.isFinite(window?.usedPercent)) continue;
+    const key = window.windowDurationMins == null ? fallback
+      : window.windowDurationMins === 300 ? 'five_hour'
+      : window.windowDurationMins === 10080 ? 'seven_day' : null;
+    if (!key) continue;
+    const reset = new Date(Number.isFinite(window.resetsAt) ? window.resetsAt * 1000 : NaN);
+    limits[key] = { pct: window.usedPercent, resets_at: Number.isFinite(reset.getTime()) ? reset.toISOString() : null };
+  }
+  return limits;
+}
+
 export function createCodexEngine(ctx) {
   let model = ctx.model;
   let threadId = ctx.resumeId;
@@ -139,6 +163,23 @@ export function createCodexEngine(ctx) {
     return connection;
   }
   rpc = connect();
+
+  let limits = {};
+  let contextPct = null;
+  let previousTotal;
+  let usageBaseline;
+  let activeUsage;
+  function publishContext(percentage) {
+    contextPct = percentage;
+    ctx.emit('usage_snapshot', { provider: 'codex', context_pct: contextPct, limits: null });
+  }
+  function publishUsage(snapshot, initial = false) {
+    if (stopped || (snapshot?.limitId && snapshot.limitId !== 'codex')) return;
+    const update = usageWindows(snapshot);
+    if (!Object.keys(update).length) return;
+    limits = initial ? { ...update, ...limits } : { ...limits, ...update };
+    ctx.emit('usage_snapshot', { provider: 'codex', context_pct: contextPct, limits });
+  }
 
   function fail(error) {
     ctx.emit('assistant_message', {
@@ -190,17 +231,34 @@ export function createCodexEngine(ctx) {
       }
       return;
     }
+    if (method === 'account/rateLimits/updated') {
+      publishUsage(params?.rateLimits);
+      return;
+    }
     if (params?.threadId !== threadId) return;
     if (method === 'serverRequest/resolved') approvals.get(params.requestId)?.abort();
     if (!active) return;
     const { item, turn } = params;
     if (method === 'turn/started') turnId = turn.id;
+    if (method === 'thread/tokenUsage/updated' && (!turnId || params.turnId === turnId)) {
+      const { last, total, modelContextWindow } = params.tokenUsage ?? {};
+      if (last && total) {
+        // A resumed thread can report cumulative usage from before this connection.
+        usageBaseline ??= Object.fromEntries(
+          Object.entries(last).map(([key, value]) => [key, Math.max(0, (total[key] ?? 0) - value)]),
+        );
+        activeUsage = turnUsage(total, usageBaseline);
+        previousTotal = total;
+        publishContext(modelContextWindow > 0 ? last.totalTokens / modelContextWindow * 100 : null);
+      }
+    }
     if (method === 'item/agentMessage/delta') {
       ctx.emit('delta', { message_id: params.itemId, text: params.delta }, { live: true });
     }
     if (method === 'item/started' && item.type === 'fileChange') changes.set(item.id, item.changes);
     if (method === 'item/completed') {
       if (item.type === 'userMessage') recordedItems.add(item.id);
+      else if (item.type === 'contextCompaction') publishContext(null);
       else recordMessage(item);
       if (tools.delete(item.id)) {
         ctx.emit('tool_result', { tool_use_id: item.id, is_error: item.status !== 'completed', content: item.aggregatedOutput || item.status });
@@ -213,7 +271,7 @@ export function createCodexEngine(ctx) {
       const errored = turn.status === 'failed';
       if (errored) fail(new Error('The Codex turn failed. Check Codex sign-in and configuration, then try again.'));
       else {
-        ctx.emit('turn_end', { interrupted, is_error: false, usage: null, model, codex_turn_id: turn.id });
+        ctx.emit('turn_end', { interrupted, is_error: false, usage: activeUsage ?? null, model, codex_turn_id: turn.id });
         ctx.onTurnState('idle', interrupted ? undefined : 'turn_complete');
       }
       recordedTurns.add(turn.id);
@@ -232,6 +290,9 @@ export function createCodexEngine(ctx) {
     };
   };
   const initialized = verifyAccount(rpc, ctx.codexBinary).then(async () => {
+    void rpc.request('account/rateLimits/read', {}).then((response) => {
+      publishUsage(response.rateLimitsByLimitId?.codex ?? response.rateLimits, true);
+    }).catch(() => {});
     const settings = { cwd: ctx.cwd, model };
     const importing = !!threadId && !ctx.codexHistoryImported;
     if (importing) {
@@ -265,10 +326,17 @@ export function createCodexEngine(ctx) {
         try { await initialized; } catch { ctx.onTurnState('error'); return; }
         if (stopped) return;
         ctx.onTurnState('working');
+        usageBaseline = previousTotal;
+        activeUsage = undefined;
         const completed = new Promise((resolve) => {
           active = () => { active = undefined; turnId = undefined; resolve(); };
         });
         try {
+          if (text.trim() === '/compact' && !images.length) {
+            await rpc.request('thread/compact/start', { threadId });
+            await completed;
+            return;
+          }
           const input = [{ type: 'text', text, text_elements: [] }, ...images.map((image) => ({
             type: 'image', url: `data:${image.media_type};base64,${image.data_b64}`,
           }))];
@@ -288,6 +356,8 @@ export function createCodexEngine(ctx) {
               rpc = replacement;
               previous.close();
               hasPermissionOverride = false;
+              previousTotal = undefined;
+              usageBaseline = undefined;
             } catch (error) {
               replacement.close();
               throw error;

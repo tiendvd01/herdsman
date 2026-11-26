@@ -151,6 +151,8 @@ export interface SlashCommandInfo {
   description: string;
   argument_hint: string;
   builtin: boolean;
+  /** Plugin namespace when the engine reports `plugin:name`. */
+  plugin?: string;
 }
 
 // ── AgentEvent ──
@@ -162,6 +164,7 @@ export interface LimitWindow {
   pct: number | null;
   resets_at: string | null;
 }
+export type UsageProvider = 'claude' | 'codex';
 export interface UsageLimits {
   five_hour?: LimitWindow | null;
   seven_day?: LimitWindow | null;
@@ -196,8 +199,8 @@ export type AgentEvent = Base &
     | { type: 'model_fallback'; unavailable_model: string; message: string }
     | { type: 'model_changed'; model: string; previous: string | null }
     | { type: 'status'; state: SessionStatus; kind: string | null }
-    | { type: 'usage_snapshot'; context_pct: number | null; limits: UsageLimits | null }
-    | { type: 'turn_end'; interrupted: boolean; is_error?: boolean; usage?: { input_tokens: number; output_tokens: number }; cost_usd?: number | null; model?: string }
+    | { type: 'usage_snapshot'; provider?: UsageProvider; context_pct: number | null; limits: UsageLimits | null }
+    | { type: 'turn_end'; interrupted: boolean; is_error?: boolean; usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | null; cost_usd?: number | null; model?: string }
     | { type: 'project_skills_warning'; message: string }
     | { type: 'error'; code: string; message: string; recoverable: boolean }
   );
