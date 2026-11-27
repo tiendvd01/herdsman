@@ -7,20 +7,22 @@ export const Dialog = D.Root;
 export const DialogTrigger = D.Trigger;
 export const DialogClose = D.Close;
 
-export function DialogContent({ className, children, hideClose, ...props }: React.ComponentProps<typeof D.Content> & { hideClose?: boolean }) {
+export function DialogContent({ className, bodyClassName, children, hideClose, ...props }: React.ComponentProps<typeof D.Content> & { bodyClassName?: string; hideClose?: boolean }) {
   return (
     <D.Portal>
       <D.Overlay className="fixed inset-0 z-50 bg-scrim" />
       <D.Content
         className={cn(
-          'fixed left-1/2 top-[min(120px,20%)] z-50 flex max-h-[75%] w-[min(480px,calc(100%-32px))] overflow-y-auto -translate-x-1/2 flex-col gap-4 rounded-xl border border-border bg-background p-6 shadow-lg focus:outline-none',
+          'fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%_-_2rem)] w-[min(480px,calc(100%-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-overlay focus:outline-none',
           className,
         )}
         {...props}
       >
-        {children}
+        <div className={cn('flex min-h-0 flex-col gap-4 overflow-y-auto p-6 scroll-pb-2', hideClose ? 'scroll-pt-2' : 'scroll-pt-11', bodyClassName)}>
+          {children}
+        </div>
         {hideClose ? null : (
-          <D.Close className="absolute right-3 top-3 flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close">
+          <D.Close className="absolute right-3 top-3 flex size-7 items-center justify-center rounded-md bg-surface text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close">
             <X className="size-4" />
           </D.Close>
         )}
@@ -32,8 +34,8 @@ export function DialogContent({ className, children, hideClose, ...props }: Reac
 export function DialogHeader({ title, description }: { title: React.ReactNode; description?: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5 pr-6">
-      <D.Title className="text-[16px] font-semibold leading-tight">{title}</D.Title>
-      {description ? <D.Description className="text-[13px] text-muted-foreground">{description}</D.Description> : <D.Description />}
+      <D.Title className="text-lg font-semibold leading-tight">{title}</D.Title>
+      {description ? <D.Description className="text-sm text-muted-foreground">{description}</D.Description> : <D.Description />}
     </div>
   );
 }

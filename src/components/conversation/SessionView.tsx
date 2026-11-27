@@ -63,7 +63,7 @@ export function SessionView({ session, ws }: { session: Session; ws: Workspace }
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {!view?.loaded && !view?.error ? (
-        <div className="flex flex-1 items-center justify-center text-[12px] text-muted-foreground">{historyOnly ? 'Loading conversation…' : 'Connecting to agent…'}</div>
+        <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">{historyOnly ? 'Loading conversation…' : 'Connecting to agent…'}</div>
       ) : isEmpty ? (
         <EmptySession />
       ) : (
@@ -73,8 +73,8 @@ export function SessionView({ session, ws }: { session: Session; ws: Workspace }
         <div className={`${COLUMN} pb-2`}>
           <div role="status" className="flex items-start gap-3 rounded-lg border border-border bg-background py-3 pl-4 pr-2">
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="text-[13px] font-medium">{view?.error ? 'Could not connect to the agent' : status === 'error' ? 'The agent stopped unexpectedly' : 'The agent has finished'}</span>
-              <span className="text-[12px] text-muted-foreground">{view?.error ? `${view.error}. ` : ''}Resume to continue the conversation.</span>
+              <span className="text-sm font-medium">{view?.error ? 'Could not connect to the agent' : status === 'error' ? 'The agent stopped unexpectedly' : 'The agent has finished'}</span>
+              <span className="text-xs text-muted-foreground">{view?.error ? `${view.error}. ` : ''}Resume to continue the conversation.</span>
             </div>
             <Button size="sm" variant="outline" onClick={resume} disabled={resuming}>
               <RotateCcw /> {resuming ? 'Resuming…' : 'Resume'}

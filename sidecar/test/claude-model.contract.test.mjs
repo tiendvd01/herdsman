@@ -8,7 +8,7 @@ const result = (is_error = false) => ({ type: 'result', subtype: is_error ? 'err
 const assistant = (model, content = []) => ({ type: 'assistant', message: { model, content } });
 const unavailable = { ...assistant(undefined), error: 'model_not_found' };
 
-function fixture(t, initialModel, respond) {
+function fixture(t, initialModel, respond, controls = {}) {
   const events = [];
   const requests = [];
   const changes = [];
@@ -32,6 +32,7 @@ function fixture(t, initialModel, respond) {
     configured = options.model;
     let model = configured;
     return {
+      ...controls,
       async interrupt() {},
       async setModel(next) {
         changes.push(next);
@@ -73,6 +74,34 @@ test('Claude uses the inherited model before submitting the first prompt', { tim
   assert.deepEqual(s.changes, []);
   assert.deepEqual(s.states, [{ state: 'idle', kind: 'turn_complete' }]);
   assert.equal(s.events.find((event) => event.type === 'turn_end').model, 'claude-sonnet');
+});
+
+test('Claude delivers rate limits during a turn and reads account usage independently of context', { timeout: 3000 }, async (t) => {
+  let finishTurn;
+  const release = new Promise((resolve) => { finishTurn = resolve; });
+  t.after(finishTurn);
+  const s = fixture(t, undefined, async function* () {
+    yield { type: 'rate_limit_event', rate_limit_info: { rateLimitType: 'five_hour', utilization: 0.42 } };
+    await release;
+    yield result();
+  }, {
+    getContextUsage: () => new Promise(() => {}),
+    async usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET() {
+      return { rate_limits_available: true, rate_limits: { seven_day: { utilization: 7 } } };
+    },
+  });
+  s.engine.prompt('long turn');
+  const refreshed = await s.engine.readUsage();
+  await new Promise(setImmediate);
+  assert.deepEqual(refreshed.limits, { seven_day: { pct: 7, resets_at: null } });
+  assert.deepEqual(s.events.find((e) => e.type === 'usage_snapshot'), {
+    type: 'usage_snapshot', limits: { five_hour: { pct: 42, resets_at: null } },
+  });
+  assert.equal(s.events.some((e) => e.type === 'turn_end'), false);
+  finishTurn();
+  await s.waitForTurns(1);
+  await new Promise(setImmediate);
+  assert.deepEqual(s.events.filter((e) => e.type === 'usage_snapshot').at(-1).limits, refreshed.limits);
 });
 
 test('Claude retries a rejected inherited model once, before forwarding the next prompt', { timeout: 3000 }, async (t) => {

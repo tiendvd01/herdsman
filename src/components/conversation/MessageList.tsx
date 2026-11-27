@@ -182,9 +182,9 @@ function ItemView({ item, sessionId, onSelect, openFile }: {
               ))}
             </div>
           )}
-          <div className="rounded-xl bg-muted px-3 py-2 text-content whitespace-pre-wrap break-words">
+          <div className="rounded-xl bg-muted px-3 py-2 shadow-recessed text-content whitespace-pre-wrap break-words">
             {item.source === 'hc_send' ? (
-              <div className="mb-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+              <div className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                 <Terminal className="size-3" /> via hc send
               </div>
             ) : null}
@@ -199,7 +199,7 @@ function ItemView({ item, sessionId, onSelect, openFile }: {
         <div className="flex flex-col gap-4 pt-4">
           {item.blocks.map((b, i) =>
             b.kind === 'thinking' ? (
-              <details key={i} className="text-[12px] text-muted-foreground">
+              <details key={i} className="text-xs text-muted-foreground">
                 <summary className="cursor-pointer select-none">Thinking</summary>
                 <div className="mt-1 whitespace-pre-wrap border-l border-border pl-3">{b.text}</div>
               </details>
@@ -220,7 +220,7 @@ function ItemView({ item, sessionId, onSelect, openFile }: {
       const cacheRead = usage?.cache_read_input_tokens;
       const cacheWrite = usage?.cache_creation_input_tokens;
       return (
-        <div className="flex items-center gap-3 pt-6 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-3 pt-6 text-xs text-muted-foreground">
           <div className="h-px flex-1 bg-border" />
           <span className="text-center font-mono">
             {item.interrupted ? 'interrupted · ' : ''}
@@ -244,7 +244,7 @@ function ItemView({ item, sessionId, onSelect, openFile }: {
         <div className="pt-6">
           <div
             role={item.tone === 'error' ? 'alert' : 'status'}
-            className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-[12px] ${item.tone === 'error' ? 'border-destructive/40 bg-danger-bg text-destructive' : 'border-border bg-background'}`}
+            className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-xs ${item.tone === 'error' ? 'border-destructive/40 bg-danger-bg text-destructive' : 'border-border bg-background'}`}
           >
             {item.tone === 'error' ? <AlertCircle className="mt-0.5 size-4 shrink-0" /> : <Info className="mt-0.5 size-4 shrink-0" />}
             <span className="whitespace-pre-wrap break-words">{item.text}</span>

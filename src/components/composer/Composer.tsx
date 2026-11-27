@@ -113,6 +113,7 @@ export function Composer({
   const fileRef = useRef<HTMLInputElement>(null);
   const working = status === 'working' || status === 'blocked';
   const typedSlash = text.startsWith('/') && !/\s/.test(text);
+  const typedSkill = session.engine === 'codex' && text.startsWith('$') && !/\s/.test(text);
   const clearCommand = images.length === 0 && !/[\r\n]/.test(text)
     ? /^\/clear(?:\s+(.+))?$/.exec(text.trim())
     : null;
@@ -143,10 +144,10 @@ export function Composer({
     ? [
         ...engineCommands
           // Project/user skills first: they're what people come to the menu for.
-          .filter((c) => c.name !== 'clear')
+          .filter((c) => c.name !== 'clear' || (session.engine === 'codex' && !c.builtin))
           .sort((a, b) => Number(a.builtin) - Number(b.builtin) || shortName(a).localeCompare(shortName(b)))
           .map((c) => ({
-            cmd: '/' + c.name,
+            cmd: (session.engine === 'codex' && !c.builtin ? '$' : '/') + c.name,
             label: namespaceOf(c) ? '/' + shortName(c) : undefined,
             // Claude prefixes plugin skill descriptions with "(plugin) "; the badge already says where it comes from.
             desc: namespaceOf(c) ? c.description.replace(`(${namespaceOf(c)}) `, '') : c.description,
@@ -156,13 +157,16 @@ export function Composer({
         CLEAR,
       ]
     : SLASH;
-  const menuShown = typedSlash || slashOpen;
+  const menuShown = typedSlash || typedSkill || slashOpen;
   const { refetch: refetchCommands } = commands;
   // Pick up skills added mid-session when the menu opens (cached for 30s).
   useEffect(() => {
     if (menuShown) refetchCommands();
   }, [menuShown, refetchCommands]);
-  const slash = typedSlash ? all.filter((s) => s.cmd.startsWith(text) || !!s.label?.startsWith(text)) : slashOpen ? all : [];
+  const slash = typedSlash || typedSkill ? all.filter((s) => {
+    const prefix = typedSlash && s.cmd.startsWith('$') ? '$' + text.slice(1) : text;
+    return s.cmd.startsWith(prefix) || !!s.label?.startsWith(text);
+  }) : slashOpen ? all : [];
   const slashListRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     slashListRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' });
@@ -237,7 +241,7 @@ export function Composer({
   return (
     <div className={cn(COLUMN, 'flex flex-col gap-1.5 pb-6', expanded ? 'min-h-0 shrink' : 'shrink-0')}>
       {slash.length ? (
-        <div className="flex max-h-72 flex-col rounded-lg border border-border bg-background p-1 shadow-md">
+        <div className="flex max-h-72 flex-col rounded-lg border border-border bg-surface p-1 shadow-overlay">
           <span className="shrink-0 px-2 py-1.5 text-xs font-medium text-muted-foreground">Commands</span>
           <div ref={slashListRef} role="listbox" aria-label="Slash commands" className="flex min-h-0 flex-col overflow-y-auto">
             {slash.map((s, i) => (
@@ -251,18 +255,18 @@ export function Composer({
                 onMouseMove={() => setSlashIdx(i)}
                 onClick={() => pickSlash(s.cmd)}
               >
-                <span className="shrink-0 font-mono text-[12px]">
+                <span className="shrink-0 font-mono text-xs">
                   {s.label ?? s.cmd}
                   {s.hint ? <span className="ml-1.5 text-muted-foreground">{s.hint}</span> : null}
                 </span>
-                {s.source ? <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px]">{s.source}</Badge> : null}
-                <TruncatedText className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">{s.desc}</TruncatedText>
+                {s.source ? <Badge variant="outline" className="shrink-0 px-1.5 py-0">{s.source}</Badge> : null}
+                <TruncatedText className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{s.desc}</TruncatedText>
               </button>
             ))}
           </div>
         </div>
       ) : null}
-      <div className="relative flex min-h-0 flex-col gap-2 rounded-xl border border-input bg-background p-3 shadow-xs focus-within:ring-2 focus-within:ring-ring dark:shadow-none">
+      <div className="relative flex min-h-0 flex-col gap-2 rounded-xl border border-input bg-code p-3 shadow-recessed focus-within:ring-2 focus-within:ring-ring">
         {expanded ? (
           <ResizeHandle
             orientation="horizontal"
@@ -278,7 +282,7 @@ export function Composer({
         {images.length ? (
           <div className="flex flex-wrap gap-1.5">
             {images.map((img, i) => (
-              <span key={img.url} className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border pr-0.5 text-xs transition-colors duration-150 hover:border-foreground/50 hover:bg-accent/50 motion-reduce:transition-none">
+              <span key={img.url} className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-surface pr-0.5 text-xs transition-colors duration-150 hover:border-input hover:bg-accent motion-reduce:transition-none">
                 <ImageThumbnail
                   src={img.url}
                   label={img.name}
@@ -325,7 +329,8 @@ export function Composer({
               setSlashIdx((i) => (e.key === 'ArrowDown' ? Math.min(slash.length - 1, i + 1) : Math.max(0, i - 1)));
               return;
             }
-            if (slash.length && (e.key === 'Tab' || (e.key === 'Enter' && typedSlash && !clearCommand && !e.shiftKey && !e.nativeEvent.isComposing))) {
+            const completeCommand = (typedSlash && !clearCommand) || (typedSkill && !slash.some((s) => s.cmd === text));
+            if (slash.length && (e.key === 'Tab' || (e.key === 'Enter' && completeCommand && !e.shiftKey && !e.nativeEvent.isComposing))) {
               e.preventDefault();
               pickSlash(slash[Math.min(slashIdx, slash.length - 1)].cmd);
               return;
@@ -333,7 +338,7 @@ export function Composer({
             if (e.key === 'Escape') {
               if (slash.length) {
                 setSlashOpen(false);
-                if (typedSlash) setText('');
+                if (typedSlash || typedSkill) setText('');
               } else if (expanded) setExpanded(false);
               else if (working) interrupt();
               return;
@@ -386,7 +391,7 @@ export function Composer({
               size="icon"
               aria-label="Slash commands"
               aria-expanded={slash.length > 0}
-              className={cn('font-mono text-[14px] font-normal', slashOpen && 'bg-accent')}
+              className={cn('font-mono text-base font-normal', slashOpen && 'bg-accent')}
               onClick={() => setSlashOpen((o) => !o)}
             >
               /

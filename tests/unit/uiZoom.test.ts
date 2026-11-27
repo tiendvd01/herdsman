@@ -20,8 +20,10 @@ describe('rendered UI zoom', () => {
       expect(currentZoomFactor()).toBe(1.1);
       await applyZoom(nextZoom(zoom, 1));
       expect(currentZoomFactor()).toBeCloseTo(1.21);
+      expect(Number(document.documentElement.style.getPropertyValue('--css-zoom'))).toBeCloseTo(1.21);
     } finally {
       document.documentElement.style.zoom = '';
+      document.documentElement.style.removeProperty('--css-zoom');
     }
   });
 
@@ -34,9 +36,13 @@ describe('rendered UI zoom', () => {
       setZoom.mockRejectedValueOnce(new Error('Zoom unavailable'));
       await applyZoom(1.5);
       expect(currentZoomFactor()).toBeCloseTo(1.65);
+      expect(Number(document.documentElement.style.getPropertyValue('--css-zoom'))).toBeCloseTo(1.65);
+      await applyZoom(1);
+      expect(document.documentElement.style.getPropertyValue('--css-zoom')).toBe('');
     } finally {
       vi.unstubAllGlobals();
       document.documentElement.style.zoom = '';
+      document.documentElement.style.removeProperty('--css-zoom');
     }
   });
 });

@@ -1,5 +1,5 @@
 import { usePathLabel } from '@/lib/homePath';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { History } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -12,30 +12,37 @@ import { TruncatedText } from '@/components/ui/truncated-text';
 import { openStoredSession } from '@/lib/actions';
 import { api, errMsg } from '@/lib/api';
 import { qk } from '@/lib/queries';
-import type { ClaudeHit, StoredHistoryEntry } from '@/lib/types';
+import type { ClaudeHit, CodexHistoryEntry, StoredHistoryEntry } from '@/lib/types';
 import { timeAgo } from '@/lib/utils';
 import { useUiStore } from '@/stores/useUiStore';
+import { CodexHistoryDialog, codexHistoryTitle } from './CodexHistoryDialog';
 
-type HistoryRow = { stored?: StoredHistoryEntry; claude?: ClaudeHit; updatedAt: number };
+type HistoryRow = { stored?: StoredHistoryEntry; claude?: ClaudeHit; codex?: CodexHistoryEntry; updatedAt: number };
 const noStored: StoredHistoryEntry[] = [];
 const noClaude: ClaudeHit[] = [];
+const noCodex: CodexHistoryEntry[] = [];
 const ENGINE_NAME = { claude: 'Claude Code', codex: 'Codex', echo: 'Echo' };
 
-function historyRows(stored: StoredHistoryEntry[], claude: ClaudeHit[], matches: StoredHistoryEntry[]) {
+function preferStored(previous: StoredHistoryEntry | undefined, entry: StoredHistoryEntry) {
+  if (!previous) return entry;
+  if (!!previous.workspace.deleted_at !== !!entry.workspace.deleted_at) return previous.workspace.deleted_at ? entry : previous;
+  return previous.session.updated_at >= entry.session.updated_at ? previous : entry;
+}
+
+function historyRows(stored: StoredHistoryEntry[], claude: ClaudeHit[], codex: CodexHistoryEntry[], matches: StoredHistoryEntry[], query: string) {
   const byId = new Map(stored.map((entry) => [entry.session.id, entry]));
+  const byCodexId = new Map<string, StoredHistoryEntry>();
   const rows = new Map<string, HistoryRow>();
   const storedKey = ({ session }: StoredHistoryEntry) =>
-    session.engine === 'claude' && session.engine_session_id ? `claude:${session.engine_session_id}` : session.id;
+    session.engine !== 'echo' && session.engine_session_id ? `${session.engine}:${session.engine_session_id}` : session.id;
+  for (const entry of stored) {
+    const { engine, engine_session_id: id } = entry.session;
+    if (engine === 'codex' && id) byCodexId.set(id, preferStored(byCodexId.get(id), entry));
+  }
   for (const entry of matches) {
     const key = storedKey(entry);
-    const previous = rows.get(key)?.stored;
-    if (previous) {
-      const bothRetained = !!previous.workspace.deleted_at === !!entry.workspace.deleted_at;
-      const preferPrevious = bothRetained
-        ? previous.session.updated_at >= entry.session.updated_at : !previous.workspace.deleted_at;
-      if (preferPrevious) continue;
-    }
-    rows.set(key, { stored: entry, updatedAt: entry.session.updated_at });
+    const preferred = preferStored(rows.get(key)?.stored, entry);
+    rows.set(key, { stored: preferred, updatedAt: preferred.session.updated_at });
   }
   for (const hit of claude) {
     const key = `claude:${hit.claude_session_id}`;
@@ -44,6 +51,16 @@ function historyRows(stored: StoredHistoryEntry[], claude: ClaudeHit[], matches:
     const entry = (hit.session_id ? byId.get(hit.session_id) : undefined) ?? previous?.stored;
     const stored = entry && { ...entry, snippet: previous?.stored?.snippet ?? entry.snippet };
     rows.set(key, { stored, claude: hit, updatedAt: Math.max(hit.updated_at, entry?.session.updated_at ?? 0) });
+  }
+  const search = query.toLowerCase();
+  for (const hit of codex) {
+    const key = `codex:${hit.id}`;
+    const previous = rows.get(key);
+    if (previous?.codex) continue;
+    if (!previous && !hit.name.toLowerCase().includes(search) && !hit.preview.toLowerCase().includes(search)) continue;
+    const linked = byCodexId.get(hit.id) ?? previous?.stored;
+    const stored = linked && { ...linked, snippet: previous?.stored?.snippet ?? linked.snippet };
+    rows.set(key, { stored, codex: hit, updatedAt: Math.max(hit.updated_at, linked?.session.updated_at ?? 0) });
   }
   return [...rows.entries()].sort(([idA, a], [idB, b]) => b.updatedAt - a.updatedAt || idA.localeCompare(idB));
 }
@@ -60,6 +77,8 @@ export function HistoryPanel({ workspaceId, selectedSessionId, active }: {
   const [scope, setScope] = useState<'workspace' | 'all'>(() => workspaceId ? 'workspace' : 'all');
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState('');
+  const [preview, setPreview] = useState<CodexHistoryEntry | null>(null);
+  const previewTrigger = useRef<HTMLButtonElement | null>(null);
   const scopedId = scope === 'workspace' ? workspaceId ?? undefined : undefined;
   const ready = input.trim() === query;
   useEffect(() => {
@@ -77,24 +96,36 @@ export function HistoryPanel({ workspaceId, selectedSessionId, active }: {
     queryFn: () => api.historyStored(query, scopedId),
     enabled: active && ready && !!query,
   });
-  const cli = useQuery({
+  const claude = useQuery({
     queryKey: ['history-claude', scopedId, query],
     queryFn: () => api.historyClaude(query, scopedId),
     enabled: active && ready,
     retry: false,
   });
+  const codex = useQuery({
+    queryKey: ['history-codex', scopedId],
+    queryFn: () => api.historyCodex(scopedId),
+    enabled: active,
+    retry: false,
+  });
   const managed = query ? search : stored;
-  const rows = useMemo(() => historyRows(stored.data ?? noStored, cli.data?.hits ?? noClaude, managed.data ?? noStored),
-    [stored.data, cli.data, managed.data]);
-  const loading = !ready || managed.isPending || cli.isPending;
+  const scopedStoredPending = stored.isPending;
+  const rows = useMemo(() => historyRows(stored.data ?? noStored, claude.data?.hits ?? noClaude,
+    codex.data ?? noCodex, managed.data ?? noStored, query), [stored.data, claude.data, codex.data, managed.data, query]);
+  const loading = !ready || managed.isPending || claude.isPending || codex.isPending;
   const managedFailed = managed.isError || stored.isError;
-  const failed = managedFailed || cli.isError || cli.data?.partial;
+  const failed = managedFailed || claude.isError || claude.data?.partial || codex.isError;
 
-  async function open(row: HistoryRow) {
-    if (opening) return;
+  async function open(row: HistoryRow, trigger: HTMLButtonElement) {
+    if (opening || (row.codex && !row.stored && stored.isPending)) return;
     if (!workspaceId) setScope('all');
-    setOpening(true);
     setOpenError('');
+    if (!row.stored && row.codex) {
+      previewTrigger.current = trigger;
+      setPreview(row.codex);
+      return;
+    }
+    setOpening(true);
     try {
       if (row.stored) {
         const { workspace, session } = row.stored;
@@ -131,7 +162,8 @@ export function HistoryPanel({ workspaceId, selectedSessionId, active }: {
           <Alert variant="destructive" className="mb-2">
             <AlertDescription>
               {managedFailed ? 'Could not load Herdsman history. ' : ''}
-              {cli.isError || cli.data?.partial ? 'Some Claude Code CLI history could not be loaded.' : ''}
+              {claude.isError || claude.data?.partial ? 'Some Claude Code CLI history could not be loaded. ' : ''}
+              {codex.isError ? `Could not load Codex CLI history. ${errMsg(codex.error)}` : ''}
             </AlertDescription>
           </Alert>
         )}
@@ -139,22 +171,23 @@ export function HistoryPanel({ workspaceId, selectedSessionId, active }: {
         {ready && rows.length > 0 && (
           <ul className="flex flex-col gap-0.5">
             {rows.map(([id, row]) => {
-              const { stored, claude, updatedAt } = row;
-              const title = stored?.session.title ?? claude?.title ?? (claude && !stored
+              const { stored, claude, codex, updatedAt } = row;
+              const title = stored?.session.title ?? (codex ? codexHistoryTitle(codex) : claude?.title) ?? (claude && !stored
                 ? `Claude session ${claude.claude_session_id.slice(0, 8)}` : 'Untitled session');
-              const source = stored && claude ? 'Herdsman · Claude Code CLI'
-                : stored ? `${ENGINE_NAME[stored.session.engine]} · Herdsman` : 'Claude Code CLI';
+              const cliSource = codex ? 'Codex CLI' : 'Claude Code CLI';
+              const source = stored && (claude || codex) ? `Herdsman · ${cliSource}`
+                : stored ? `${ENGINE_NAME[stored.session.engine]} · Herdsman` : cliSource;
               const context = !scopedId && (stored
                 ? [stored.project_name, stored.workspace.name ?? 'Untitled workspace'].join(' › ')
-                : [claude?.project_name, claude?.workspace_name ?? pathLabel(claude?.cwd ?? '')].filter(Boolean).join(' › ') || 'Unknown folder');
-              const snippet = stored?.snippet?.replace(/\[\[(.*?)\]\]/g, '$1') || claude?.snippet;
+                : [claude?.project_name, claude?.workspace_name ?? pathLabel(claude?.cwd ?? codex?.cwd ?? '')].filter(Boolean).join(' › ') || 'Unknown folder');
+              const snippet = stored?.snippet?.replace(/\[\[(.*?)\]\]/g, '$1') || claude?.snippet || (codex?.preview !== title ? codex?.preview : '');
               const current = !!stored && stored.session.id === selectedSessionId;
               return (
                 <li key={id} className="min-w-0">
                   <Button type="button" variant={current ? 'secondary' : 'ghost'} aria-current={current || undefined}
-                    aria-disabled={opening} onClick={() => void open(row)}
+                    aria-disabled={opening || (!!codex && !stored && scopedStoredPending)} onClick={(event) => void open(row, event.currentTarget)}
                     className="h-auto w-full min-w-0 flex-col items-start gap-0.5 whitespace-normal px-2 py-2 text-left">
-                    <TruncatedText className="block w-full truncate text-[13px] font-medium">{title}</TruncatedText>
+                    <TruncatedText className="block w-full truncate text-sm font-medium">{title}</TruncatedText>
                     <span className="w-full text-xs text-muted-foreground">{source}{updatedAt > 0 ? ` · ${timeAgo(updatedAt)}` : ''}</span>
                     {context && <TruncatedText className="block w-full truncate text-xs text-muted-foreground">{context}</TruncatedText>}
                     {snippet && <TruncatedText className="line-clamp-2 w-full text-xs text-muted-foreground">{snippet}</TruncatedText>}
@@ -173,6 +206,8 @@ export function HistoryPanel({ workspaceId, selectedSessionId, active }: {
           </Empty>
         )}
       </div>
+      {preview && <CodexHistoryDialog entry={preview} onClose={() => setPreview(null)}
+        restoreFocus={() => previewTrigger.current?.focus()} />}
     </section>
   );
 }

@@ -141,29 +141,30 @@ export function createClaudeEngine(ctx, runQuery = query) {
     });
   }
 
-  const lastRateEvents = {};
-
-  // Sau mỗi lượt: lấy % context + hạn mức 5h/tuần, phát một usage_snapshot. Mọi lỗi bị bỏ qua (tính năng chỉ để xem).
-  async function emitUsageSnapshot(stream) {
+  async function readUsage(stream) {
+    const ts = Date.now();
     try {
-      let context_pct = null;
-      let limits = null;
-      try {
-        const c = await stream.getContextUsage({ detail: 'summary' });
-        if (typeof c?.percentage === 'number') context_pct = c.percentage;
-      } catch {}
-      try {
-        const u = await stream.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true });
-        const r = u?.rate_limits;
-        if (u?.rate_limits_available && r) {
-          const win = (w) => (w ? { pct: w.utilization ?? null, resets_at: w.resets_at ?? null } : null);
-          limits = { five_hour: win(r.five_hour), seven_day: win(r.seven_day) };
+      const u = await stream.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true });
+      if (stream !== q || !u?.rate_limits_available) return null;
+      const limits = {};
+      for (const key of ['five_hour', 'seven_day']) {
+        const window = u.rate_limits?.[key];
+        if (Number.isFinite(window?.utilization)) {
+          limits[key] = { pct: window.utilization, resets_at: window.resets_at ?? null };
         }
-      } catch {}
-      if (!limits && (lastRateEvents.five_hour || lastRateEvents.seven_day)) {
-        limits = { five_hour: lastRateEvents.five_hour ?? null, seven_day: lastRateEvents.seven_day ?? null };
       }
-      if (context_pct != null || limits) ctx.emit('usage_snapshot', { context_pct, limits });
+      return Object.keys(limits).length ? { ts, limits } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function emitContextUsage(stream) {
+    try {
+      const c = await stream.getContextUsage({ detail: 'summary' });
+      if (stream === q && Number.isFinite(c?.percentage)) {
+        ctx.emit('usage_snapshot', { context_pct: c.percentage, limits: null });
+      }
     } catch {}
   }
 
@@ -244,12 +245,13 @@ export function createClaudeEngine(ctx, runQuery = query) {
         }
         case 'rate_limit_event': {
           const i = msg.rate_limit_info;
-          if ((i?.rateLimitType === 'five_hour' || i?.rateLimitType === 'seven_day') && typeof i.utilization === 'number') {
-            // utilization có thể là tỉ lệ 0–1 hoặc phần trăm; chỉ dùng làm dự phòng khi usage() lỗi.
-            lastRateEvents[i.rateLimitType] = {
+          if ((i?.rateLimitType === 'five_hour' || i?.rateLimitType === 'seven_day') && Number.isFinite(i.utilization)) {
+            const reset = new Date(i.resetsAt * 1000);
+            const window = {
               pct: i.utilization <= 1 ? i.utilization * 100 : i.utilization,
-              resets_at: i.resetsAt ? new Date(i.resetsAt * 1000).toISOString() : null,
+              resets_at: i.resetsAt && Number.isFinite(reset.getTime()) ? reset.toISOString() : null,
             };
+            ctx.emit('usage_snapshot', { limits: { [i.rateLimitType]: window } });
           }
           break;
         }
@@ -273,7 +275,10 @@ export function createClaudeEngine(ctx, runQuery = query) {
           });
           const completed = !interrupted && !isError;
           interrupted = false;
-          emitUsageSnapshot(stream);
+          void emitContextUsage(stream);
+          void readUsage(stream).then((usage) => {
+            if (usage) ctx.emit('usage_snapshot', usage);
+          });
           ctx.onTurnState(isError && msg.subtype !== 'success' ? 'error' : 'idle', completed ? 'turn_complete' : undefined);
           break;
         }
@@ -283,6 +288,10 @@ export function createClaudeEngine(ctx, runQuery = query) {
   }
 
   return {
+    readUsage() {
+      if (!running) start();
+      return readUsage(q);
+    },
     get engineSessionId() {
       return resumeId;
     },

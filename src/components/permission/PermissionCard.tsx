@@ -38,10 +38,10 @@ export function PermissionCard({ sessionId, req, agentName = 'Agent' }: { sessio
 
   return (
     <div className={`${COLUMN} pb-3`} role="alertdialog" aria-label={askTitle(agentName, req.tool)}>
-      <div className="flex flex-col gap-3 rounded-xl border border-warn-border bg-warn-bg p-4 shadow-xs dark:shadow-none">
+      <div className="flex flex-col gap-3 rounded-xl border border-warn-border bg-warn-bg p-4 shadow-raised">
         <div className="flex flex-wrap items-center gap-2">
           <ShieldAlert className="size-4 shrink-0 text-warn-icon" />
-          <span className="flex-1 text-[13px] font-medium">{askTitle(agentName, req.tool)}</span>
+          <span className="flex-1 text-sm font-medium">{askTitle(agentName, req.tool)}</span>
           <TruncatedText className="max-w-full truncate font-mono text-xs text-muted-foreground">{where}</TruncatedText>
         </div>
         {diff ? (

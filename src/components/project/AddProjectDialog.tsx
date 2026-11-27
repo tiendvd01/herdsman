@@ -68,7 +68,7 @@ export function AddProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
           <div className="flex flex-col gap-2">
             <Label htmlFor="project-path">Folder path</Label>
             <div className="flex gap-2">
-              <Input id="project-path" className="font-mono text-[12px]" value={path} onChange={(e) => changePath(e.target.value)} placeholder="~/work/my-project" autoFocus />
+              <Input id="project-path" className="font-mono text-xs" value={path} onChange={(e) => changePath(e.target.value)} placeholder="~/work/my-project" autoFocus />
               <Button variant="outline" onClick={choose}>
                 Choose…
               </Button>
@@ -86,7 +86,7 @@ export function AddProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
               placeholder="Defaults to the folder name"
             />
           </div>
-          {err ? <p className="rounded-md border border-destructive/40 bg-danger-bg px-3 py-2 text-[12px] text-destructive">{err}</p> : null}
+          {err ? <p className="rounded-md border border-destructive/40 bg-danger-bg px-3 py-2 text-xs text-destructive">{err}</p> : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel

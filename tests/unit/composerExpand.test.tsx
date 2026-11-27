@@ -48,12 +48,12 @@ const session: Session = {
   ended_at: null,
 };
 
-function renderComposer(status: SessionStatus = 'idle', disabled = false) {
+function renderComposer(status: SessionStatus = 'idle', disabled = false, engine: Session['engine'] = 'claude') {
   const qc = new QueryClient();
   return render(
     <QueryClientProvider client={qc}>
       <TooltipProvider>
-        <Composer session={session} status={status} mode="ask" disabled={disabled} />
+        <Composer session={{ ...session, engine }} status={status} mode="ask" disabled={disabled} />
       </TooltipProvider>
     </QueryClientProvider>,
   );
@@ -135,6 +135,26 @@ describe('Composer expand', () => {
     fireEvent.change(box(), { target: { value: '/' } });
     expect(screen.getByRole('option', { name: /\/compact/ })).toBeTruthy();
     expect(screen.getByRole('option', { name: /\/init/ })).toBeTruthy();
+  });
+
+  it('finds Codex skills from either prefix and sends the native skill name with the request', async () => {
+    vi.mocked(api.sessionListCommands).mockResolvedValue({
+      commands: [{ name: 'speckit-plan', description: 'Plan the feature', argument_hint: '', builtin: false }],
+    });
+    renderComposer('idle', false, 'codex');
+    fireEvent.change(box(), { target: { value: '/spec' } });
+    expect(await screen.findByRole('option', { name: /\$speckit-plan.*Plan the feature/ })).toBeTruthy();
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(box().value).toBe('$speckit-plan ');
+    fireEvent.change(box(), { target: { value: '$speckit-plan include milestones' } });
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    await waitFor(() => expect(api.sessionPrompt).toHaveBeenNthCalledWith(1, 's1', '$speckit-plan include milestones', []));
+    await waitFor(() => expect(box().value).toBe(''));
+
+    fireEvent.change(box(), { target: { value: '$speckit-plan' } });
+    expect(screen.getByRole('option', { name: /\$speckit-plan/ })).toBeTruthy();
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    await waitFor(() => expect(api.sessionPrompt).toHaveBeenNthCalledWith(2, 's1', '$speckit-plan', []));
   });
 
   it('sending collapses the editor; a failed send keeps it expanded', async () => {

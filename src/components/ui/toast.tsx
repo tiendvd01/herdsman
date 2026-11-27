@@ -31,7 +31,7 @@ function ToastItem({ t }: { t: Toast }) {
     <div
       role={t.tone === 'error' ? 'alert' : 'status'}
       className={cn(
-        'flex max-w-[380px] items-start gap-2 rounded-lg border bg-background px-4 py-3 text-[12px] shadow-lg',
+        'flex max-w-[380px] items-start gap-2 rounded-lg border bg-surface px-4 py-3 text-xs shadow-overlay',
         t.tone === 'error' ? 'border-destructive/40 text-destructive' : 'border-border',
       )}
     >

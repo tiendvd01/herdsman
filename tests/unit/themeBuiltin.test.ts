@@ -1,4 +1,4 @@
-// Spec 016: the three built-in themes keep the exact look they had as hand-written CSS (FR-010, SC-005), pass contrast, and no hex lives outside theme files (SC-004).
+// Built-in palettes resolve into CSS colors and meet the app's contrast targets.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -10,16 +10,12 @@ import { contrastReport, cssVars } from '@/theme/resolve';
 const byId = (id: string) => builtinThemes().find((t) => t.id === id)!;
 
 describe('built-in themes', () => {
-  it.each(builtinThemes().map((theme) => theme.id))('%s uses the slate Git-ignored foreground', (id) => {
+  it.each(builtinThemes().map((theme) => theme.id))('%s distinguishes ignored files while keeping them legible', (id) => {
     const theme = byId(id);
     const { colors } = theme;
     expect(contrast(colors.git_ignored_fg, colors.foreground)).toBeGreaterThanOrEqual(1.2);
-    if (theme.appearance === 'dark') {
-      expect(colors.git_ignored_fg).toBe('#737994');
-    } else {
-      for (const background of [colors.background, mix(colors.background, colors.accent, 60), colors.accent]) {
-        expect(contrast(colors.git_ignored_fg, background)).toBeGreaterThanOrEqual(4.5);
-      }
+    for (const background of [colors.background, colors.surface, colors.muted, mix(colors.background, colors.accent, 60), colors.accent]) {
+      expect(contrast(colors.git_ignored_fg, background)).toBeGreaterThanOrEqual(4.5);
     }
   });
 
@@ -33,7 +29,7 @@ describe('built-in themes', () => {
     }
   });
 
-  it.each(['light', 'paper', 'dark'] as const)('%s resolves to the pre-016 values', (id) => {
+  it.each(['light', 'paper', 'dark'] as const)('%s resolves to the expected CSS values', (id) => {
     const vars = cssVars(byId(id));
     const want = golden[id] as Record<string, string>;
     for (const [k, v] of Object.entries(want)) {
@@ -50,14 +46,22 @@ describe('built-in themes', () => {
     ]);
   });
 
-  it.each(['paper', 'clear-light', 'minimal', 'dark', 'catppuccin-frappe', 'one-dark-pro'])('%s has no text/background pair under 4.5:1', (id) => {
-    expect(contrastReport(byId(id))).toEqual([]);
-  });
-
-  // FR-010 keeps Light exactly as it was: its status colours (BR 3.2 zinc palette) were never meant for body text, so only they are exempt.
-  it('light: every pair passes except status colours used as text and muted text on muted fills (4.4:1)', () => {
-    const status = ['working', 'blocked', 'error', 'done'];
-    expect(contrastReport(byId('light')).filter((c) => !status.includes(c.fg) && !(c.fg === 'muted_foreground' && c.bg === 'muted'))).toEqual([]);
+  it.each(builtinThemes().map((theme) => theme.id))('%s meets text, focus, and field contrast targets', (id) => {
+    const theme = byId(id);
+    const { colors } = theme;
+    expect(contrastReport(theme)).toEqual([]);
+    for (const background of ['background', 'surface', 'muted', 'accent', 'code']) {
+      for (const role of ['ring', 'input']) {
+        expect(contrast(colors[role], colors[background]), `${role} on ${background}`).toBeGreaterThanOrEqual(3);
+      }
+      for (const role of ['foreground', 'muted_foreground', 'primary', 'working', 'blocked', 'error', 'done']) {
+        expect(contrast(colors[role], colors[background]), `${role} on ${background}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    expect(contrast(colors.destructive_foreground, colors.destructive)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(colors.destructive, colors.danger_bg)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(colors.accent_foreground, colors.accent)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(colors.term_fg, colors.term_bg)).toBeGreaterThanOrEqual(4.5);
   });
 });
 

@@ -51,7 +51,7 @@ export function Chart({ code }: { code: string }) {
     );
   }
   return (
-    <div ref={wrapRef} className="my-2 rounded-xl border border-border bg-background p-4" data-testid="chart">
+    <div ref={wrapRef} className="my-2 rounded-xl border border-border bg-surface p-4 shadow-panel" data-testid="chart">
       <div ref={target} className="w-full" />
     </div>
   );

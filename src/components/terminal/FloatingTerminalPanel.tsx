@@ -37,7 +37,7 @@ export function FloatingTerminalPanel({ terminal, terminals, position, onMove, o
 
   return (
     <section ref={panel} aria-label="Floating terminal" id="floating-terminal-panel"
-      className="fixed z-40 flex h-[min(28rem,calc(100dvh-6rem))] w-[min(48rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-xl"
+      className="fixed z-40 flex h-[min(28rem,calc(100dvh-6rem))] w-[min(48rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-overlay"
       style={position ? {
         left: `clamp(0px, ${position.left}px, max(0px, calc(100vw - min(48rem, 100vw - 2rem))))`,
         top: `clamp(0px, ${position.top}px, max(0px, calc(100dvh - min(28rem, 100dvh - 6rem) - 2rem)))`,
@@ -54,14 +54,14 @@ export function FloatingTerminalPanel({ terminal, terminals, position, onMove, o
           onLostPointerCapture={() => { drag.current = undefined; }}>
           <GripHorizontal aria-hidden="true" className="size-4 text-muted-foreground" />
         </div>
-        <div role="group" aria-label="Terminal tabs" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <div role="group" aria-label="Terminal tabs" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-0.5">
           {terminals.map((address, index) => (
             <div key={address} className={cn('flex shrink-0 items-center rounded-md pr-1', address === terminal && 'bg-muted')}>
-              <Button size="xs" variant={address === terminal ? 'secondary' : 'muted'}
+              <Button size="xs" className="focus-visible:ring-inset focus-visible:ring-offset-0" variant={address === terminal ? 'secondary' : 'muted'}
                 aria-pressed={address === terminal} onClick={() => onSelect(address)}>
                 Terminal {index + 1}
               </Button>
-              <Button size="xs" variant="muted" className="size-6 px-0" disabled={closing}
+              <Button size="xs" variant="muted" className="size-6 px-0 focus-visible:ring-inset focus-visible:ring-offset-0" disabled={closing}
                 aria-label={`Close Terminal ${index + 1}`} onClick={() => onClose(address)}>
                 <X aria-hidden="true" />
               </Button>

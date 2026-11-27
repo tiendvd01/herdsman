@@ -16,7 +16,7 @@ export function Tooltip({ content, children, side = 'bottom', align, sideOffset 
     <T.Root {...rootProps}>
       <T.Trigger asChild>{children}</T.Trigger>
       <T.Portal>
-        <T.Content side={side} align={align} sideOffset={sideOffset} className={cn('z-50 rounded-md bg-primary px-2 py-1.5 text-xs text-primary-foreground', contentClassName)}>
+        <T.Content side={side} align={align} sideOffset={sideOffset} collisionPadding={8} className={cn('z-50 max-w-(--popup-width) rounded-md bg-primary px-2 py-1.5 text-xs text-primary-foreground', contentClassName)}>
           {content}
         </T.Content>
       </T.Portal>

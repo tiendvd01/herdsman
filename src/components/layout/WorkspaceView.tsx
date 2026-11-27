@@ -113,9 +113,9 @@ function TopBar() {
 }
 
 const tabFrame = 'flex shrink-0 items-center rounded-md border border-transparent pr-0.5 transition-colors hover:bg-muted';
-const selectedTabFrame = 'border-border bg-muted';
-const tabTrigger = 'max-w-[240px] justify-start gap-1.5 px-2 hover:bg-transparent touch-none select-none';
-const tabClose = 'size-6 hover:bg-transparent';
+const selectedTabFrame = 'border-border bg-muted shadow-recessed';
+const tabTrigger = 'max-w-[240px] justify-start gap-1.5 px-2 hover:bg-transparent focus-visible:ring-inset focus-visible:ring-offset-0 touch-none select-none';
+const tabClose = 'size-6 hover:bg-transparent focus-visible:ring-inset focus-visible:ring-offset-0';
 const contentTabFrame = 'm-2 min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg';
 
 function WorkspacePane({ project, ws, visible }: { project: Project; ws?: Workspace; visible: boolean }) {
@@ -482,7 +482,7 @@ function WorkspacePane({ project, ws, visible }: { project: Project; ws?: Worksp
             <TruncatedText className="truncate">{s.title ?? 'New session'}</TruncatedText>
             <EngineIcon engine={s.engine} />
             {s.permission_mode === 'bypass' ? (
-              <Badge variant="warn" className="h-[18px] px-1.5 text-[11px]">
+              <Badge variant="warn" className="h-[18px] px-1.5 text-xs">
                 bypass
               </Badge>
             ) : null}
@@ -675,7 +675,7 @@ function WorkspacePane({ project, ws, visible }: { project: Project; ws?: Worksp
       {showEmptySessionLauncher && (
         <Empty className="flex-1 justify-center border-0 p-8">
           <EmptyHeader className="max-w-[420px]">
-            <h2 className="text-[18px] font-semibold tracking-tight">Start with a session</h2>
+            <h2 className="text-xl font-semibold tracking-tight">Start with a session</h2>
             <EmptyDescription>
               Choose Claude or Codex to ask questions and work on your project.
             </EmptyDescription>
@@ -712,7 +712,7 @@ function CreateWorkspaceEmptyState({ projects }: { projects: Project[] }) {
   return (
     <Empty className="flex-1 justify-center border-0 p-8">
       <EmptyHeader className="max-w-[420px]">
-        <h2 className="text-[18px] font-semibold tracking-tight">Start with a workspace</h2>
+        <h2 className="text-xl font-semibold tracking-tight">Start with a workspace</h2>
         <EmptyDescription>
           A workspace brings your files, terminal, and agent sessions together for a project.
         </EmptyDescription>
@@ -745,8 +745,8 @@ function EmptyState() {
   return (
     <div className="flex flex-1 items-center justify-center p-8">
       <div className="flex max-w-[420px] flex-col items-center gap-3 text-center">
-        <h2 className="text-[18px] font-semibold tracking-tight">Start with a project</h2>
-        <p className="text-[13px] text-muted-foreground">
+        <h2 className="text-xl font-semibold tracking-tight">Start with a project</h2>
+        <p className="text-sm text-muted-foreground">
           Click + next to Projects in the sidebar and pick a folder on this machine. The agent runs in that folder and keeps running when you close the app.
         </p>
         <Button className="mt-2" onClick={() => useUiStore.getState().setAddProjectOpen(true)}>

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { listCodexWorkspaceSkills } from './codex-skills.mjs';
 
 export function connectCodex(binary, cwd, onEvent = () => {}, onExit = () => {}) {
   const child = spawn(binary, ['app-server', '--listen', 'stdio://'], {
@@ -86,7 +87,27 @@ async function readThread(rpc, cwd, threadId, includeTurns) {
   return thread;
 }
 
-export async function probeCodex(binary, cwd, action, threadId) {
+async function* cliThreads(rpc, cwd) {
+  let cursor;
+  do {
+    const page = await rpc.request('thread/list', {
+      cwd, cursor, archived: false, currentAccountOnly: true, sourceKinds: ['cli', 'exec'], limit: 100,
+    });
+    yield* page.data;
+    cursor = page.nextCursor;
+  } while (cursor);
+}
+
+function historyMessages(thread) {
+  return thread.turns.flatMap((turn) => turn.items.flatMap((item) => {
+    if (item.type === 'agentMessage' && item.text) return [{ role: 'assistant', text: item.text }];
+    if (item.type !== 'userMessage') return [];
+    const text = item.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+    return text ? [{ role: 'user', text }] : [];
+  }));
+}
+
+export async function probeCodex(binary, cwd, action, threadId, threadCwd) {
   const rpc = connectCodex(binary, cwd);
   try {
     await verifyAccount(rpc, binary);
@@ -95,17 +116,27 @@ export async function probeCodex(binary, cwd, action, threadId) {
       const thread = await readThread(rpc, cwd, threadId, false);
       return { id: thread.id, name: thread.name || thread.preview || thread.id };
     }
+    if (action === 'history-read') {
+      for await (const candidate of cliThreads(rpc, threadCwd)) {
+        if (candidate.id !== threadId || candidate.cwd !== threadCwd) continue;
+        const { thread } = await rpc.request('thread/read', { threadId, includeTurns: true });
+        if (thread.id === candidate.id && thread.cwd === candidate.cwd) return historyMessages(thread);
+        break;
+      }
+      throw new Error('This Codex CLI conversation is no longer available.');
+    }
     const threads = [];
-    let cursor;
-    do {
-      const page = await rpc.request('thread/list', {
-        cwd, cursor, archived: false, currentAccountOnly: true, sourceKinds: ['cli', 'exec'], limit: 100,
-      });
-      threads.push(...page.data.filter((thread) => sameDirectory(thread.cwd, cwd)).map((thread) => ({
-        id: thread.id, name: thread.name || thread.preview || thread.id,
-      })));
-      cursor = page.nextCursor;
-    } while (cursor);
+    const history = action === 'history';
+    for await (const thread of cliThreads(rpc, history ? undefined : cwd)) {
+      if (history) {
+        threads.push({
+          id: thread.id, cwd: thread.cwd, name: thread.name || '', preview: thread.preview || '',
+          updated_at: (thread.updatedAt ?? 0) * 1000,
+        });
+      } else if (sameDirectory(thread.cwd, cwd)) {
+        threads.push({ id: thread.id, name: thread.name || thread.preview || thread.id });
+      }
+    }
     return threads;
   } finally {
     rpc.close();
@@ -147,6 +178,7 @@ export function createCodexEngine(ctx) {
   const changes = new Map();
   const tools = new Set();
   const approvals = new Map();
+  const knownSkillNames = new Set();
   const recordedItems = new Set(ctx.recordedCodexItems);
   const recordedTurns = new Set(ctx.recordedCodexTurns);
   let rpc;
@@ -164,21 +196,29 @@ export function createCodexEngine(ctx) {
   }
   rpc = connect();
 
-  let limits = {};
-  let contextPct = null;
   let previousTotal;
   let usageBaseline;
   let activeUsage;
   function publishContext(percentage) {
-    contextPct = percentage;
-    ctx.emit('usage_snapshot', { provider: 'codex', context_pct: contextPct, limits: null });
+    ctx.emit('usage_snapshot', { provider: 'codex', context_pct: percentage, limits: null });
   }
-  function publishUsage(snapshot, initial = false) {
-    if (stopped || (snapshot?.limitId && snapshot.limitId !== 'codex')) return;
-    const update = usageWindows(snapshot);
-    if (!Object.keys(update).length) return;
-    limits = initial ? { ...update, ...limits } : { ...limits, ...update };
-    ctx.emit('usage_snapshot', { provider: 'codex', context_pct: contextPct, limits });
+
+  function publishUsage(usage) {
+    if (!stopped && usage) ctx.emit('usage_snapshot', { provider: 'codex', ...usage });
+  }
+
+  async function readUsage() {
+    const connection = rpc;
+    const ts = Date.now();
+    try {
+      const response = await connection.request('account/rateLimits/read', {});
+      const snapshot = response.rateLimitsByLimitId?.codex ?? response.rateLimits;
+      if (stopped || rpc !== connection || (snapshot?.limitId && snapshot.limitId !== 'codex')) return null;
+      const limits = usageWindows(snapshot);
+      return Object.keys(limits).length ? { ts, limits } : null;
+    } catch {
+      return null;
+    }
   }
 
   function fail(error) {
@@ -232,7 +272,10 @@ export function createCodexEngine(ctx) {
       return;
     }
     if (method === 'account/rateLimits/updated') {
-      publishUsage(params?.rateLimits);
+      const snapshot = params?.rateLimits;
+      if (snapshot?.limitId && snapshot.limitId !== 'codex') return;
+      const limits = usageWindows(snapshot);
+      if (Object.keys(limits).length) publishUsage({ limits });
       return;
     }
     if (params?.threadId !== threadId) return;
@@ -289,10 +332,9 @@ export function createCodexEngine(ctx) {
       sandbox,
     };
   };
-  const initialized = verifyAccount(rpc, ctx.codexBinary).then(async () => {
-    void rpc.request('account/rateLimits/read', {}).then((response) => {
-      publishUsage(response.rateLimitsByLimitId?.codex ?? response.rateLimits, true);
-    }).catch(() => {});
+  const accountReady = verifyAccount(rpc, ctx.codexBinary);
+  const initialized = accountReady.then(async () => {
+    void readUsage().then(publishUsage);
     const settings = { cwd: ctx.cwd, model };
     const importing = !!threadId && !ctx.codexHistoryImported;
     if (importing) {
@@ -313,6 +355,7 @@ export function createCodexEngine(ctx) {
       }
     }
     result ??= await rpc.request('thread/start', settings);
+    if (!sameDirectory(result.thread.cwd, ctx.cwd)) throw new Error('This Codex thread belongs to a different workspace folder.');
     threadId = result.thread.id;
     model = result.model;
     if (!ctx.codexHistoryImported) ctx.emit('codex_history_imported');
@@ -320,7 +363,43 @@ export function createCodexEngine(ctx) {
   });
   initialized.catch((error) => { if (!stopped) fail(error); });
 
+  async function workspaceSkills() {
+    const connection = rpc;
+    await connection.ready;
+    const catalog = await listCodexWorkspaceSkills(connection, ctx.cwd);
+    for (const name of catalog.skills.keys()) knownSkillNames.add(name);
+    return catalog;
+  }
+
+  async function requestedSkill(text) {
+    const name = /^[$/](\S+)(?=\s|$)/.exec(text.trimStart())?.[1];
+    if (!name) return;
+    let catalog;
+    try {
+      catalog = await workspaceSkills();
+    } catch (error) {
+      if (knownSkillNames.has(name)) throw new Error(`Could not check skill "${name}". ${error.message}`);
+      return;
+    }
+    const skill = catalog.skills.get(name);
+    if (skill) return { type: 'skill', name, path: skill.path };
+    const reason = catalog.unavailable.get(name);
+    if (reason) throw new Error(`Cannot use skill "${name}": ${reason}.`);
+    if (knownSkillNames.has(name)) throw new Error(`Skill "${name}" is no longer available in this workspace. Its definition may have been moved or become unreadable.`);
+  }
+
   return {
+    async readUsage() {
+      await accountReady;
+      return readUsage();
+    },
+    async listCommands() {
+      const { skills } = await workspaceSkills();
+      return [
+        { name: 'compact', description: 'Compact context', argument_hint: '', builtin: true },
+        ...[...skills.values()].map(({ name, description }) => ({ name, description, argument_hint: '', builtin: false })),
+      ];
+    },
     prompt(text, images) {
       queue = queue.then(async () => {
         try { await initialized; } catch { ctx.onTurnState('error'); return; }
@@ -347,7 +426,8 @@ export function createCodexEngine(ctx) {
             const replacement = connect();
             try {
               await verifyAccount(replacement, ctx.codexBinary);
-              await replacement.request('thread/resume', { cwd: ctx.cwd, threadId, model, excludeTurns: true });
+              const { thread } = await replacement.request('thread/resume', { cwd: ctx.cwd, threadId, model, excludeTurns: true });
+              if (!sameDirectory(thread.cwd, ctx.cwd)) throw new Error('This Codex thread belongs to a different workspace folder.');
               if (stopped) {
                 replacement.close();
                 return;
@@ -363,6 +443,9 @@ export function createCodexEngine(ctx) {
               throw error;
             }
           }
+          const skill = await requestedSkill(text);
+          if (skill) input.push(skill);
+          if (stopped) return;
           const sandboxPolicy = sandbox === 'danger-full-access' ? { type: 'dangerFullAccess' }
             : sandbox === 'read-only' ? { type: 'readOnly', networkAccess: false }
             : sandbox === 'workspace-write' ? {

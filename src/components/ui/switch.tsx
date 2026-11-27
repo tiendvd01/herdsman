@@ -15,7 +15,7 @@ export function Switch({ checked, onCheckedChange, className, ...props }: Switch
       aria-checked={checked}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        'inline-flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors',
+        'inline-flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 shadow-recessed transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         'disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none',
         checked ? 'bg-primary' : 'bg-muted-foreground',
@@ -25,7 +25,7 @@ export function Switch({ checked, onCheckedChange, className, ...props }: Switch
       <span
         aria-hidden="true"
         className={cn(
-          'pointer-events-none size-4 rounded-full bg-background shadow-sm transition-transform motion-reduce:transition-none',
+          'pointer-events-none size-4 rounded-full bg-background shadow-raised transition-transform motion-reduce:transition-none',
           checked && 'translate-x-4',
         )}
       />

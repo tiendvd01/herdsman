@@ -20,6 +20,7 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [084 · Worktree Postscript](projects-workspaces/084-worktree-postscript/spec.md)
 - [087 · Chỉnh Worktree Postscript bằng CodeMirror](projects-workspaces/087-edit-postscript-codemirror/spec.md)
 - [088 · Khởi tạo CodeGraph theo project](projects-workspaces/088-init-codegraph/spec.md)
+- [090 · Dùng skill trong project với Codex](projects-workspaces/090-codex-project-skills/spec.md)
 
 ## Phiên agent, trạng thái và thông báo
 
@@ -43,6 +44,7 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 
 - [031 · Lịch sử, tìm session và Command Palette](history-search/031-session-history-search/spec.md)
 - [063 · Panel History cho phiên agent](history-search/063-session-history-panel/spec.md)
+- [091 · Phiên Codex CLI trong History](history-search/091-codex-cli-history/spec.md)
 
 ## Duyệt, sửa file và xem Git
 

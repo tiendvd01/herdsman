@@ -13,6 +13,7 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-code: var(--code);
   --color-st-working: var(--st-working);
   --color-st-blocked: var(--st-blocked);

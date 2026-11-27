@@ -41,7 +41,7 @@ export function RenameDialog({
           }}
         >
           <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} aria-label="Name" />
-          {err ? <p className="mt-2 text-[12px] text-destructive">{err}</p> : null}
+          {err ? <p className="mt-2 text-xs text-destructive">{err}</p> : null}
           <DialogFooter className="mt-4">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel

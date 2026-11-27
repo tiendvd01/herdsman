@@ -130,15 +130,36 @@ fn valid_session_id(id: &str) -> bool {
 }
 
 pub fn session_title(path: &Path) -> Option<String> {
+    read_title(path, false).0
+}
+
+fn read_title(path: &Path, use_first_prompt: bool) -> (Option<String>, bool) {
+    let Ok(file) = std::fs::File::open(path) else { return (None, true) };
+    let mut reader = BufReader::new(file);
     let mut title = TranscriptTitle::default();
-    for line in BufReader::new(std::fs::File::open(path).ok()?).lines().map_while(Result::ok) {
-        if is_title_record(&line) {
+    let mut first_prompt = None;
+    let mut line = String::new();
+    let failed = loop {
+        match reader.read_line(&mut line) {
+            Ok(0) => break false,
+            Err(_) => break true,
+            Ok(_) => {}
+        }
+        if is_title_record(&line) || (use_first_prompt && first_prompt.is_none() && line.contains("\"user\"")) {
             if let Ok(entry) = serde_json::from_str::<Value>(&line) {
                 title.record(&entry);
+                if use_first_prompt && first_prompt.is_none() && entry["type"] == "user" {
+                    first_prompt = message_text(&entry).map(|text| prompt_title(&text));
+                }
             }
         }
-    }
-    title.preferred()
+        line.clear();
+    };
+    (title.preferred().or(first_prompt), failed)
+}
+
+fn prompt_title(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect()
 }
 
 fn scan_file(path: &Path, terms: &[Vec<char>], mtime: i64) -> Option<ClaudeHit> {
@@ -179,7 +200,7 @@ fn read_transcript(path: &Path, terms: &[Vec<char>], mtime: i64) -> std::io::Res
         let Some(text) = message_text(&v) else { continue };
         has_message = true;
         if first_prompt.is_none() && v["type"] == "user" {
-            first_prompt = Some(text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect::<String>());
+            first_prompt = Some(prompt_title(&text));
         }
         if !terms.is_empty() && snip.is_none() {
             let folded = fold(&text);
@@ -253,16 +274,23 @@ pub(crate) fn search_in(root: &Path, query: &str, limit: usize, include: impl Fn
 pub fn browse(
     root: &Path, cwd_for_directory: impl Fn(&str) -> Option<String>, include: impl Fn(&ClaudeHit) -> bool,
 ) -> (Vec<ClaudeHit>, bool) {
-    collect_hits(root, usize::MAX, include, |path, mtime| {
-        let hit = path.file_stem().and_then(|stem| stem.to_str()).filter(|id| valid_session_id(id))
-            .map(|id| ClaudeHit {
-                claude_session_id: id.to_owned(),
-                cwd: path.parent().and_then(Path::file_name).and_then(|name| name.to_str()).and_then(&cwd_for_directory),
-                title: None,
-                snippet: String::new(),
-                updated_at: mtime,
-            });
-        Ok((hit, false))
+    collect_hits(root, usize::MAX, |_| true, |path, mtime| {
+        let Some(id) = path.file_stem().and_then(|stem| stem.to_str()).filter(|id| valid_session_id(id)) else {
+            return Ok((None, false));
+        };
+        let mut hit = ClaudeHit {
+            claude_session_id: id.to_owned(),
+            cwd: path.parent().and_then(Path::file_name).and_then(|name| name.to_str()).and_then(&cwd_for_directory),
+            title: None,
+            snippet: String::new(),
+            updated_at: mtime,
+        };
+        if !include(&hit) {
+            return Ok((None, false));
+        }
+        let (title, failed) = read_title(path, true);
+        hit.title = title;
+        Ok((Some(hit), failed))
     })
 }
 
@@ -363,21 +391,32 @@ mod tests {
     }
 
     #[test]
-    fn browsing_lists_transcripts_without_parsing_them() {
+    fn browsing_prefers_saved_titles_then_the_first_prompt() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("-fixture");
         std::fs::create_dir(&project).unwrap();
-        let id = "01234567-89ab-cdef-0123-456789abcdef";
-        std::fs::write(project.join(format!("{id}.jsonl")), [0xff]).unwrap();
+        let prompt = r#"{"type":"user","message":{"content":"Fix the login"}}"#;
+        let generated = r#"{"type":"ai-title","aiTitle":"Login investigation"}"#;
+        let custom = r#"{"type":"custom-title","customTitle":"OAuth fix"}"#;
+        for (prefix, contents) in [
+            (1, format!("{prompt}\n{custom}\n{generated}")),
+            (2, format!("{prompt}\n{generated}")),
+            (3, prompt.to_owned()),
+        ] {
+            std::fs::write(project.join(format!("{prefix:08}-89ab-cdef-0123-456789abcdef.jsonl")), contents).unwrap();
+        }
+        let broken = "00000004-89ab-cdef-0123-456789abcdef";
+        std::fs::write(project.join(format!("{broken}.jsonl")), [0xff]).unwrap();
 
-        let (hits, partial) = browse(root.path(), |directory| {
+        let (mut hits, partial) = browse(root.path(), |directory| {
             (directory == "-fixture").then(|| "/fixture".to_owned())
         }, |hit| hit.cwd.as_deref() == Some("/fixture"));
-        assert!(!partial);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].claude_session_id, id);
-        assert_eq!(hits[0].title, None);
-        assert!(hits[0].snippet.is_empty());
+        assert!(partial);
+        hits.sort_by(|a, b| a.claude_session_id.cmp(&b.claude_session_id));
+        let titles: Vec<_> = hits.iter().map(|hit| hit.title.as_deref()).collect();
+        assert_eq!(titles, [Some("OAuth fix"), Some("Login investigation"), Some("Fix the login"), None]);
+        assert_eq!(hits[3].claude_session_id, broken);
+        assert!(hits.iter().all(|hit| hit.snippet.is_empty()));
     }
 
     #[test]

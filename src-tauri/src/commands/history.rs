@@ -4,7 +4,7 @@ use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::store::{self, SearchHit, Session, Workspace};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 #[derive(serde::Serialize)]
@@ -309,9 +309,58 @@ fn import_claude(
 }
 
 #[tauri::command]
+pub async fn history_codex(st: St<'_>, workspace_id: Option<String>) -> AppResult<Vec<CodexHistoryEntry>> {
+    let probe = agent::codex_probe(&st, &st.data_dir.to_string_lossy(), &["history"]).await?;
+    let mut rows: Vec<CodexHistoryEntry> = serde_json::from_value(probe)?;
+    if let Some(id) = workspace_id {
+        let (workspace, sessions) = {
+            let db = st.db.lock();
+            (store::workspace_get(&db, &id)?, store::session_all(&db)?)
+        };
+        scope_codex_history(&mut rows, &workspace, &sessions);
+    }
+    Ok(rows)
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct CodexHistoryEntry {
+    id: String,
+    cwd: String,
+    name: String,
+    preview: String,
+    updated_at: i64,
+}
+
+fn scope_codex_history(rows: &mut Vec<CodexHistoryEntry>, workspace: &Workspace, sessions: &[Session]) {
+    let mut linked_here = HashSet::new();
+    let mut linked_elsewhere = HashSet::new();
+    for session in sessions.iter().filter(|s| s.engine == "codex") {
+        if let Some(id) = session.engine_session_id.as_deref() {
+            if session.workspace_id == workspace.id {
+                linked_here.insert(id);
+            } else {
+                linked_elsewhere.insert(id);
+            }
+        }
+    }
+    let work_dir = Path::new(&workspace.work_dir).canonicalize().ok();
+    rows.retain(|row| {
+        linked_here.contains(row.id.as_str()) || (!linked_elsewhere.contains(row.id.as_str())
+            && (row.cwd == workspace.work_dir || work_dir.as_ref().is_some_and(|dir| {
+                Path::new(&row.cwd).canonicalize().is_ok_and(|cwd| &cwd == dir)
+            })))
+    });
+}
+
+#[tauri::command]
+pub async fn history_codex_read(st: St<'_>, thread_id: String, cwd: String) -> AppResult<Value> {
+    agent::codex_probe(&st, &st.data_dir.to_string_lossy(), &["history-read", &thread_id, &cwd]).await
+}
+
+#[tauri::command]
 pub async fn codex_threads(st: St<'_>, workspace_id: String) -> AppResult<Value> {
     let ws = store::workspace_get(&st.db.lock(), &workspace_id)?;
-    agent::codex_probe(&st, &ws.work_dir, "list", None).await
+    agent::codex_probe(&st, &ws.work_dir, &["list"]).await
 }
 
 #[tauri::command]
@@ -336,7 +385,7 @@ pub async fn codex_open(st: St<'_>, workspace_id: String, thread_id: String) -> 
     if let Some(session) = linked(&st.db.lock())? {
         return Ok(session);
     }
-    let thread = agent::codex_probe(&st, &ws.work_dir, "read", Some(&thread_id)).await?;
+    let thread = agent::codex_probe(&st, &ws.work_dir, &["read", &thread_id]).await?;
     let session = {
         let db = st.db.lock();
         if let Some(session) = linked(&db)? {
@@ -421,6 +470,31 @@ mod retained_session_tests {
         assert!(!Path::new(&replay.workspace.work_dir).exists());
         let events = std::fs::read_to_string(state.session_dir(&replay.session.id).join("events.ndjson")).unwrap();
         assert!(events.contains("Saved reply"));
+    }
+
+    #[test]
+    fn codex_scope_uses_linked_workspaces_before_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        let db = store::open_memory().unwrap();
+        let project = store::project_add(&db, "Project", cwd).unwrap();
+        let workspace = store::workspace_insert(&db, "current", &project.id, None, "project", cwd, None, None).unwrap();
+        let shared = store::workspace_insert(&db, "shared", &project.id, None, "project", cwd, None, None).unwrap();
+        for (ws, thread) in [(&workspace, "here"), (&shared, "elsewhere")] {
+            let session = store::session_insert(&db, &ws.id, "codex", "ask", Some(thread)).unwrap();
+            store::session_set_field(&db, &session.id, "engine_session_id", Some(thread)).unwrap();
+        }
+        let claude = store::session_insert(&db, &shared.id, "claude", "ask", None).unwrap();
+        store::session_set_field(&db, &claude.id, "engine_session_id", Some("independent")).unwrap();
+
+        let alias = dir.path().join(".");
+        let mut rows = [
+            ("here", "/moved"), ("elsewhere", cwd), ("independent", alias.to_str().unwrap()), ("outside", "/outside"),
+        ].into_iter().map(|(id, cwd)| CodexHistoryEntry {
+            id: id.into(), cwd: cwd.into(), name: String::new(), preview: String::new(), updated_at: 1,
+        }).collect();
+        scope_codex_history(&mut rows, &workspace, &store::session_all(&db).unwrap());
+        assert_eq!(rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), ["here", "independent"]);
     }
 
     #[test]

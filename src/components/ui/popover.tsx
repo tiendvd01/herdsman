@@ -12,7 +12,8 @@ export function PopoverContent({ className, align = 'end', sideOffset = 6, ...pr
       <P.Content
         align={align}
         sideOffset={sideOffset}
-        className={cn('z-50 rounded-lg border border-border bg-background p-1 shadow-lg focus:outline-none', className)}
+        collisionPadding={8}
+        className={cn('z-50 max-h-(--popup-height) max-w-(--popup-width) overflow-y-auto rounded-lg border border-border bg-surface p-1.5 scroll-py-2 shadow-overlay focus:outline-none', className)}
         {...props}
       />
     </P.Portal>

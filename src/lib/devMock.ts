@@ -284,6 +284,16 @@ export function installDevMock() {
             project_id: P2.id, project_name: P2.name,
           }] : [] };
         }
+        case 'history_codex':
+          return (!a.workspaceId || a.workspaceId === WS[0].id) ? [{
+            id: 'codex-cli-review', cwd: WS[0].work_dir, name: 'Review retry behavior',
+            preview: 'Check how retries handle expired sessions.', updated_at: now - 1e5,
+          }] : [];
+        case 'history_codex_read':
+          return [
+            { role: 'user', text: 'Check how retries handle expired sessions.' },
+            { role: 'assistant', text: 'The retry waits for a fresh session before sending the request again.' },
+          ];
         case 'search': {
           const query = a.query.toLowerCase().trim();
           return SESSIONS.flatMap((session) => {

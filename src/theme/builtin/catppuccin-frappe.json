@@ -8,13 +8,14 @@
     "surface": "#292c3c",
     "muted": "#414559",
     "muted_foreground": "#b5bfe2",
-    "primary": "#ca9ee6",
+    "primary": "#d4a9ef",
     "ring": "#babbf1",
     "working": "#99b6f4",
     "error": "#f0a0a2",
     "done": "#a6d189",
     "blocked": "#e5c890",
     "term_bg": "#303446",
-    "term_fg": "#c6d0f5"
+    "term_fg": "#c6d0f5",
+    "input": "#939bb8"
   }
 }

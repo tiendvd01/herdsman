@@ -53,7 +53,7 @@ export function CodeBlock({ code, lang, plain }: { code: string; lang?: string; 
   }, [code, lang, plain]);
   return (
     <div className="group relative my-2 overflow-hidden rounded-lg border border-border bg-code">
-      <div className="flex h-8 items-center justify-between border-b border-border bg-surface px-3 text-xs text-muted-foreground">
+      <div className="flex h-8 items-center justify-between border-b border-border bg-muted px-3 text-xs text-muted-foreground">
         <span className="font-mono">{lang ?? 'text'}</span>
         <Button variant="ghost" size="xs"
           className="opacity-0 group-hover:opacity-100 focus:opacity-100"

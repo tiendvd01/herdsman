@@ -49,6 +49,7 @@ const PAIRS: [string, string[]][] = [
   ['error', ['background', 'surface', 'muted']],
   ['done', ['background', 'surface', 'muted']],
   ['primary_foreground', ['primary']],
+  ['destructive_foreground', ['destructive']],
   ['warn_fg', ['warn_bg']],
   ['diff_add_fg', ['diff_add']],
   ['diff_del_fg', ['diff_del']],

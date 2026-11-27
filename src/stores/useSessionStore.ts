@@ -2,7 +2,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { subscribeWithSelector } from 'zustand/middleware';
-import type { AgentEvent, ChatAttachment, UsageLimits, UsageProvider, PermissionMode, SessionStatus, ShellUpdate } from '@/lib/types';
+import type { AccountUsageSnapshot, AgentEvent, ChatAttachment, LimitWindow, UsageLimits, UsageProvider, PermissionMode, SessionStatus, ShellUpdate } from '@/lib/types';
 import { modelLabel } from '@/lib/model';
 
 export type Item =
@@ -64,10 +64,20 @@ const empty = (): SessionView => ({
 interface State {
   sessions: Record<string, SessionView>;
   /** Hạn mức 5h/tuần thuộc tài khoản: lấy snapshot mới nhất của mọi session. */
-  limits: Partial<Record<UsageProvider, UsageLimits & { ts: number }>>;
+  limits: Partial<Record<UsageProvider, Partial<Record<keyof UsageLimits, LimitWindow & { ts: number }>>>>;
+  applyLimits: (provider: UsageProvider, snapshot: AccountUsageSnapshot) => void;
   applyEvents: (sid: string, events: AgentEvent[], meta?: { closed?: boolean; error?: string }) => void;
   reset: (sid: string) => void;
   release: (sid: string) => void;
+}
+
+function applyLimits(state: State, provider: UsageProvider, { ts, limits }: AccountUsageSnapshot) {
+  for (const key of ['five_hour', 'seven_day'] as const) {
+    const window = limits[key];
+    if (!window) continue;
+    const current = state.limits[provider] ??= {};
+    if (!current[key] || ts >= current[key].ts) current[key] = { ...window, ts };
+  }
 }
 
 /** Áp một event vào view (thuần, dễ test). */
@@ -177,7 +187,7 @@ export function applyEvent(v: SessionView, ev: AgentEvent) {
       v.status = ev.state;
       break;
     case 'usage_snapshot':
-      v.ctxPct = ev.context_pct;
+      if (ev.context_pct !== undefined) v.ctxPct = ev.context_pct;
       break;
     case 'turn_end':
       v.streaming = null;
@@ -205,15 +215,14 @@ export const useSessionStore = create<State>()(
     immer((set) => ({
       sessions: {},
       limits: {},
+      applyLimits: (provider, snapshot) => set((s) => applyLimits(s, provider, snapshot)),
       applyEvents: (sid, events, meta) =>
         set((s) => {
           const v = (s.sessions[sid] ??= empty());
           for (const ev of events) {
             applyEvent(v, ev);
             if (ev.type === 'usage_snapshot' && ev.limits) {
-              const provider = ev.provider ?? 'claude';
-              const previous = s.limits[provider];
-              if (!previous || ev.ts >= previous.ts) s.limits[provider] = { ...ev.limits, ts: ev.ts };
+              applyLimits(s, ev.provider ?? 'claude', { ts: ev.ts, limits: ev.limits });
             }
           }
           v.loaded = true;

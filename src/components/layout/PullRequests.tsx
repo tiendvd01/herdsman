@@ -441,7 +441,7 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
                                 const idForRow = rowId(id, repository, pr.number);
                                 return (
                                   <button type="button" key={pr.number} id={idForRow}
-                                    className="group grid min-w-0 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 rounded-lg border border-border bg-surface px-3 py-3 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                                    className="group grid min-w-0 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 rounded-lg border border-border bg-surface px-3 py-3 text-left shadow-raised active:shadow-recessed transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                                     onClick={() => {
                                       resume.current = { top: scroll.current?.scrollTop ?? 0, row: idForRow, view, project: tracker.projectId };
                                       tracker.openDetail(id, repository, pr.number);
@@ -502,9 +502,9 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
                   {notifications.length > 0 && (
                     <ul className="min-w-0 grid gap-2">
                       {notifications.map((item) => (
-                        <li key={`${item.repository}:${item.event.key}`} className="min-w-0 rounded-lg border border-border bg-surface">
+                        <li key={`${item.repository}:${item.event.key}`} className="min-w-0 rounded-lg border border-border bg-surface shadow-raised">
                           <Button variant={item.event.read ? 'ghost' : 'secondary'} size="sm"
-                            className="grid h-auto w-full min-w-0 cursor-pointer grid-cols-[0.375rem_minmax(0,1fr)_auto] items-start gap-2 whitespace-normal py-3 text-left focus-visible:ring-inset"
+                            className="grid h-auto w-full min-w-0 cursor-pointer grid-cols-[0.375rem_minmax(0,1fr)_auto] items-start gap-2 whitespace-normal py-3 text-left focus-visible:ring-inset focus-visible:ring-offset-0"
                             onClick={() => {
                               resume.current = undefined;
                               void tracker.showNotification(item);
@@ -517,7 +517,7 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
                               <span>{item.event.title}</span>
                               <span className="text-xs font-normal text-muted-foreground">{item.projects.map((project) => project.name).join(', ')}</span>
                             </span>
-                            <span className="flex flex-col items-end gap-1 whitespace-nowrap text-[11px] font-normal text-muted-foreground">
+                            <span className="flex flex-col items-end gap-1 whitespace-nowrap text-xs font-normal text-muted-foreground">
                               <NotificationTypeBadge kind={item.event.kind} />
                               <NotificationTime at={item.event.at} />
                               {!item.event.read && <span className="sr-only">Unread</span>}

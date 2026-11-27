@@ -10,8 +10,9 @@ export function DropdownMenuContent({ className, sideOffset = 4, align = 'start'
     <M.Portal>
       <M.Content
         sideOffset={sideOffset}
+        collisionPadding={8}
         align={align}
-        className={cn('z-50 min-w-[180px] rounded-lg border border-border bg-background p-1 shadow-lg', className)}
+        className={cn('z-50 min-w-[min(180px,var(--popup-width))] max-h-(--popup-height) max-w-(--popup-width) overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-overlay', className)}
         {...props}
       />
     </M.Portal>
@@ -22,7 +23,7 @@ export function DropdownMenuItem({ className, destructive, ...props }: React.Com
   return (
     <M.Item
       className={cn(
-        'flex min-h-8 cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-[12px] outline-none data-[highlighted]:bg-accent data-[disabled]:opacity-50 [&_svg]:size-4',
+        'flex min-h-8 cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-xs data-[highlighted]:bg-accent data-[disabled]:opacity-50 [&_svg]:size-4',
         destructive && 'text-destructive',
         className,
       )}

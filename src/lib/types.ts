@@ -66,6 +66,19 @@ export interface StoredHistoryEntry {
 }
 
 /** Hit in a Claude Code transcript (~/.claude/projects), not a Herdsman/hc session. */
+export interface CodexHistoryEntry {
+  id: string;
+  cwd: string;
+  name: string;
+  preview: string;
+  updated_at: number;
+}
+
+export interface CodexHistoryMessage {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 export interface ClaudeHit {
   claude_session_id: string;
   session_id?: string | null;
@@ -170,6 +183,10 @@ export interface UsageLimits {
   five_hour?: LimitWindow | null;
   seven_day?: LimitWindow | null;
 }
+export interface AccountUsageSnapshot {
+  ts: number;
+  limits: UsageLimits;
+}
 
 export interface ChatAttachment {
   media_type: string;
@@ -200,7 +217,7 @@ export type AgentEvent = Base &
     | { type: 'model_fallback'; unavailable_model: string; message: string }
     | { type: 'model_changed'; model: string; previous: string | null }
     | { type: 'status'; state: SessionStatus; kind: string | null }
-    | { type: 'usage_snapshot'; provider?: UsageProvider; context_pct: number | null; limits: UsageLimits | null }
+    | { type: 'usage_snapshot'; provider?: UsageProvider; context_pct?: number | null; limits: UsageLimits | null }
     | { type: 'turn_end'; interrupted: boolean; is_error?: boolean; usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | null; cost_usd?: number | null; model?: string }
     | { type: 'project_skills_warning'; message: string }
     | { type: 'error'; code: string; message: string; recoverable: boolean }

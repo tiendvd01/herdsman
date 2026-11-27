@@ -29,13 +29,12 @@ export interface Role {
 
 const status = (idx: number, dark: string, light: string) => (b: Base) => b.ansi?.[idx] ?? (b.dark ? dark : light);
 
-function ignoredFileForeground(base: Base, color: (key: string) => string): string {
+function ignoredFileForeground(_base: Base, color: (key: string) => string): string {
   const background = color('background');
   const foreground = color('foreground');
   const slate = '#737994';
-  if (base.dark) return slate;
-  // Hover blends the accent into the panel background. Check both endpoints.
-  const backgrounds = [background, color('accent')];
+  // Rows sit on the panel, muted groups, or an accent hover fill.
+  const backgrounds = [background, color('surface'), color('muted'), color('accent')];
   for (let weight = 12; weight < 100; weight++) {
     const tinted = mix(slate, foreground, weight);
     if (backgrounds.every((bg) => contrast(tinted, bg) >= 4.6)) return tinted;
@@ -57,6 +56,10 @@ export const ROLES: Role[] = [
   { key: 'accent', cssVar: '--accent', tailwind: true, derive: (b) => mix(b.background, b.foreground, 6) },
   { key: 'accent_foreground', cssVar: '--accent-foreground', tailwind: true, derive: (b) => b.foreground },
   { key: 'destructive', cssVar: '--destructive', tailwind: true, derive: (_b, c) => c('error') },
+  { key: 'destructive_foreground', cssVar: '--destructive-foreground', tailwind: true, derive: (_b, c) => {
+    const fill = c('destructive');
+    return contrast('#ffffff', fill) >= contrast('#000000', fill) ? '#ffffff' : '#000000';
+  } },
   { key: 'code', cssVar: '--code', tailwind: true, derive: (b) => mix(b.background, b.foreground, 3) },
   { key: 'working', cssVar: '--st-working', tailwind: true, derive: status(4, '#60a5fa', '#2563eb') },
   { key: 'blocked', cssVar: '--st-blocked', tailwind: true, derive: status(3, '#fbbf24', '#d97706') },

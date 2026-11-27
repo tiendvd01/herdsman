@@ -51,12 +51,14 @@ export async function applyZoom(z: number): Promise<void> {
       const { getCurrentWebview } = await import('@tauri-apps/api/webview');
       await getCurrentWebview().setZoom(scale);
       document.documentElement.style.zoom = '';
+      document.documentElement.style.removeProperty('--css-zoom');
       return;
     } catch {
       // fall through to CSS zoom
     }
   }
   document.documentElement.style.zoom = String(scale);
+  document.documentElement.style.setProperty('--css-zoom', String(scale));
   // CSS zoom does not emit a viewport resize on its own.
   window.dispatchEvent(new Event('resize'));
 }

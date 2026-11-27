@@ -4,11 +4,14 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { RightPanel } from '@/components/panels/RightPanel';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { api } from '@/lib/api';
-import type { ClaudeHit, StoredHistoryEntry, Workspace } from '@/lib/types';
+import type { ClaudeHit, CodexHistoryEntry, StoredHistoryEntry, Workspace } from '@/lib/types';
 import { useUiStore } from '@/stores/useUiStore';
 
 vi.mock('@/lib/api', () => ({
-  api: { projectList: vi.fn(async () => []), historyStored: vi.fn(), historyClaude: vi.fn(), claudeOpen: vi.fn() },
+  api: {
+    projectList: vi.fn(async () => []), historyStored: vi.fn(), historyClaude: vi.fn(), claudeOpen: vi.fn(),
+    historyCodex: vi.fn(), historyCodexRead: vi.fn(),
+  },
   errMsg: String,
 }));
 
@@ -33,10 +36,14 @@ const standalone: ClaudeHit = {
   ...duplicate, claude_session_id: 'c2', session_id: null, title: 'Standalone CLI session',
   cwd: '/outside', workspace_id: null, workspace_name: null, project_id: null, project_name: null, updated_at: 30,
 };
+const codexOutside: CodexHistoryEntry = {
+  id: 'codex-outside', cwd: '/outside-codex', name: 'CLI Codex conversation', preview: 'Old review prompt', updated_at: 40,
+};
 
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(api.projectList).mockResolvedValue([]);
+  vi.mocked(api.historyCodex).mockResolvedValue([]);
   useUiStore.setState({ rightOpen: true, rightTab: 'history', projectId: 'p1', workspaceId: 'w1', statuses: {}, tempTabs: {}, sessionByWorkspace: {} });
 });
 
@@ -79,4 +86,82 @@ it('allows app-wide browsing and opens a standalone CLI session without a select
   expect(api.claudeOpen).toHaveBeenCalledWith('c2', undefined);
   expect(within(panel).getByRole('combobox', { name: 'History scope' }).textContent).toBe('All projects');
   expect(useUiStore.getState().rightTab).toBe('history');
+});
+
+it('finds a linked Codex session by CLI preview and opens the stored session once', async () => {
+  const linked: StoredHistoryEntry = {
+    ...saved, session: { ...saved.session, engine: 'codex', engine_session_id: 'linked', title: 'Managed Codex' },
+  };
+  vi.mocked(api.historyStored).mockImplementation(async (query) => query ? [] : [linked, saved]);
+  vi.mocked(api.historyClaude).mockResolvedValue({ hits: [], partial: false });
+  vi.mocked(api.historyCodex).mockResolvedValue([
+    { ...codexOutside, id: 'linked', cwd: workspace.work_dir, name: 'CLI title' },
+    { ...codexOutside, id: 'independent', cwd: workspace.work_dir, name: 'Independent Codex', preview: '' },
+  ]);
+  const panel = renderPanel();
+  await within(panel).findByRole('button', { name: /Independent Codex/ });
+  expect(api.historyCodex).toHaveBeenCalledWith('w1');
+  fireEvent.change(within(panel).getByRole('searchbox'), { target: { value: 'REVIEW prompt' } });
+  await waitFor(() => expect(within(panel).getAllByRole('button')).toHaveLength(1));
+  const linkedRow = within(panel).getByRole('button', { name: /Managed Codex/ });
+  expect(within(linkedRow).getByText(/Herdsman · Codex CLI/)).toBeTruthy();
+  expect(api.historyCodex).toHaveBeenCalledTimes(1);
+  fireEvent.click(linkedRow);
+  await waitFor(() => expect(useUiStore.getState().tempTabs.w1).toContain('s1'));
+  expect(api.historyCodexRead).not.toHaveBeenCalled();
+});
+
+it('opens a read-only Codex conversation and returns focus to the filtered list', async () => {
+  useUiStore.setState({ projectId: null, workspaceId: null });
+  vi.mocked(api.historyStored).mockResolvedValue([]);
+  vi.mocked(api.historyClaude).mockResolvedValue({ hits: [standalone], partial: false });
+  vi.mocked(api.historyCodex).mockResolvedValue([codexOutside]);
+  vi.mocked(api.historyCodexRead).mockResolvedValue([
+    { role: 'user', text: 'Old review prompt' }, { role: 'assistant', text: '**Saved Codex reply**' },
+  ]);
+  const panel = renderPanel();
+  await within(panel).findByRole('button', { name: /Standalone CLI session/ });
+  expect(within(panel).getAllByRole('button')[0].textContent).toContain(codexOutside.name);
+  const search = within(panel).getByRole('searchbox') as HTMLInputElement;
+  fireEvent.change(search, { target: { value: 'review' } });
+  await waitFor(() => expect(api.historyClaude).toHaveBeenCalledWith('review', undefined));
+  const row = await within(panel).findByRole('button', { name: /CLI Codex conversation/ });
+  expect(within(row).getByText('/outside-codex')).toBeTruthy();
+  expect(api.historyCodex).toHaveBeenCalledWith(undefined);
+  fireEvent.click(row);
+  const dialog = await screen.findByRole('dialog', { name: codexOutside.name });
+  expect(await within(dialog).findByText('Saved Codex reply')).toBeTruthy();
+  expect(within(dialog).getAllByRole('article').map((message) => message.textContent)).toEqual([
+    'YouOld review prompt', 'CodexSaved Codex reply',
+  ]);
+  expect(api.historyCodexRead).toHaveBeenCalledWith(codexOutside.id, codexOutside.cwd);
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  await waitFor(() => expect(document.activeElement).toBe(row));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(search.value).toBe('review');
+});
+
+it('keeps Herdsman history visible when Codex history cannot be loaded', async () => {
+  vi.mocked(api.historyStored).mockResolvedValue([saved]);
+  vi.mocked(api.historyClaude).mockResolvedValue({ hits: [], partial: false });
+  vi.mocked(api.historyCodex).mockRejectedValue(new Error('Codex is unavailable'));
+  const panel = renderPanel();
+  expect(await within(panel).findByText(/Could not load Codex CLI history/)).toBeTruthy();
+  expect(within(panel).getByRole('button', { name: /Saved session/ })).toBeTruthy();
+});
+
+it('handles unavailable and empty Codex conversations', async () => {
+  vi.mocked(api.historyStored).mockResolvedValue([]);
+  vi.mocked(api.historyClaude).mockResolvedValue({ hits: [], partial: false });
+  vi.mocked(api.historyCodex).mockResolvedValue([codexOutside]);
+  vi.mocked(api.historyCodexRead).mockRejectedValueOnce(new Error('Conversation is no longer available')).mockResolvedValueOnce([]);
+  const panel = renderPanel();
+  const row = await within(panel).findByRole('button', { name: /CLI Codex conversation/ });
+  fireEvent.click(row);
+  const dialog = await screen.findByRole('dialog');
+  expect(await within(dialog).findByText(/Conversation is no longer available/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  fireEvent.click(row);
+  expect(await screen.findByText('No saved text messages.')).toBeTruthy();
 });

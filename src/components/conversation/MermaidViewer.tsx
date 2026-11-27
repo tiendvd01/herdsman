@@ -139,7 +139,7 @@ function Stage({ svg, onClose }: { svg: string; onClose: () => void }) {
         ref={box}
         tabIndex={0}
         onKeyDown={onKeyDown}
-        className={`relative min-h-0 flex-1 touch-none select-none overflow-hidden bg-background outline-none ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`relative min-h-0 flex-1 touch-none select-none overflow-hidden bg-background focus-visible:outline-none focus-visible:after:pointer-events-none focus-visible:after:absolute focus-visible:after:inset-0 focus-visible:after:z-10 focus-visible:after:border-2 focus-visible:after:border-ring ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
         onPointerDown={(e) => {
           drag.current = { x: e.clientX, y: e.clientY };
           setDragging(true);
@@ -180,7 +180,7 @@ export function MermaidViewer({ svg, open, onOpenChange }: { svg: string; open: 
         <D.Content
           data-testid="mermaid-viewer"
           aria-describedby={undefined}
-          className="fixed inset-y-4 left-1/2 z-50 flex w-[80vw] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-lg focus:outline-none"
+          className="fixed inset-y-4 left-1/2 z-50 flex w-4/5 -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-overlay focus:outline-none"
         >
           <Stage svg={svg} onClose={() => onOpenChange(false)} />
         </D.Content>

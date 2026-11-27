@@ -61,7 +61,7 @@ export function RightPanel() {
       <Tabs value={tab} onValueChange={(value) => useUiStore.getState().setRightTab(value as RightTab)}
         activationMode="manual" className="flex min-h-0 flex-1 flex-col">
         <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-3">
-          <TabsList aria-label="Side panel content" className="h-auto gap-1 rounded-none bg-transparent p-0">
+          <TabsList aria-label="Side panel content" className="h-auto gap-1">
             {TABS.map(({ id, label, Icon }) => (
               <Tooltip key={id} content={label}>
                 <TabsTrigger
@@ -125,8 +125,8 @@ function SectionHead({ title, desc, children }: { title: string; desc: React.Rea
   return (
     <div className="flex items-center justify-between gap-2">
       <div className="flex min-w-0 flex-col gap-0.5">
-        <h2 className="text-[13px] font-semibold">{title}</h2>
-        <span className="text-[12px] text-muted-foreground">{desc}</span>
+        <h2 className="text-sm font-semibold">{title}</h2>
+        <span className="text-xs text-muted-foreground">{desc}</span>
       </div>
       {children}
     </div>
@@ -169,7 +169,7 @@ function AgentsPanel({ sessionId }: { sessionId?: string }) {
         <Empty>This session is not running in hc yet.</Empty>
       ) : (
         <>
-          <div className="flex items-center gap-2 text-[12px]">
+          <div className="flex items-center gap-2 text-xs">
             <StatusDot status={agentStatus(data)} />
             <TruncatedText className="min-w-0 flex-1 truncate font-medium">{title}</TruncatedText>
             <span className="font-mono text-xs text-muted-foreground">{data.terminal}</span>
@@ -181,7 +181,7 @@ function AgentsPanel({ sessionId }: { sessionId?: string }) {
               ))}
             </div>
           ) : (
-            <p className="text-[12px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               No sub-agents yet. Agents delegated with <span className="font-mono">hc run --bg</span> show up here.
             </p>
           )}
@@ -201,7 +201,7 @@ function AgentRow({ node }: { node: AgentNode }) {
   const pct = node.progress ?? (st === 'done' ? 100 : null);
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-2 text-[12px]">
+      <div className="flex items-center gap-2 text-xs">
         <StatusDot status={st} />
         <TruncatedText className="min-w-0 flex-1 truncate font-mono">{node.title}</TruncatedText>
         <span className="shrink-0 text-xs text-muted-foreground">{node.progress != null && st !== 'done' ? `${node.progress}%` : STATUS_LABEL[st]}</span>
@@ -264,7 +264,7 @@ function groupChangedFiles(files: ChangedFile[]) {
   return root;
 }
 
-const changedFileRow = 'h-[30px] w-full px-2 focus-visible:border-ring focus-visible:ring-inset';
+const changedFileRow = 'h-[30px] w-full px-2 focus-visible:border-ring focus-visible:ring-inset focus-visible:ring-offset-0';
 
 function ChangedFolder({ name, directory, renderFile }: {
   name: string;
@@ -447,7 +447,7 @@ function LogPanel({ workspaceId, sessionId }: { workspaceId: string | null; sess
     <section aria-label="Log" className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       <SectionHead title="Log" desc="Terminal in hc, for debugging only">
         {s?.hc_terminal ? (
-          <code className="h-6 shrink-0 rounded-md border border-border px-2 font-mono text-[11px] leading-5">hc attach {s.hc_terminal}</code>
+          <code className="h-6 shrink-0 rounded-md border border-border px-2 font-mono text-xs leading-5">hc attach {s.hc_terminal}</code>
         ) : null}
       </SectionHead>
       {sessionId && sessions === undefined && isLoading ? <Loading /> : sessionId && sessions === undefined && error ? <LoadError error={error} /> : !s ? <Empty>Pick a session.</Empty> : !s.hc_terminal ? <Empty>This session has no terminal in hc yet.</Empty> : <TerminalView terminal={s.hc_terminal} fill />}

@@ -263,6 +263,8 @@ async function onCommand(cmd) {
       if (typeof engine.listCommands !== 'function') throw Object.assign(new Error('This engine has no slash commands'), { code: 'unsupported' });
       return { type: 'commands', commands: await engine.listCommands() };
     }
+    case 'account_usage':
+      return { type: 'account_usage', usage: await engine.readUsage?.() ?? null };
     case 'set_model': {
       const model = typeof cmd.model === 'string' ? cmd.model.trim() : '';
       if (!model) throw Object.assign(new Error('model must be a non-empty string'), { code: 'bad_model' });

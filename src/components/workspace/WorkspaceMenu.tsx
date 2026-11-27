@@ -105,7 +105,7 @@ export function WorkspaceMenu({ ws, variant = 'header' }: { ws: Workspace; varia
       >
         {isWt ? (
           <div className="flex flex-col gap-2">
-            <label className="flex items-center gap-2 text-[12px]">
+            <label className="flex items-center gap-2 text-xs">
               <input type="checkbox" checked={removeWt} onChange={(e) => setRemoveWt(e.target.checked)} />
               Also delete worktree <span className="font-mono text-xs text-muted-foreground">{ws.branch}</span>
             </label>

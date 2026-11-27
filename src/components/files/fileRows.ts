@@ -1,4 +1,4 @@
-export const fileRow = 'justify-start gap-1.5 border border-transparent font-normal text-foreground hover:bg-accent/60';
+export const fileRow = 'justify-start gap-1.5 border border-transparent font-normal text-foreground hover:bg-accent';
 export const selectedFileRow = 'border-border bg-accent font-medium text-accent-foreground hover:bg-accent';
 export const filePanelHeader = 'flex h-11 shrink-0 items-center gap-2 border-b border-border px-3';
 

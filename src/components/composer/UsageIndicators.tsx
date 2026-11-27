@@ -20,7 +20,7 @@ export function UsageIndicators({ sessionId, onCompact, compactDisabled }: {
   return (
     <>
       <span role="status" aria-label={ctxPct == null ? 'Context usage unavailable' : `Context used ${value}`}
-        data-level={level} className="inline-flex shrink-0 items-baseline gap-1 whitespace-nowrap rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 text-xs leading-4">
+        data-level={level} className="inline-flex shrink-0 items-baseline gap-1 whitespace-nowrap rounded-md border border-border bg-muted px-1.5 py-0.5 text-xs leading-4">
         <span className="text-muted-foreground">Ctx</span>
         <span className={cn('font-medium tabular-nums', value === '—' ? 'text-muted-foreground' : TONE[level])}>{value}</span>
       </span>

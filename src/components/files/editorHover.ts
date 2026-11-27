@@ -40,7 +40,7 @@ export function editorHover(projectId: string, workspaceId: string | undefined, 
       create: () => {
         const dom = document.createElement('div');
         dom.setAttribute('role', 'tooltip');
-        dom.className = 'max-h-60 max-w-[min(32rem,85vw)] overflow-auto rounded-md border border-border bg-surface px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words text-foreground shadow-md';
+        dom.className = 'max-h-60 max-w-[min(32rem,85vw)] overflow-auto rounded-md border border-border bg-surface px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words text-foreground shadow-overlay';
         dom.textContent = summary;
         return { dom };
       },

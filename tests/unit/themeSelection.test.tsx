@@ -51,20 +51,20 @@ describe('resolveThemeId', () => {
 describe('theme on <html>', () => {
   it('writes the colours and the dark class for the theme in effect', () => {
     renderHook(() => useThemeEffect(), { wrapper });
-    expect(html().style.getPropertyValue('--background')).toBe('#ffffff');
+    expect(html().style.getPropertyValue('--background')).toBe('#e7e9f2');
     const lightIgnored = html().style.getPropertyValue('--git-ignored-fg');
     expect(lightIgnored).toMatch(/^#[\da-f]{6}$/i);
     expect(html().classList.contains('dark')).toBe(false);
     act(() => useUiStore.setState({ lightTheme: 'paper' }));
     expect(html().style.getPropertyValue('--background')).toBe('#f6f1e7');
     act(() => useUiStore.setState({ theme: 'dark' }));
-    expect(html().style.getPropertyValue('--background')).toBe('#09090b');
+    expect(html().style.getPropertyValue('--background')).toBe('#232635');
     expect(html().classList.contains('dark')).toBe(true);
     const darkIgnored = html().style.getPropertyValue('--git-ignored-fg');
-    expect(darkIgnored).toBe('#737994');
+    expect(darkIgnored).toMatch(/^#[\da-f]{6}$/i);
     expect(darkIgnored).not.toBe(lightIgnored);
     act(() => useUiStore.setState({ darkTheme: 'one-dark-pro' }));
-    expect(html().style.getPropertyValue('--git-ignored-fg')).toBe(darkIgnored);
+    expect(html().style.getPropertyValue('--git-ignored-fg')).toMatch(/^#[\da-f]{6}$/i);
     act(() => useUiStore.setState({ theme: 'light', lightTheme: 'light' }));
     expect(html().style.getPropertyValue('--git-ignored-fg')).toBe(lightIgnored);
   });
@@ -97,12 +97,13 @@ describe('theme on <html>', () => {
     expect(result.current.id).toBe('dark'); // 'paper' is light, so Dark falls back
   });
 
-  it('remembers the resolved theme and paints it before React on the next launch', () => {
-    renderHook(() => useThemeEffect(), { wrapper });
-    act(() => useUiStore.setState({ lightTheme: 'paper' }));
-    html().removeAttribute('style');
+  it('paints the current built-in palette when an older version was cached', () => {
+    localStorage.setItem('herdsman-theme-cache', JSON.stringify({ light: {
+      id: 'light', name: 'Light', appearance: 'light', source: 'builtin',
+      colors: { background: '#ffffff', foreground: '#09090b' },
+    } }));
     bootTheme();
-    expect(html().style.getPropertyValue('--background')).toBe('#f6f1e7');
+    expect(html().style.getPropertyValue('--background')).toBe('#e7e9f2');
   });
 
   it('derives the ignored foreground when restoring an older cached custom theme', () => {

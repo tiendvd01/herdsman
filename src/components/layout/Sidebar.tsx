@@ -63,10 +63,10 @@ export function Sidebar({ pullRequestsByProject }: { pullRequestsByProject?: Rec
             type="button"
             onClick={() => ui().setCmdOpen(true)}
             aria-keyshortcuts={shortcutLabel(paletteKey, true)}
-            className="mx-2 flex h-9 items-center gap-2 rounded-lg border border-input bg-background px-2 text-left text-muted-foreground shadow-xs hover:bg-accent dark:shadow-none"
+            className="mx-2 flex h-9 items-center gap-2 rounded-lg border border-input bg-surface px-2 text-left text-muted-foreground shadow-raised hover:bg-accent active:shadow-recessed"
           >
             <Search className="size-4 shrink-0" />
-            <TruncatedText className="flex-1 truncate text-[12px]">Search conversations, commands…</TruncatedText>
+            <TruncatedText className="flex-1 truncate text-xs">Search conversations, commands…</TruncatedText>
             <Kbd>{shortcutLabel(paletteKey)}</Kbd>
           </button>
 
@@ -186,7 +186,7 @@ function ProjectNode({ project, reorder, switcher, pulls }: {
   return (
     <div className="flex flex-col">
       <div {...(switcher ? {} : reorder.row(project.id))} className={cn('group flex items-center rounded-lg hover:bg-accent',
-        selectedProject && (selectedWs ? 'bg-muted/60' : 'bg-accent'), reorder.indicator)}>
+        selectedProject && (selectedWs ? 'bg-muted' : 'bg-accent shadow-recessed'), reorder.indicator)}>
         {switcher ?? <button
           {...reorder.item(project.id)}
           type="button"
@@ -203,7 +203,7 @@ function ProjectNode({ project, reorder, switcher, pulls }: {
           aria-expanded={!collapsed}
         >
           <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-150', !collapsed && 'rotate-90')} />
-          <TruncatedText className={cn('min-w-0 flex-1 truncate text-[13px] font-medium', selectedProject && 'font-semibold')}>{project.name}</TruncatedText>
+          <TruncatedText className={cn('min-w-0 flex-1 truncate text-sm font-medium', selectedProject && 'font-semibold')}>{project.name}</TruncatedText>
           {project.missing ? (
             <Tooltip content="The project folder no longer exists">
               <AlertTriangle className="size-3.5 shrink-0 text-st-blocked" />
@@ -217,7 +217,7 @@ function ProjectNode({ project, reorder, switcher, pulls }: {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
-            <DropdownMenuItem disabled className="font-mono text-[11px]">
+            <DropdownMenuItem disabled className="font-mono text-xs">
               {pathLabel(project.path)}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -256,7 +256,7 @@ function ProjectNode({ project, reorder, switcher, pulls }: {
             return (
               <li key={w.id} {...workspaceOrder.row(w.id)} className={cn(workspaceOrder.indicator,
                 'group rounded-md hover:bg-accent has-[[data-state=open]]:bg-accent',
-                on && 'bg-primary/10 ring-1 ring-inset ring-primary/25')}>
+                on && 'bg-accent shadow-recessed ring-1 ring-inset ring-primary/25')}>
                 <div className="flex min-h-8 items-center">
                   <button
                     {...workspaceOrder.item(w.id)}
@@ -273,7 +273,7 @@ function ProjectNode({ project, reorder, switcher, pulls }: {
                     ) : (
                       <Square className="size-3.5 shrink-0 text-muted-foreground" aria-label="Project folder" />
                     )}
-                    <TruncatedText className={cn('min-w-0 flex-1 truncate text-[12px]', on && 'font-medium')}>{w.name ?? 'New workspace'}</TruncatedText>
+                    <TruncatedText className={cn('min-w-0 flex-1 truncate text-xs', on && 'font-medium')}>{w.name ?? 'New workspace'}</TruncatedText>
                     {needs ? <span className="size-1.5 shrink-0 rounded-full bg-st-blocked" role="img" aria-label="Session awaiting approval" /> : null}
                   </button>
                   <WorkspaceMenu ws={w} variant="sidebar" />
@@ -288,7 +288,7 @@ function ProjectNode({ project, reorder, switcher, pulls }: {
                           type="button"
                           aria-label={`Open pull request #${pull.number} on GitHub · ${status.label}`}
                           title={`${status.label} pull request #${pull.number}`}
-                          className={cn('inline-flex min-h-6 cursor-pointer items-center rounded-full hover:underline focus-visible:outline-2 focus-visible:outline-ring',
+                          className={cn('inline-flex min-h-6 cursor-pointer items-center rounded-full hover:underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2',
                             pull.state === 'MERGED' && 'text-[color:color-mix(in_srgb,var(--git-graph-purple),var(--foreground)_25%)]')}
                           onClick={() => void openOriginal(repository, pull.number)}
                         >

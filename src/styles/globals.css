@@ -5,13 +5,20 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Colours live in theme files (spec 016): src/theme/builtin/*.json + <data_dir>/themes/*.json, declared once in src/theme/roles.ts and
-   written onto <html> at runtime. Only non-colour tokens stay here. */
+/* Elevation follows the active surface color, including custom palettes. */
 :root {
-  --radius: 5px;
+  --radius: 10px;
+  --shadow-highlight: color-mix(in srgb, var(--surface), white 72%);
+  --shadow-shade: color-mix(in srgb, var(--surface), black 21%);
+  --shadow-overlay-ink: color-mix(in srgb, black 24%, transparent);
   /* Spec 006: content text-size offset, set from the store (−2…+4px). */
   --content-step: 0px;
-  --code-content-size: var(--code-font-size, calc(12px + var(--content-step)));
+  --code-content-size: var(--code-font-size, calc(var(--text-xs) + var(--content-step)));
+}
+
+:root.dark {
+  --shadow-highlight: color-mix(in srgb, var(--surface), white 14%);
+  --shadow-shade: color-mix(in srgb, var(--surface), black 55%);
 }
 
 /* Spec 011: regions that stay dark in both themes (Log) use the dark scrollbar colors. */
@@ -20,26 +27,33 @@
   --scrollbar-thumb-hover: var(--term-scrollbar-thumb-hover);
 }
 
-/* Spec 006: compact scale — spacing unit -10%, text one notch smaller (never below 11px). */
+/* Keep the compact desktop spacing scale. */
 @theme {
   --spacing: 0.225rem;
-  --text-xs: 11px;
+  --text-xs: 12px;
   --text-xs--line-height: 1.45;
-  --text-sm: 12.5px;
+  --text-sm: 13px;
   --text-sm--line-height: 1.5;
   --text-base: 14px;
   --text-base--line-height: 1.5;
   --text-lg: 16px;
   --text-lg--line-height: 1.5;
+  --text-xl: 18px;
+  --text-xl--line-height: 1.5;
   --font-sans: 'Geist', system-ui, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --default-transition-duration: 150ms;
 }
 
 @theme inline {
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --shadow-raised: -1px -1px 3px var(--shadow-highlight), 2px 2px 4px var(--shadow-shade);
+  --shadow-panel: -2px -2px 6px var(--shadow-highlight), 4px 4px 10px var(--shadow-shade);
+  --shadow-overlay: 0 3px 6px var(--shadow-overlay-ink), 0 10px 24px var(--shadow-overlay-ink);
+  --shadow-recessed: inset 2px 2px 5px var(--shadow-shade), inset -1px -1px 4px var(--shadow-highlight);
 }
 
 @layer base {
@@ -56,13 +70,17 @@
     background: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
   }
   button {
     cursor: pointer;
+  }
+  :where(:focus-visible) {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
   }
   ::selection {
     background: color-mix(in srgb, var(--foreground) 15%, transparent);
@@ -182,13 +200,13 @@
   font-family: var(--font-mono);
   font-size: var(--code-content-size);
   background: var(--muted);
-  padding: 2px 5px;
-  border-radius: 4px;
+  padding: calc(var(--spacing) * .5) var(--spacing);
+  border-radius: calc(var(--radius) - 4px);
 }
 .prose-hs .hs-table {
   overflow-x: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .prose-hs table {
   width: 100%;
@@ -246,8 +264,26 @@ body.reordering-navigation * {
 
 /* Content text follows --content-step. An explicit code size overrides it for code. */
 .text-content {
-  font-size: calc(13px + var(--content-step));
+  font-size: calc(var(--text-sm) + var(--content-step));
 }
 .text-content-code {
   font-size: var(--code-content-size);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hs-pulse,
+  .hs-caret {
+    animation: none;
+  }
+}
+
+/* Radix measures in viewport pixels. Only the popup content follows preview zoom. */
+[data-radix-popper-content-wrapper] {
+  zoom: calc(1 / var(--css-zoom, 1));
+}
+[data-radix-popper-content-wrapper] > * {
+  --popup-width: calc(var(--radix-popper-available-width) / var(--css-zoom, 1));
+  --popup-height: calc(var(--radix-popper-available-height) / var(--css-zoom, 1));
+  --popup-anchor-width: calc(var(--radix-popper-anchor-width) / var(--css-zoom, 1));
+  zoom: var(--css-zoom, 1);
 }

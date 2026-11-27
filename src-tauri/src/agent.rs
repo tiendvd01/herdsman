@@ -37,7 +37,7 @@ fn codex_binary() -> AppResult<PathBuf> {
     })
 }
 
-pub async fn codex_probe(st: &AppState, cwd: &str, action: &str, thread_id: Option<&str>) -> AppResult<Value> {
+pub async fn codex_probe(st: &AppState, cwd: &str, probe_args: &[&str]) -> AppResult<Value> {
     let node = st.node.as_ref().ok_or_else(|| AppError::new("node_missing", "Install Node.js to run Codex in Herdsman."))?;
     let binary = codex_binary()?;
     let script = st.sidecar.with_file_name("engines").join("codex.mjs");
@@ -46,11 +46,8 @@ pub async fn codex_probe(st: &AppState, cwd: &str, action: &str, thread_id: Opti
         script.to_string_lossy().into_owned(),
         binary.to_string_lossy().into_owned(),
         cwd.to_owned(),
-        action.to_owned(),
     ];
-    if let Some(id) = thread_id {
-        args.push(id.to_owned());
-    }
+    args.extend(probe_args.iter().map(|arg| (*arg).to_owned()));
     let output = st.hc()?.exec_metadata(cwd, &args).await?;
     if !output.status.success() {
         let message = String::from_utf8_lossy(&output.stderr);
@@ -166,8 +163,16 @@ async fn connect(st: &AppState, sid: &str, attempts: u32) -> AppResult<UnixStrea
 }
 
 /// Gửi một lệnh tới sidecar (kết nối riêng, chờ phản hồi có cùng `req`).
-pub async fn command(st: &AppState, sid: &str, mut cmd: Value) -> AppResult<Value> {
-    let stream = connect(st, sid, 25).await?;
+pub async fn command(st: &AppState, sid: &str, cmd: Value) -> AppResult<Value> {
+    send_command(connect(st, sid, 25).await?, cmd).await
+}
+
+pub async fn command_if_running(st: &AppState, sid: &str, cmd: Value) -> AppResult<Value> {
+    store::session_get(&st.db.lock(), sid)?;
+    send_command(UnixStream::connect(st.sock_path(sid)).await?, cmd).await
+}
+
+async fn send_command(stream: UnixStream, mut cmd: Value) -> AppResult<Value> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
     let hello = json!({"cmd": "hello", "proto": PROTO, "req": 0});

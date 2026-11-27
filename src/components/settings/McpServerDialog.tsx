@@ -25,7 +25,7 @@ function KeyValueRows({ label, keyLabel, rows: list, onChange }: {
   const update = (i: number, patch: Partial<Row>) => onChange(list.map((row, j) => (j === i ? { ...row, ...patch } : row)));
   return (
     <fieldset className="flex flex-col gap-2">
-      <legend className="mb-1 text-[13px] font-medium">{label}</legend>
+      <legend className="mb-1 text-sm font-medium">{label}</legend>
       {list.map((row, i) => (
         <div key={i} className="flex gap-2">
           <Input aria-label={`${keyLabel} ${i + 1} name`} placeholder={keyLabel} value={row.key}
@@ -107,7 +107,7 @@ export function McpServerDialog({ server, open, onOpenChange, onSave, busy, erro
                 <Label htmlFor="mcp-args">Arguments</Label>
                 <textarea id="mcp-args" value={args} onChange={(e) => setArgs(e.target.value)} rows={3}
                   placeholder={'-y\n@acme/mcp-server'}
-                  className="rounded-md border border-input bg-background px-3 py-2 font-mono text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                  className="rounded-md border border-input bg-background px-3 py-2 font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                 <p className="text-xs text-muted-foreground">One argument per line.</p>
               </div>
               <KeyValueRows label="Environment variables" keyLabel="Variable" rows={env} onChange={setEnv} />
@@ -121,7 +121,7 @@ export function McpServerDialog({ server, open, onOpenChange, onSave, busy, erro
               <KeyValueRows label="Headers" keyLabel="Header" rows={headers} onChange={setHeaders} />
             </>
           )}
-          {error ? <p role="alert" className="rounded-md border border-destructive/40 bg-danger-bg px-3 py-2 text-[12px] text-destructive">{error}</p> : null}
+          {error ? <p role="alert" className="rounded-md border border-destructive/40 bg-danger-bg px-3 py-2 text-xs text-destructive">{error}</p> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button type="submit" disabled={busy || !name.trim()}>{busy ? 'Saving…' : server ? 'Save' : 'Add server'}</Button>

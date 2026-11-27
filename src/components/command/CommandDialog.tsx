@@ -29,7 +29,7 @@ type Entry = { key: string; group: string; run: () => void; node: React.ReactNod
 function ResultText({ title, detail }: { title: string; detail?: string }) {
   return (
     <span className="flex min-w-0 flex-1 flex-col py-1 leading-snug">
-      <TruncatedText className="truncate text-[13px]">{title}</TruncatedText>
+      <TruncatedText className="truncate text-sm">{title}</TruncatedText>
       {detail && <TruncatedText className="truncate text-xs text-muted-foreground">{detail}</TruncatedText>}
     </span>
   );
@@ -95,7 +95,7 @@ export function CommandDialog() {
         <D.Overlay className="fixed inset-0 z-50 bg-scrim" />
         <D.Content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-[min(12%,120px)] z-50 flex max-h-[82%] w-[min(600px,calc(100%-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-lg focus:outline-none"
+          className="fixed left-1/2 top-[min(12%,120px)] z-50 flex max-h-[82%] w-[min(600px,calc(100%-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-overlay focus:outline-none"
         >
           <D.Title className="sr-only">Command menu</D.Title>
           {open ? <CommandBody close={() => setOpen(false)} /> : null}
@@ -325,8 +325,8 @@ function CommandBody({ close }: { close: () => void }) {
       node: (
         <>
           <c.Icon className="size-4 shrink-0 text-muted-foreground" />
-          <span className="flex-1 text-[13px]">{c.label}</span>
-          {c.kbd ? <kbd className="font-mono text-[11px] text-muted-foreground">{c.kbd}</kbd> : null}
+          <span className="flex-1 text-sm">{c.label}</span>
+          {c.kbd ? <kbd className="font-mono text-xs text-muted-foreground">{c.kbd}</kbd> : null}
         </>
       ),
     });
@@ -357,35 +357,37 @@ function CommandBody({ close }: { close: () => void }) {
   return (
     <>
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3 text-muted-foreground">
-        <Search className="size-4 shrink-0" />
-        <input
-          type="search"
-          role="combobox"
-          aria-autocomplete="list"
-          aria-expanded={entries.length > 0}
-          aria-controls={resultsId}
-          aria-activedescendant={selectedEntry ? optionId(selectedEntry.key) : undefined}
-          aria-label="Search sessions, projects or commands"
-          autoFocus
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing) return;
-            if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              setActiveKey(entries[Math.min(entries.length - 1, selectedIndex + 1)]?.key);
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setActiveKey(entries[Math.max(0, selectedIndex - 1)]?.key);
-            } else if (e.key === 'Enter' && selectedEntry) {
-              e.preventDefault();
-              pick(selectedEntry);
-            }
-          }}
-          placeholder="Type a command or search…"
-          className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
-        />
-        <button type="button" onClick={close} className="h-[24px] rounded border border-border bg-muted px-1.5 font-mono text-[11px] text-muted-foreground">
+        <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-code px-2 shadow-recessed has-[:focus-visible]:inset-ring-2 has-[:focus-visible]:inset-ring-ring">
+          <Search aria-hidden="true" className="size-4 shrink-0" />
+          <input
+            type="search"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={entries.length > 0}
+            aria-controls={resultsId}
+            aria-activedescendant={selectedEntry ? optionId(selectedEntry.key) : undefined}
+            aria-label="Search sessions, projects or commands"
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActiveKey(entries[Math.min(entries.length - 1, selectedIndex + 1)]?.key);
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActiveKey(entries[Math.max(0, selectedIndex - 1)]?.key);
+              } else if (e.key === 'Enter' && selectedEntry) {
+                e.preventDefault();
+                pick(selectedEntry);
+              }
+            }}
+            placeholder="Type a command or search…"
+            className="min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+          />
+        </div>
+        <button type="button" onClick={close} className="h-[24px] shrink-0 rounded border border-border bg-muted px-1.5 font-mono text-xs text-muted-foreground">
           Esc
         </button>
       </div>
@@ -393,7 +395,7 @@ function CommandBody({ close }: { close: () => void }) {
         {CATEGORIES.map((item) => (
           <button key={item} type="button" aria-pressed={category === item}
             onClick={() => { setCategory(item); setActiveKey(undefined); }}
-            className={cn('rounded-md px-3 py-1.5 text-[13px] text-muted-foreground hover:bg-accent', category === item && 'bg-accent text-foreground')}>
+            className={cn('rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent', category === item && 'bg-accent text-foreground')}>
             {item}
           </button>
         ))}

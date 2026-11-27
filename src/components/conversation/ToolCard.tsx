@@ -105,14 +105,14 @@ export function ToolCard({ item, disconnected = false, action, openFile, session
   const toolLabel = (
     <>
       <Icon className="size-4 shrink-0 text-muted-foreground" />
-      <span className="shrink-0 text-[12px] font-medium">
+      <span className="shrink-0 text-xs font-medium">
         {item.tool}
         {agentName ? ` · ${agentName}` : ''}
       </span>
     </>
   );
   return (
-    <div className={cn('overflow-hidden rounded-lg border bg-background', error ? 'border-destructive/40' : 'border-border')}>
+    <div className={cn('overflow-hidden rounded-lg border bg-surface shadow-raised', error ? 'border-destructive/40' : 'border-border')}>
       <div className="flex items-center">
         {openPath ? (
           <div className="flex min-w-0 flex-1 items-center gap-2 pl-3">

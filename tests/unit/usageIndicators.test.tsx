@@ -1,14 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { isTauri } from '@tauri-apps/api/core';
+import type { ReactNode } from 'react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { AccountUsage } from '@/components/layout/AccountUsage';
 import { UsageIndicators } from '@/components/composer/UsageIndicators';
 import { useSessionStore } from '@/stores/useSessionStore';
 import type { AgentEvent } from '@/lib/types';
+import { api } from '@/lib/api';
+
+vi.mock('@tauri-apps/api/core', () => ({ isTauri: vi.fn(() => false), invoke: vi.fn() }));
 
 const snap = (ts: number, context_pct: number | null, limits: unknown) => ({ seq: ts, ts, type: 'usage_snapshot', context_pct, limits }) as Extract<AgentEvent, { type: 'usage_snapshot' }>;
 const show = (sid = 's1') => render(<TooltipProvider><UsageIndicators sessionId={sid} /></TooltipProvider>);
 const future = (h: number) => new Date(Date.now() + h * 3600e3).toISOString();
+const showAccount = (children?: ReactNode) => {
+  const client = new QueryClient();
+  render(<QueryClientProvider client={client}>
+    <TooltipProvider delayDuration={0}>{children}<AccountUsage /></TooltipProvider>
+  </QueryClientProvider>);
+  return client;
+};
 
 beforeEach(() => useSessionStore.setState({ sessions: {}, limits: {} }));
 
@@ -33,7 +46,7 @@ describe('UsageIndicators', () => {
       context_pct: null,
       limits: { five_hour: { pct: 41, resets_at: future(3) } },
     }]);
-    render(<TooltipProvider><UsageIndicators sessionId="s1" /><AccountUsage /></TooltipProvider>);
+    showAccount(<UsageIndicators sessionId="s1" />);
     expect(screen.getByRole('status', { name: 'Context used 42%' }).getAttribute('data-level')).toBe('normal');
     expect(screen.queryByText('83%')).toBeNull();
     const claude = screen.getByRole('button', { name: 'Claude usage 96% 7d' });
@@ -57,13 +70,13 @@ describe('UsageIndicators', () => {
     useSessionStore.getState().applyEvents('s1', [snap(Date.now(), null, {
       seven_day: { pct: 18, resets_at: null },
     })]);
-    render(<TooltipProvider delayDuration={0}><AccountUsage /></TooltipProvider>);
+    showAccount();
     fireEvent.pointerMove(screen.getByRole('img', { name: 'Claude' }), { pointerType: 'mouse' });
     expect((await screen.findByRole('tooltip')).textContent).toContain('Week18%');
   });
 
   it('updates the weekly summary from empty to zero and full usage', () => {
-    render(<TooltipProvider><AccountUsage /></TooltipProvider>);
+    showAccount();
     expect(screen.getByRole('button', { name: 'Claude usage — 7d' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Codex usage — 7d' })).toBeTruthy();
     for (const pct of [0, 100]) {
@@ -105,5 +118,37 @@ describe('UsageIndicators', () => {
     st.applyEvents('s1', [snap(2000, 1, { five_hour: { pct: 50, resets_at: null } })]);
     st.applyEvents('s2', [snap(1000, 1, { five_hour: { pct: 10, resets_at: null } })]);
     expect(useSessionStore.getState().limits.claude?.five_hour?.pct).toBe(50);
+  });
+
+  it('refreshes account limits on open and window focus and preserves newer partial pushes', async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    const now = Date.now();
+    const request = vi.spyOn(api, 'accountUsage')
+      .mockResolvedValueOnce(null).mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ts: now - 10, limits: {
+        five_hour: { pct: 15, resets_at: null }, seven_day: { pct: 22, resets_at: null },
+      } })
+      .mockResolvedValue(null);
+    try {
+      const client = showAccount(<UsageIndicators sessionId="s1" />);
+      await act(async () => {});
+      expect(request.mock.calls).toEqual([['claude'], ['codex']]);
+      const state = useSessionStore.getState();
+      act(() => state.applyEvents('s1', [
+        snap(1, 40, null),
+        { type: 'usage_snapshot', seq: 2, ts: now, limits: { five_hour: { pct: 38, resets_at: null } } },
+      ]));
+      client.setQueryData(['account-usage', 'claude'], null, { updatedAt: Date.now() - 6000 });
+      fireEvent.focus(screen.getByRole('button', { name: 'Claude usage — 7d' }));
+      expect(await screen.findByRole('button', { name: 'Claude usage 22% 7d' })).toBeTruthy();
+      expect(screen.getByRole('tooltip').textContent).toContain('38%');
+      expect(screen.getByRole('status', { name: 'Context used 40%' })).toBeTruthy();
+      client.setQueryData(['account-usage', 'codex'], null, { updatedAt: Date.now() - 6000 });
+      fireEvent.focus(window);
+      expect(request.mock.calls).toEqual([['claude'], ['codex'], ['claude'], ['codex']]);
+    } finally {
+      request.mockRestore();
+      vi.mocked(isTauri).mockReturnValue(false);
+    }
   });
 });

@@ -25,7 +25,7 @@ export function ZoomIndicator() {
     <div
       role="status"
       aria-live="polite"
-      className={`pointer-events-none fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full border border-border bg-background px-3 py-1 text-xs font-medium tabular-nums shadow-md transition-opacity duration-200 ${visible ? 'opacity-100' : 'opacity-0'}`}
+      className={`pointer-events-none fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full border border-border bg-surface px-3 py-1 text-xs font-medium tabular-nums shadow-overlay transition-opacity duration-200 motion-reduce:transition-none ${visible ? 'opacity-100' : 'opacity-0'}`}
     >
       {text}
       {limit ? <span className="ml-1 text-muted-foreground">({limit})</span> : null}

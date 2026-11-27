@@ -8,31 +8,61 @@ import { probeCodex } from '../src/engines/codex.mjs';
 
 const fixture = `
 import readline from 'node:readline';
+import fs from 'node:fs';
+import path from 'node:path';
 const cwd = process.cwd();
 const thread = {
-  id: 'thread-from-cli', cwd, name: 'CLI conversation',
+  id: 'thread-from-cli', cwd, name: 'CLI conversation', preview: 'Old prompt', updatedAt: 1700000000,
   turns: [{ id: 'old-turn', items: [
     { type: 'userMessage', id: 'old-user', content: [{ type: 'text', text: 'Old prompt' }] },
     { type: 'agentMessage', id: 'old-reply', text: 'Old reply' },
   ] }],
 };
+const outside = { id: 'other', cwd: '/', preview: 'Outside prompt', updatedAt: 1700000001, status: { type: 'active' }, turns: [] };
 let turn = 0;
+let extraRoots = [];
+const skillAt = (root, scope) => {
+  try {
+    const file = fs.realpathSync(path.join(root, 'SKILL.md'));
+    const body = fs.readFileSync(file, 'utf8');
+    const name = body.match(/^name: (.+)$/m)?.[1];
+    const description = body.match(/^description: (.+)$/m)?.[1];
+    return name && description ? [{ name, description, path: file, scope, enabled: name !== 'disabled-skill', pluginId: null }] : [];
+  } catch { return []; }
+};
+const skillsIn = (root, scope) => !fs.existsSync(root) ? [] : fs.readdirSync(root).flatMap((name) =>
+  skillAt(path.join(root, name), scope));
 const textId = (text, turn) => text === 'show permissions' ? 'permissions-' + process.pid + '-' + turn : 'item-' + turn;
 const send = (message) => console.log(JSON.stringify(message));
 const notify = (method, params) => send({ method, params: { threadId: thread.id, ...params } });
 const complete = (status) => notify('turn/completed', { turn: { id: String(turn), status } });
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const msg = JSON.parse(line);
+  if (fs.existsSync(path.join(cwd, 'record-probe'))) fs.appendFileSync(path.join(cwd, 'record-probe'), msg.method + '\\n');
   const result = (value = {}) => send({ id: msg.id, result: value });
   switch (msg.method) {
     case 'initialize': result(); break;
     case 'account/read': result({ requiresOpenaiAuth: true, account: { type: 'chatgpt' } }); break;
     case 'account/rateLimits/read': result({ rateLimits: {
       primary: { usedPercent: 41, windowDurationMins: 300, resetsAt: 1900000000 },
-      secondary: { usedPercent: 6, windowDurationMins: 10080 },
+      secondary: { usedPercent: 6 + turn, windowDurationMins: 10080 },
     } }); break;
-    case 'thread/list': result({ data: [thread, { id: 'other', cwd: '/' }], nextCursor: null }); break;
-    case 'thread/read': result({ thread }); break;
+    case 'thread/list': {
+      if (msg.params.currentAccountOnly !== true || msg.params.archived !== false || msg.params.sourceKinds.join(',') !== 'cli,exec') {
+        send({ id: msg.id, error: { code: -32602, message: 'Expected current account CLI scope' } });
+      } else if (!msg.params.cwd) {
+        result(msg.params.cursor ? { data: [outside], nextCursor: null } : { data: [thread], nextCursor: 'next' });
+      } else {
+        result({ data: [thread, outside], nextCursor: null });
+      }
+      break;
+    }
+    case 'thread/read': result({ thread: msg.params.threadId === outside.id ? outside : thread }); break;
+    case 'skills/extraRoots/set': extraRoots = msg.params.extraRoots; result(); break;
+    case 'skills/list': result({ data: [{ cwd: msg.params.cwds[0], skills: [
+      ...extraRoots.flatMap((root) => skillAt(root, 'user')),
+      ...skillsIn(path.join(msg.params.cwds[0], '.agents/skills'), 'repo'),
+    ] }] }); break;
     case 'thread/start': result({ thread, model: 'test-model' }); break;
     case 'thread/resume':
       if (msg.params.threadId === 'unused-thread') send({ id: msg.id, error: { code: -32602, message: 'no rollout found' } });
@@ -47,7 +77,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       break;
     case 'turn/start': {
       turn++;
-      const itemId = textId(msg.params.input[0].text, turn);
+      const hasSkill = msg.params.input.some((part) => part.type === 'skill');
+      const itemId = hasSkill ? 'skill-' + process.pid + '-' + turn : textId(msg.params.input[0].text, turn);
       result({ turn: { id: String(turn) } });
       send({ method: 'account/rateLimits/updated', params: { rateLimits: {
         primary: { usedPercent: 43, windowDurationMins: 300, resetsAt: 1900000000 },
@@ -68,14 +99,14 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
           });
         }
       }
-      if (text === 'approve command') {
+      if (text === 'approve command' || text === '$claude-only approve') {
         send({ id: 'command', method: 'item/commandExecution/requestApproval', params: {
           threadId: thread.id, itemId, command: 'printf test', cwd,
         } });
       } else if (text === 'approve edit') {
         notify('item/started', { item: { type: 'fileChange', id: itemId, changes: [{ path: 'demo.md', diff: '-before\\n+after' }] } });
         send({ id: 'edit', method: 'item/fileChange/requestApproval', params: { threadId: thread.id, itemId } });
-      } else if (text === 'show permissions') {
+      } else if (text === 'show permissions' || hasSkill) {
         notify('item/completed', { item: { type: 'agentMessage', id: itemId, text: JSON.stringify({ ...msg.params, serverPid: process.pid }) } });
         complete('completed');
       } else if (text !== 'interrupt') {
@@ -93,6 +124,151 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   }
 });
 `;
+
+test('Codex can list and read CLI history without opening a thread', async (t) => {
+  const cwd = fs.realpathSync(tmpDataDir());
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const binary = path.join(cwd, 'codex-fixture');
+  fs.writeFileSync(binary, '#!/bin/sh\nexec "' + process.execPath + '" "' + binary + '.mjs" "$@"\n', { mode: 0o700 });
+  fs.writeFileSync(binary + '.mjs', fixture);
+  const log = path.join(cwd, 'record-probe');
+  fs.writeFileSync(log, '');
+
+  assert.deepEqual(await probeCodex(binary, cwd, 'history'), [
+    { id: 'thread-from-cli', cwd, name: 'CLI conversation', preview: 'Old prompt', updated_at: 1700000000000 },
+    { id: 'other', cwd: '/', name: '', preview: 'Outside prompt', updated_at: 1700000001000 },
+  ]);
+  assert.deepEqual(await probeCodex(binary, cwd, 'history-read', 'thread-from-cli', cwd), [
+    { role: 'user', text: 'Old prompt' }, { role: 'assistant', text: 'Old reply' },
+  ]);
+  assert.deepEqual(await probeCodex(binary, cwd, 'history-read', 'other', '/'), []);
+  await assert.rejects(probeCodex(binary, cwd, 'history-read', 'other', cwd), /no longer available/);
+  await assert.rejects(probeCodex(binary, cwd, 'history-read', 'foreign-account', cwd), /no longer available/);
+  assert.deepEqual(fs.readFileSync(log, 'utf8').split('\n').filter((method) => method.startsWith('thread/')), [
+    'thread/list', 'thread/list', 'thread/list', 'thread/read', 'thread/list', 'thread/read', 'thread/list', 'thread/list',
+  ]);
+});
+
+test('Codex lists and invokes readable project skills by workspace and path', async (t) => {
+  const dataDir = fs.realpathSync(tmpDataDir());
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const binary = path.join(dataDir, 'codex-fixture');
+  fs.writeFileSync(binary, `#!/bin/sh\nexec "${process.execPath}" "${binary}.mjs" "$@"\n`, { mode: 0o700 });
+  fs.writeFileSync(binary + '.mjs', fixture);
+  const main = path.join(dataDir, 'main');
+  const worktree = path.join(dataDir, 'worktree');
+  const empty = path.join(dataDir, 'empty');
+  fs.mkdirSync(empty);
+
+  function skill(workspace, root, name, description) {
+    const dir = path.join(workspace, root, 'skills', name);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'SKILL.md');
+    fs.writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n---\nTest instruction.\n`);
+    return file;
+  }
+  const native = skill(main, '.agents', 'shared', 'Main native definition');
+  skill(main, '.claude', 'shared', 'Lower priority definition');
+  const claude = skill(main, '.claude', 'claude-only', 'Claude definition');
+  const linked = skill(main, '.claude', 'linked', 'Linked definition');
+  fs.symlinkSync(path.dirname(linked), path.join(main, '.agents/skills/linked'));
+  fs.symlinkSync('missing-dir', path.join(main, '.agents/skills/broken'));
+  skill(main, '.agents', 'disabled-skill', 'Disabled definition');
+
+  const alternate = skill(worktree, '.claude', 'shared', 'Worktree definition');
+  const external = skill(main, '.claude', 'outside', 'Outside definition');
+  fs.symlinkSync(path.dirname(external), path.join(worktree, '.claude/skills/outside'));
+  fs.mkdirSync(path.join(worktree, '.agents/skills'), { recursive: true });
+  fs.symlinkSync(path.dirname(linked), path.join(worktree, '.agents/skills/linked'));
+
+  let req = 0;
+  async function withSession(cwd, sid, run) {
+    const sidecar = await startSidecar({ dataDir, sid, cwd, codexBinary: binary, engine: 'codex' });
+    let client;
+    try {
+      client = await Client.connect(sidecar.sock);
+      await client.hello();
+      await client.subscribe(0);
+      await run(client, sidecar.sock);
+    } catch (error) {
+      throw new Error(`Codex session ${sid}: ${JSON.stringify(client?.events.slice(-8))}`, { cause: error });
+    } finally {
+      client?.close();
+      await sidecar.stop();
+    }
+  }
+  async function commands(client) {
+    const id = ++req;
+    client.send({ cmd: 'list_commands', req: id });
+    const reply = await client.waitFor((e) => e.req === id);
+    assert.equal(reply.type, 'commands', JSON.stringify(reply));
+    assert.equal(new Set(reply.commands.map(({ name }) => name)).size, reply.commands.length);
+    return Object.fromEntries(reply.commands.map(({ name, description }) => [name, description]));
+  }
+  async function prompt(client, text, images = []) {
+    client.send({ cmd: 'prompt', text, images });
+    const user = await client.waitFor((e) => e.type === 'user_message' && e.text === text);
+    const reply = await client.waitFor((e) => e.type === 'assistant_message' && e.seq > user.seq);
+    return reply.blocks[0].text;
+  }
+  async function invoke(client, text, file, name, images = []) {
+    const params = JSON.parse(await prompt(client, text, images));
+    assert.equal(params.input[0].text, text);
+    assert.deepEqual(params.input.find((part) => part.type === 'skill'), { type: 'skill', name, path: file });
+    assert.equal(params.approvalPolicy, 'on-request');
+    assert.equal(params.sandboxPolicy.type, 'readOnly');
+    return params.input;
+  }
+  await withSession(main, 'main', async (client, sock) => {
+    assert.deepEqual(await commands(client), {
+      compact: 'Compact context', shared: 'Main native definition', 'claude-only': 'Claude definition', linked: 'Linked definition',
+      outside: 'Outside definition',
+    });
+    await invoke(client, '$shared from picker', native, 'shared');
+    await invoke(client, '/linked by hand', linked, 'linked');
+    const image = { media_type: 'image/png', data_b64: 'aW1hZ2U=' };
+    const input = await invoke(client, '$claude-only with attachment', claude, 'claude-only', [image]);
+    assert.deepEqual(input.find((part) => part.type === 'image'), { type: 'image', url: 'data:image/png;base64,aW1hZ2U=' });
+
+    client.send({ cmd: 'prompt', text: '$claude-only approve' });
+    const request = await client.waitFor((e) => e.type === 'permission_request');
+    const reconnected = await Client.connect(sock);
+    try {
+      await reconnected.hello();
+      await reconnected.subscribe(0);
+      const pending = await reconnected.waitFor((e) => e.type === 'permission_request');
+      assert.equal(pending.id, request.id);
+      reconnected.send({ cmd: 'permission_response', id: pending.id, decision: 'deny' });
+      await reconnected.waitFor((e) => e.type === 'assistant_message' && e.blocks[0].text === 'decline');
+    } finally {
+      reconnected.close();
+    }
+
+    client.send({ cmd: 'set_permission_mode', mode: 'custom' });
+    await client.waitFor((e) => e.type === 'permission_mode_changed' && e.mode === 'custom');
+    const params = JSON.parse(await prompt(client, '$claude-only after permission reset'));
+    assert.deepEqual(params.input.at(-1), { type: 'skill', name: 'claude-only', path: claude });
+    assert.equal(params.sandboxPolicy, undefined);
+
+    fs.unlinkSync(claude);
+    assert.match(await prompt(client, '$claude-only after removal'), /claude-only.*no longer available/i);
+    assert.equal(await prompt(client, 'ordinary prompt after removal'), 'Final reply');
+  });
+  await withSession(worktree, 'tree', async (client) => {
+    await invoke(client, '$shared in worktree', alternate, 'shared');
+    assert.deepEqual(await commands(client), { compact: 'Compact context', shared: 'Worktree definition' });
+    assert.match(await prompt(client, '$linked from the other workspace'), /linked.*outside the workspace/);
+  });
+  skill(worktree, '.claude', 'shared', 'Updated worktree definition');
+  await withSession(worktree, 'tree', async (client) => {
+    assert.deepEqual(await commands(client), { compact: 'Compact context', shared: 'Updated worktree definition' });
+    await invoke(client, '$shared after resume', alternate, 'shared');
+  });
+  await withSession(empty, 'empty', async (client) => {
+    assert.deepEqual(await commands(client), { compact: 'Compact context' });
+    assert.equal(await prompt(client, 'ordinary prompt in empty workspace'), 'Final reply');
+  });
+});
 
 test('Codex history, live turns, approval reconnect and interrupt use the existing sidecar socket', async (t) => {
   const dataDir = tmpDataDir();
@@ -126,7 +302,10 @@ test('Codex history, live turns, approval reconnect and interrupt use the existi
     });
     client.send({ cmd: 'prompt', text: 'approve command' });
     const updated = await client.waitFor((e) => e.type === 'usage_snapshot' && e.limits?.five_hour?.pct === 43);
-    assert.equal(updated.limits.seven_day.pct, 6);
+    assert.equal(updated.context_pct, undefined);
+    client.send({ cmd: 'account_usage', req: 42 });
+    const refreshed = await client.waitFor((e) => e.type === 'account_usage' && e.req === 42);
+    assert.equal(refreshed.usage.limits.seven_day.pct, 7);
     await client.waitFor((e) => e.type === 'delta' && e.text === 'Streaming reply');
     const request = await client.waitFor((e) => e.type === 'permission_request');
     assert.equal(request.input.command, 'printf test');

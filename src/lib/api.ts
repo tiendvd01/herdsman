@@ -1,6 +1,8 @@
 // Wrapper có kiểu cho các Tauri command (contracts/tauri-commands.md).
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
+  AccountUsageSnapshot,
+  UsageProvider,
   ModelList,
   SlashCommandInfo,
   AgentNode,
@@ -15,6 +17,8 @@ import type {
   SearchHit,
   StoredHistoryEntry,
   ClaudeHit,
+  CodexHistoryEntry,
+  CodexHistoryMessage,
   Session,
   Workspace,
 } from './types';
@@ -251,6 +255,7 @@ export const api = {
     invoke<void>('session_set_permission_mode', { id, mode, confirmBypass }),
   sessionListModels: (id: string) => invoke<ModelList>('session_list_models', { id }),
   sessionListCommands: (id: string) => invoke<{ commands: SlashCommandInfo[] }>('session_list_commands', { id }),
+  accountUsage: (provider: UsageProvider) => invoke<AccountUsageSnapshot | null>('account_usage', { provider }),
   sessionSetModel: (id: string, model: string) => invoke<void>('session_set_model', { id, model }),
   sessionResume: (id: string) => invoke<Session>('session_resume', { id }),
   sessionClose: (id: string) => invoke<void>('session_close', { id }),
@@ -261,6 +266,9 @@ export const api = {
     invoke<StoredHistoryEntry[]>('history_stored', { query, workspaceId }),
   historyClaude: (query: string, workspaceId?: string) =>
     invoke<{ hits: ClaudeHit[]; partial: boolean }>('history_claude', { query, workspaceId }),
+  historyCodex: (workspaceId?: string) => invoke<CodexHistoryEntry[]>('history_codex', { workspaceId }),
+  historyCodexRead: (threadId: string, cwd: string) =>
+    invoke<CodexHistoryMessage[]>('history_codex_read', { threadId, cwd }),
   claudeSearch: (query: string, scope?: { workspaceId?: string; projectId?: string }) =>
     invoke<ClaudeHit[]>('claude_search', { query, ...scope, palette: !!scope }),
   codexThreads: (workspaceId: string) => invoke<{ id: string; name: string }[]>('codex_threads', { workspaceId }),

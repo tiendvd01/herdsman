@@ -98,7 +98,7 @@ export function ModelSwitcher({ session, disabled }: { session: Session; disable
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>{button}</DropdownMenuTrigger>
       {/* Long lists scroll: cap at 360px or the space Radix says is available, whichever is smaller. */}
-      <DropdownMenuContent data-model-menu={session.id} side="top" className="max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))] w-72 overflow-y-auto">
+      <DropdownMenuContent data-model-menu={session.id} side="top" className="max-h-[min(360px,var(--popup-height))] w-72 overflow-y-auto">
         {list.isPending ? (
           <div className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground" role="status">
             <Loader2 className="size-3.5 animate-spin" />

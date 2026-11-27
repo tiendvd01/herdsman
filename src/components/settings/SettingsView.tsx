@@ -60,9 +60,9 @@ export function SettingsView() {
 
 function Row({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-6 border-b border-border py-4 last:border-b-0">
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <span className="text-[13px] font-medium">{label}</span>
+    <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2 border-b border-border py-4 last:border-b-0">
+      <div className="flex min-w-40 flex-1 flex-col gap-0.5">
+        <span className="text-sm font-medium">{label}</span>
         {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
       </div>
       <div className="flex shrink-0 flex-col items-end gap-2">{children}</div>
@@ -137,7 +137,7 @@ function CodeFontSizePicker() {
       <div
         role="group"
         aria-label="Code font size"
-        className="grid w-32 shrink-0 grid-cols-[auto_1fr_auto] items-center rounded-lg border border-input bg-muted p-0.5"
+        className="grid w-32 shrink-0 grid-cols-[auto_1fr_auto] items-center rounded-lg border border-input bg-muted p-0.5 shadow-recessed"
       >
         <Button variant="muted" size="icon" aria-label="Decrease code font size" disabled={displayedSize <= CODE_FONT_SIZE.min} onClick={() => setSize(displayedSize - 1)}>
           <Minus />
@@ -170,7 +170,7 @@ function ThemePreviewGroup({ dark }: { dark: boolean }) {
   const label = dark ? 'Dark' : 'Light';
   return (
     <div className="flex flex-col gap-2">
-      <h3 className="text-[13px] font-medium">{label}</h3>
+      <h3 className="text-sm font-medium">{label}</h3>
       <RadioGroup
         aria-label={`${label} themes`}
         value={value}
@@ -182,7 +182,7 @@ function ThemePreviewGroup({ dark }: { dark: boolean }) {
             <RadioGroupItem
               value={id}
               aria-label={name}
-              className="group flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl border-2 p-2 text-left hover:bg-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background aria-checked:border-primary"
+              className="group flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl border-2 bg-surface p-2 text-left shadow-raised hover:bg-accent aria-checked:shadow-recessed focus-visible:ring-offset-2 focus-visible:ring-offset-background aria-checked:border-primary"
             >
               <span
                 aria-hidden="true"
@@ -197,7 +197,7 @@ function ThemePreviewGroup({ dark }: { dark: boolean }) {
                 </span>
               </span>
               <span className="flex w-full items-center gap-1.5">
-                <span className="truncate text-[13px]">{name}</span>
+                <span className="truncate text-sm">{name}</span>
                 <Check aria-hidden="true" className="invisible size-3.5 shrink-0 text-primary group-aria-checked:visible" />
               </span>
             </RadioGroupItem>
@@ -242,7 +242,7 @@ export function ThemePicker() {
   const theme = useUiStore((s) => s.theme);
   const setTheme = useUiStore((s) => s.setTheme);
   return (
-    <RadioGroup orientation="horizontal" value={theme} onValueChange={(value) => setTheme(value as typeof theme)} aria-label="Theme" className="inline-flex rounded-md border border-border p-0.5">
+    <RadioGroup orientation="horizontal" value={theme} onValueChange={(value) => setTheme(value as typeof theme)} aria-label="Theme" className="inline-flex rounded-lg border border-border bg-muted p-0.5 shadow-recessed">
       {THEMES.map(({ value, label, Icon }) => {
         const on = theme === value;
         return (
@@ -250,7 +250,7 @@ export function ThemePicker() {
             key={value}
             value={value}
             className={cn(
-              'flex h-7 items-center gap-1.5 rounded-[4px] px-3 text-[13px] [&_svg]:size-3.5',
+              'flex h-7 items-center gap-1.5 rounded-sm px-3 text-sm [&_svg]:size-3.5',
               on ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
@@ -302,7 +302,7 @@ export function FontPicker({ kind }: { kind: FontKind }) {
       >
         <PopoverTrigger
           aria-label={label}
-          className="inline-flex h-8 w-[220px] items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-[13px] shadow-xs hover:bg-accent dark:shadow-none"
+          className="inline-flex h-8 w-[220px] items-center justify-between gap-2 rounded-md border border-input bg-surface px-3 text-sm shadow-raised hover:bg-accent active:shadow-recessed"
         >
           <TruncatedText className="truncate" style={{ fontFamily: fontStack(kind, current.id) }}>
             {current.label}
@@ -330,7 +330,7 @@ export function FontPicker({ kind }: { kind: FontKind }) {
               }}
             />
           </div>
-          <div ref={listRef} role="listbox" aria-label={label} className="max-h-72 overflow-y-auto">
+          <div ref={listRef} role="listbox" aria-label={label} className="min-h-0 max-h-72 overflow-y-auto">
             {shown.length === 0 ? <p className="m-0 px-2 py-3 text-center text-xs text-muted-foreground">No fonts found</p> : null}
             {shown.map((f, i) => {
               const selected = sameFont(f, current);
@@ -347,7 +347,7 @@ export function FontPicker({ kind }: { kind: FontKind }) {
                       focusOption(i, e.key === 'ArrowDown' ? 1 : -1);
                     }
                   }}
-                  className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] outline-none hover:bg-accent focus-visible:bg-accent"
+                  className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:bg-accent"
                 >
                   <TruncatedText className="min-w-0 flex-1 truncate" style={{ fontFamily: fontStack(kind, f.id) }}>
                     {f.label}

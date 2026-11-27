@@ -54,8 +54,9 @@ export function CreateWorkspaceDialog({ project, open, onOpenChange }: { project
   }, [notRepo]);
 
   useEffect(() => {
-    if (activeId) document.getElementById(activeId)?.scrollIntoView?.({ block: 'nearest' });
-  }, [activeId]);
+    if (!showSuggestions) return;
+    document.getElementById(activeId ?? branchListId)?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeId, branchListId, showSuggestions]);
 
   function closeSuggestions() {
     setSuggesting(false);
@@ -120,7 +121,7 @@ export function CreateWorkspaceDialog({ project, open, onOpenChange }: { project
             <Input id="ws-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Leave empty to name it after the first prompt" autoFocus />
           </div>
           <RadioGroup orientation="vertical" value={kind} onValueChange={(value) => setKind(value as typeof kind)} aria-label="Working directory" className="flex flex-col gap-2">
-            <span className="text-[13px] font-medium">Working directory</span>
+            <span className="text-sm font-medium">Working directory</span>
             <DirOption
               active={kind === 'worktree'}
               value="worktree"
@@ -144,7 +145,7 @@ export function CreateWorkspaceDialog({ project, open, onOpenChange }: { project
           ) : (
             <div className="flex flex-col gap-2">
               <Label htmlFor="ws-branch">Branch</Label>
-              <div className="relative">
+              <div className="flex flex-col gap-1">
                 <Input
                   id="ws-branch"
                   role="combobox"
@@ -182,7 +183,7 @@ export function CreateWorkspaceDialog({ project, open, onOpenChange }: { project
                     id={branchListId}
                     role="listbox"
                     aria-label="Available branches"
-                    className="absolute inset-x-0 top-full z-10 mt-1 max-h-48 overflow-y-auto overscroll-contain rounded-lg border border-border bg-background p-1 shadow-lg"
+                    className="max-h-32 overflow-y-auto overscroll-contain rounded-lg border border-border bg-code p-1 shadow-recessed"
                   >
                     {suggestions.map((name, index) => (
                       <li
@@ -193,7 +194,7 @@ export function CreateWorkspaceDialog({ project, open, onOpenChange }: { project
                         title={name}
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={() => pickBranch(name)}
-                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-accent aria-selected:bg-accent"
+                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent aria-selected:bg-accent"
                       >
                         <GitBranch aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
                         <span className="truncate">{name}</span>
@@ -213,7 +214,7 @@ export function CreateWorkspaceDialog({ project, open, onOpenChange }: { project
               <option value="echo">Echo — simulated, no model calls</option>
             </NativeSelect>
           </div>
-          {err ? <p className="rounded-md border border-destructive/40 bg-danger-bg px-3 py-2 text-[12px] text-destructive">{err}</p> : null}
+          {err ? <p className="rounded-md border border-destructive/40 bg-danger-bg px-3 py-2 text-xs text-destructive">{err}</p> : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
@@ -245,8 +246,8 @@ function DirOption(props: { active: boolean; disabled?: boolean; value: string; 
         <span className={cn('size-2 rounded-full', props.active ? 'bg-foreground' : 'bg-transparent')} />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-[13px] font-medium">{props.title}</span>
-        <span className="text-[12px] text-muted-foreground">{props.desc}</span>
+        <span className="text-sm font-medium">{props.title}</span>
+        <span className="text-xs text-muted-foreground">{props.desc}</span>
       </span>
     </RadioGroupItem>
   );

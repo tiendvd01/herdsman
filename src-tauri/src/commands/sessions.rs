@@ -223,6 +223,27 @@ pub async fn session_list_commands(st: St<'_>, id: String) -> AppResult<Value> {
     }
 }
 
+#[tauri::command]
+pub async fn account_usage(st: St<'_>, provider: String) -> AppResult<Value> {
+    if !matches!(provider.as_str(), "claude" | "codex") {
+        return Err(AppError::new("bad_engine", provider));
+    }
+    let mut sessions = store::session_all(&st.db.lock())?;
+    sessions.retain(|s| s.engine == provider && s.hc_terminal.is_some());
+    sessions.sort_unstable_by_key(|s| std::cmp::Reverse(s.updated_at));
+    for session in sessions {
+        if !st.sock_path(&session.id).exists() {
+            continue;
+        }
+        match agent::command_if_running(&st, &session.id, json!({"cmd": "account_usage"})).await {
+            Ok(response) => return Ok(response.get("usage").cloned().unwrap_or(Value::Null)),
+            Err(error) if error.code == "timeout" => return Err(error),
+            Err(_) => continue,
+        }
+    }
+    Ok(Value::Null)
+}
+
 /// specs/005 FR-004/FR-007: đổi model; chỉ ghi DB sau khi agent ack.
 #[tauri::command]
 pub async fn session_set_model(st: St<'_>, id: String, model: String) -> AppResult<()> {

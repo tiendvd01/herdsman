@@ -14,7 +14,7 @@ export function GitHubSettingsSection() {
 
   return (
     <div className="flex flex-col gap-2 py-4">
-      <label htmlFor="github-account" className="text-[13px] font-medium">GitHub account</label>
+      <label htmlFor="github-account" className="text-sm font-medium">GitHub account</label>
       <p id="github-account-hint" className="text-xs text-muted-foreground">
         Choose the account Herdsman uses for Pull Requests. Add accounts with <code>gh auth login</code>.
       </p>

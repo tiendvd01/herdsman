@@ -86,7 +86,7 @@ export function bootTheme() {
   const dark = isDarkMode(mode, darkMql()?.matches ?? false);
   const id = dark ? darkTheme : lightTheme;
   const cached = readCache()[dark ? 'dark' : 'light'];
-  if (cached?.id === id && cached.colors?.background && cached.colors.foreground) {
+  if (cached?.source === 'custom' && cached.id === id && cached.colors?.background && cached.colors.foreground) {
     applyTheme(resolveTheme({ ...cached, background: cached.colors.background, foreground: cached.colors.foreground }));
   } else {
     applyTheme(pickTheme(buildCatalog(), id, dark));

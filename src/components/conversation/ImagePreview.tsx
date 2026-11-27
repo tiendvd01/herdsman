@@ -12,7 +12,8 @@ export function ImagePreview({ image, onClose }: { image: ImageSelection | null;
     <Dialog open={image !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
       {image && (
         <DialogContent
-          className="top-1/2 max-h-[calc(100%-32px)] w-[min(960px,calc(100%-32px))] -translate-y-1/2 p-4"
+          className="w-[min(960px,calc(100%-32px))]"
+          bodyClassName="p-4"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             image.trigger.focus({ preventScroll: true });
