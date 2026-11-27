@@ -84,17 +84,17 @@ export const PullRequestDetails = forwardRef<HTMLHeadingElement, {
   });
   return (
     <article aria-labelledby="pull-request-detail-title" className="flex w-full min-w-0 flex-col gap-4">
-      <header className="flex min-w-0 flex-col gap-2 border-b border-border pb-4">
+      <header className="flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-surface p-4">
         <p className="wrap-anywhere text-xs font-medium text-muted-foreground">{repository} · #{number}</p>
         <h2 id="pull-request-detail-title" ref={ref} tabIndex={-1} className="wrap-anywhere text-base leading-tight font-semibold outline-none">{summary?.title ?? notificationTitle ?? `Pull request #${number}`}</h2>
         {summary && <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <span className="inline-flex min-w-0 items-start gap-1.5 wrap-anywhere rounded-md bg-background px-2 py-1 text-foreground"><GitBranch aria-hidden="true" className="size-3.5 shrink-0" />{summary.headRefName || 'Unknown'} → {summary.baseRefName || 'Unknown'}</span>
           <span className="py-1"><PullRequestUpdated updatedAt={summary.updatedAt} /></span>
         </p>}
+        <div className="flex justify-end">
+          <Button variant="outline" size="sm" onClick={onOpen}>Open on GitHub<ExternalLink data-icon="inline-end" /></Button>
+        </div>
       </header>
-      <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={onOpen}>Open on GitHub<ExternalLink data-icon="inline-end" /></Button>
-      </div>
       {progress && <section aria-label="Progress" className="min-w-0 rounded-lg border border-border bg-surface">
         <h3 className="flex items-center gap-2 px-4 py-3 text-sm font-semibold"><Activity aria-hidden="true" className="size-4 text-git-rename-fg" />Progress</h3>
         <ol className="flex min-w-0 flex-col px-4 pb-3">

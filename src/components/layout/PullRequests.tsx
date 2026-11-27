@@ -430,18 +430,18 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
                     {current?.error && <Alert variant={current.stale ? 'default' : 'destructive'}><AlertDescription>{messageFor(current.error, current.stale)}</AlertDescription></Alert>}
                     {!current && <p role="status" className="text-sm text-muted-foreground">Loading pull requests…</p>}
                     {repository && current && (!current.error || current.stale) && (
-                      <div className="flex min-w-0 flex-col divide-y divide-border">
+                      <div className="flex min-w-0 flex-col gap-4">
                         {roles.filter((role) => view === 'overview' || view === role.key).map((role) => {
                           const pulls = current.pulls.filter((pr) => pr.role === role.key);
                           return (
-                            <section key={role.key} aria-label={role.label} className="flex min-w-0 flex-col py-2">
-                              <h4 className="py-2 text-xs font-medium text-muted-foreground">{role.label}</h4>
+                            <section key={role.key} aria-label={role.label} className="flex min-w-0 flex-col gap-2">
+                              <h4 className="text-xs font-medium text-muted-foreground">{role.label}</h4>
                               {pulls.length === 0 && <p className="py-3 text-xs text-muted-foreground">{role.empty}</p>}
                               {pulls.map((pr) => {
                                 const idForRow = rowId(id, repository, pr.number);
                                 return (
                                   <button type="button" key={pr.number} id={idForRow}
-                                    className="group grid min-w-0 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 border-b border-border py-3 text-left transition-colors last:border-b-0 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                                    className="group grid min-w-0 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 rounded-lg border border-border bg-surface px-3 py-3 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                                     onClick={() => {
                                       resume.current = { top: scroll.current?.scrollTop ?? 0, row: idForRow, view, project: tracker.projectId };
                                       tracker.openDetail(id, repository, pr.number);
