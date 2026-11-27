@@ -499,6 +499,21 @@ mod tests {
     }
 
     #[test]
+    fn browses_searches_and_reads_a_hidden_project_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let relative = ".claude/skills/example.md";
+        fs::create_dir_all(root.join(".claude/skills")).unwrap();
+        fs::write(root.join(relative), "example").unwrap();
+
+        assert!(list(root, "").unwrap().iter().any(|entry| entry.name == ".claude" && entry.directory));
+        assert_eq!(list(root, ".claude/skills").unwrap()[0].path, relative);
+        assert_eq!(search(root, "example").unwrap()[0].path, relative);
+        assert_eq!(read(root, relative).unwrap().text, "example");
+        assert_eq!(read_workspace(root, &root.join(relative), true).unwrap().1.text, "example");
+    }
+
+    #[test]
     #[ignore = "run explicitly to measure filesystem search on a seeded project"]
     fn search_latency_on_5000_files() {
         let dir = tempfile::tempdir().unwrap();

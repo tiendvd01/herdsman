@@ -238,6 +238,14 @@ it('opens Skills and Settings as separate screens inside the main content', () =
   expect(useUiStore.getState().workspaceId).toBe('workspace-a');
   expect(screen.queryByRole('heading', { name: 'Settings' })).toBeNull();
 
+  const skillsHeader = screen.getByRole('heading', { name: 'Skills' }).closest('header');
+  fireEvent.click(screen.getByRole('button', { name: 'Pull Requests' }));
+  const pullRequests = screen.getByRole('region', { name: 'Pull Requests' });
+  const pullRequestsHeader = within(pullRequests).getByRole('heading', { name: 'Pull Requests' }).closest('header');
+  expect(pullRequestsHeader?.className).toBe(skillsHeader?.className);
+  expect(within(pullRequests).getByRole('tablist', { name: 'Pull request views' })).toBeTruthy();
+  expect(within(pullRequests).getByRole('button', { name: /Refresh/ })).toBeTruthy();
+
   fireEvent.click(screen.getByRole('button', { name: 'Projects' }));
   expect(screen.getByRole('region', { name: 'Active workspace' })).toBeTruthy();
 });
@@ -281,10 +289,14 @@ it('keeps readable details through an offline refresh and removes them when acce
   expect(screen.queryByText('Private change')).toBeNull();
 });
 
-it('asks for a project before reading an ambiguous notification and opens the original for a removed PR', async () => {
+it('asks for a project before reading an ambiguous notification and opens in-app details for a merged PR', async () => {
   useUiStore.getState().setScreen('projects');
   useUiStore.getState().selectWorkspace('a', 'workspace-a');
-  native.invoke.mockImplementation(async (command) => command === 'pull_requests_refresh' ? {
+  native.invoke.mockImplementation(async (command) => command === 'pull_request_detail' ? {
+    headSha: 'head', body: 'Merged PR description',
+    summary: { title: 'Merged PR', state: 'merged', headRefName: 'feature', baseRefName: 'main' },
+    checks: {}, workflows: {}, reviews: {}, threads: {},
+  } : command === 'pull_requests_refresh' ? {
     account: 'developer',
     projects: { a: { repository: 'me/shared', pulls: [] }, b: { repository: 'me/shared', pulls: [] } },
     notifications: [{
@@ -297,15 +309,26 @@ it('asks for a project before reading an ambiguous notification and opens the or
   fireEvent.click(await screen.findByRole('button', { name: 'Pull Requests, 1 unread' }));
   const picker = within(screen.getByRole('navigation', { name: 'Select project' }));
   fireEvent.click(picker.getByRole('button', { name: 'All projects' }));
+  chooseView(/^Notifications/);
   fireEvent.click(screen.getByRole('button', { name: /^New comment/ }));
   const choice = within(screen.getByRole('group', { name: 'Choose a project' }));
   expect(document.activeElement).toBe(choice.getByRole('button', { name: 'Project A' }));
   expect(native.invoke.mock.calls.some(([command]) => command === 'pull_requests_read')).toBe(false);
   fireEvent.click(choice.getByRole('button', { name: 'Project B' }));
-  await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('pull_request_open', { repository: 'me/shared', number: 4 }));
+  const detail = await screen.findByRole('article', { name: 'Merged PR' });
+  expect(within(detail).getByText('Merged')).toBeTruthy();
+  expect(within(detail).getByText('Merged PR description')).toBeTruthy();
+  expect(native.invoke).toHaveBeenCalledWith('pull_request_detail', expect.objectContaining({
+    repository: 'me/shared', number: 4, expectedAccount: 'developer',
+  }));
+  expect(native.invoke.mock.calls.some(([command]) => command === 'pull_request_open')).toBe(false);
   expect(picker.getByRole('button', { name: 'Project B', current: true })).toBeTruthy();
-  expect(screen.queryByRole('article')).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Pull Requests, 1 unread' })).toBeNull();
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Pull Requests, 1 unread' })).toBeNull());
+  fireEvent.click(within(detail).getByRole('button', { name: 'Open on GitHub' }));
+  expect(native.invoke).toHaveBeenCalledWith('pull_request_open', { repository: 'me/shared', number: 4 });
+  fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
+  expect(screen.getByRole('tab', { name: /^Notifications/, selected: true })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^New comment/ })).toBeTruthy();
 });
 
 it('opens a toast from the workspace in the PR detail of its project', async () => {
@@ -316,8 +339,7 @@ it('opens a toast from the workspace in the PR detail of its project', async () 
     account: 'developer',
     projects: {
       a: { repository: 'me/a', pulls: [] },
-      b: { repository: 'me/b', pulls: [{ number: 9, title: 'Check permissions', role: 'requested', isDraft: false,
-        reviewDecision: 'REVIEW_REQUIRED', ci: null, mergeStateStatus: 'CLEAN', baseRefName: 'main' }] },
+      b: { repository: 'me/b', pulls: [] },
     },
   };
   const notifications = [{ repository: 'me/b', projects: [{ id: 'b', name: 'Project B' }],
@@ -335,6 +357,9 @@ it('opens a toast from the workspace in the PR detail of its project', async () 
   await act(() => client.invalidateQueries({ queryKey: ['pull-requests'] }));
   fireEvent.click(await screen.findByRole('button', { name: 'View' }));
   expect(screen.getByRole('article', { name: 'Check permissions' })).toBeTruthy();
+  const description = screen.getByRole('region', { name: 'Description' });
+  expect(await within(description).findByText('Details are unavailable.')).toBeTruthy();
+  expect(native.invoke.mock.calls.some(([command]) => command === 'pull_request_open')).toBe(false);
   expect(screen.getByRole('button', { name: 'Project B', current: true })).toBeTruthy();
   await waitFor(() => expect(screen.getByRole('tab', { name: /^Notifications.*0/ })).toBeTruthy());
   fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));

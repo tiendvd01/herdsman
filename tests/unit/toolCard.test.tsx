@@ -1,8 +1,9 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ToolCard } from '@/components/conversation/ToolCard';
 import type { Item } from '@/stores/useSessionStore';
+import { HomeDirectory } from '@/lib/homePath';
 
 it('shows the complete Bash command as plain text in expanded details', () => {
   const command = '  cd "/a long path"\nprintf "%s" \'<tag>\'  ';
@@ -45,4 +46,29 @@ it('shows running Bash output as text and keeps the card open on failure', () =>
   expect(screen.getByText('Failed', { exact: true })).toBeTruthy();
   expect(container.textContent).toContain('Exit code 3');
   expect(screen.queryByText('Earlier output omitted.')).toBeNull();
+});
+
+it.each(['Read', 'Write', 'Edit', 'MultiEdit'])('opens the original %s path independently of the details toggle', (tool) => {
+  const path = '/home/dev/worktree/src/a long filename.ts';
+  const openFile = vi.fn();
+  render(
+    <HomeDirectory.Provider value="/home/dev">
+      <ToolCard openFile={openFile} item={{
+        kind: 'tool', key: '1', tool_use_id: 'one', tool, steps: 0, ts: 1,
+        input: { file_path: path, content: 'const value = 1;' },
+      }} />
+    </HomeDirectory.Provider>,
+    { wrapper: TooltipProvider },
+  );
+
+  const link = screen.getByRole('link', { name: '~/worktree/src/a long filename.ts' });
+  const toggle = screen.getByRole('button');
+  for (let i = 0; i < 2; i += 1) {
+    const expanded = toggle.getAttribute('aria-expanded');
+    fireEvent.click(link);
+    expect(toggle.getAttribute('aria-expanded')).toBe(expanded);
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).not.toBe(expanded);
+  }
+  expect(openFile.mock.calls).toEqual([[path], [path]]);
 });

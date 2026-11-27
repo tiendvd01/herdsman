@@ -1,5 +1,5 @@
 import { forwardRef, type ComponentProps } from 'react';
-import { Activity, ArrowDownToLine, ChevronRight, GitBranch, Check, CircleAlert, CircleHelp, Clock, ExternalLink, GitPullRequest, GitPullRequestDraft, X } from 'lucide-react';
+import { Activity, ArrowDownToLine, ChevronRight, GitBranch, Check, CircleAlert, CircleHelp, Clock, ExternalLink, GitPullRequest, GitPullRequestDraft, GitPullRequestClosed, GitMerge, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PullRequestActivityFeedback, PullRequestCi, PullRequestDescription, PullRequestReview, PullRequestStatusChip, usePullRequestActivity } from './PullRequestActivity';
 
@@ -15,6 +15,7 @@ export interface PullRequest {
   headRefName?: string | null;
   headRefOid?: string | null;
   updatedAt?: string | null;
+  state?: 'open' | 'closed' | 'merged';
 }
 
 type Status = ComponentProps<typeof PullRequestStatusChip>;
@@ -35,9 +36,10 @@ const reviewStatus: Record<string, Status> = {
   REVIEW_REQUIRED: { value: 'Review required', variant: 'info', icon: Clock },
 };
 
-export function pullRequestProgress(pr: PullRequest) {
-  const state: Status = pr.isDraft
-    ? { value: 'Draft', variant: 'muted', icon: GitPullRequestDraft }
+export function pullRequestProgress(pr: Omit<PullRequest, 'role'>) {
+  const state: Status = pr.state === 'merged' ? { value: 'Merged', variant: 'info', icon: GitMerge }
+    : pr.state === 'closed' ? { value: 'Closed', variant: 'muted', icon: GitPullRequestClosed }
+    : pr.isDraft ? { value: 'Draft', variant: 'muted', icon: GitPullRequestDraft }
     : { value: 'Open', variant: 'success', icon: GitPullRequest };
   const base: Status = pr.mergeStateStatus === 'BEHIND'
     ? { value: `Update from ${pr.baseRefName || 'base branch'}`, variant: 'warn', icon: ArrowDownToLine }
@@ -62,34 +64,41 @@ export function PullRequestUpdated({ updatedAt }: { updatedAt?: string | null })
 }
 
 export const PullRequestDetails = forwardRef<HTMLHeadingElement, {
-  pull: PullRequest;
+  pull?: PullRequest;
+  number: number;
+  notificationTitle?: string;
   repository: string;
   account: string;
   summaryUpdatedAt: number;
   onOpen: () => void;
-}>(function PullRequestDetails({ pull, repository, account, summaryUpdatedAt, onOpen }, ref) {
-  const activity = usePullRequestActivity(repository, pull.number, account);
+}>(function PullRequestDetails({ pull, number, notificationTitle, repository, account, summaryUpdatedAt, onOpen }, ref) {
+  const activity = usePullRequestActivity(repository, number, account);
   const current = activity.data?.data;
-  const previousCommit = Boolean(current && pull.headRefOid && current.headSha !== pull.headRefOid && summaryUpdatedAt > activity.dataUpdatedAt);
+  const summary = pull ?? current?.summary;
+  const previousCommit = Boolean(current && pull?.headRefOid && current.headSha !== pull.headRefOid && summaryUpdatedAt > activity.dataUpdatedAt);
   const ci = current?.checks.data && !previousCommit ? current.checks.data.state
-    : current && pull.headRefOid && current.headSha !== pull.headRefOid ? null : pull.ci;
+    : current && pull?.headRefOid && current.headSha !== pull.headRefOid ? null : pull?.ci ?? null;
+  const progress = summary && pullRequestProgress({
+    ...summary, number, ci, reviewDecision: pull?.reviewDecision ?? null,
+    mergeStateStatus: pull?.mergeStateStatus ?? 'UNKNOWN', baseRefName: summary.baseRefName ?? '',
+  });
   return (
-    <article aria-labelledby="pull-request-detail-title" className="mx-auto flex w-full max-w-5xl min-w-0 flex-col gap-4">
-      <header className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-linear-to-br from-st-working/10 to-surface p-4">
-        <p className="wrap-anywhere text-xs font-semibold text-git-rename-fg">{repository} · #{pull.number}</p>
-        <h2 id="pull-request-detail-title" ref={ref} tabIndex={-1} className="wrap-anywhere text-xl leading-tight font-semibold outline-none">{pull.title}</h2>
-        <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <span className="inline-flex min-w-0 items-start gap-1.5 wrap-anywhere rounded-md bg-background px-2 py-1 text-foreground"><GitBranch aria-hidden="true" className="size-3.5 shrink-0" />{pull.headRefName || 'Unknown'} → {pull.baseRefName || 'Unknown'}</span>
-          <span className="py-1"><PullRequestUpdated updatedAt={pull.updatedAt} /></span>
-        </p>
+    <article aria-labelledby="pull-request-detail-title" className="flex w-full min-w-0 flex-col gap-4">
+      <header className="flex min-w-0 flex-col gap-2 border-b border-border pb-4">
+        <p className="wrap-anywhere text-xs font-medium text-muted-foreground">{repository} · #{number}</p>
+        <h2 id="pull-request-detail-title" ref={ref} tabIndex={-1} className="wrap-anywhere text-base leading-tight font-semibold outline-none">{summary?.title ?? notificationTitle ?? `Pull request #${number}`}</h2>
+        {summary && <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span className="inline-flex min-w-0 items-start gap-1.5 wrap-anywhere rounded-md bg-background px-2 py-1 text-foreground"><GitBranch aria-hidden="true" className="size-3.5 shrink-0" />{summary.headRefName || 'Unknown'} → {summary.baseRefName || 'Unknown'}</span>
+          <span className="py-1"><PullRequestUpdated updatedAt={summary.updatedAt} /></span>
+        </p>}
       </header>
       <div className="flex justify-end">
         <Button variant="outline" size="sm" onClick={onOpen}>Open on GitHub<ExternalLink data-icon="inline-end" /></Button>
       </div>
-      <section aria-label="Progress" className="min-w-0 rounded-lg border border-border bg-surface">
+      {progress && <section aria-label="Progress" className="min-w-0 rounded-lg border border-border bg-surface">
         <h3 className="flex items-center gap-2 px-4 py-3 text-sm font-semibold"><Activity aria-hidden="true" className="size-4 text-git-rename-fg" />Progress</h3>
         <ol className="flex min-w-0 flex-col px-4 pb-3">
-          {pullRequestProgress({ ...pull, ci }).map(({ label, ...status }) => (
+          {progress.map(({ label, ...status }) => (
             <li key={label} className="relative flex min-w-0 flex-col gap-2 border-l border-border py-2 pl-4">
               <span aria-hidden="true" className="absolute top-4 left-0 size-2 -translate-x-1/2 rounded-full bg-st-working ring-2 ring-surface" />
               {label === 'CI' ? (
@@ -112,7 +121,7 @@ export const PullRequestDetails = forwardRef<HTMLHeadingElement, {
             </li>
           ))}
         </ol>
-      </section>
+      </section>}
       <PullRequestActivityFeedback query={activity} />
       <PullRequestReview query={activity} />
       <PullRequestDescription query={activity} />

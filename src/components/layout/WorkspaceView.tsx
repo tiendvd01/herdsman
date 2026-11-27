@@ -1,3 +1,4 @@
+import { usePathLabel } from '@/lib/homePath';
 import { FileChanges } from '@/components/files/FileChanges';
 import { FileEditor } from '@/components/files/FileEditor';
 import { useFileClose } from '@/components/files/FileCloseDialog';
@@ -16,6 +17,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
 import { StatusDot } from '@/components/ui/status-dot';
 import { EngineIcon } from '@/components/ui/engine-icon';
+import { WorktreePostscriptStatus } from '@/components/workspace/WorktreePostscriptStatus';
 import { SessionView } from '@/components/conversation/SessionView';
 import { api, errMsg, type WorkspaceTerminalRef } from '@/lib/api';
 import { toast } from '@/components/ui/toast';
@@ -117,6 +119,7 @@ const tabClose = 'size-6 hover:bg-transparent';
 const contentTabFrame = 'm-2 min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg';
 
 function WorkspacePane({ project, ws, visible }: { project: Project; ws?: Workspace; visible: boolean }) {
+  const pathLabel = usePathLabel();
   const workspaceId = ws?.id ?? null;
   const qc = useQueryClient();
   const fileTabs = useFileStore((state) => state.tabs);
@@ -524,7 +527,7 @@ function WorkspacePane({ project, ws, visible }: { project: Project; ws?: Worksp
       const key = fileKey(file.id);
       return (
         <div key={key} {...tabReorder.row(reorderKey(key))} className={cn(tabFrame, tabReorder.indicator, file.id === fileId && selectedTabFrame)}>
-          <Button variant={file.id === fileId ? 'ghost' : 'muted'} size="xs" ref={file.id === fileId ? activeFileTab : undefined} {...tabReorder.item(reorderKey(key))} role="tab" aria-selected={file.id === fileId} title={file.path}
+          <Button variant={file.id === fileId ? 'ghost' : 'muted'} size="xs" ref={file.id === fileId ? activeFileTab : undefined} {...tabReorder.item(reorderKey(key))} role="tab" aria-selected={file.id === fileId} title={pathLabel(file.path)}
             id={domId(fileKey(file.id), 'tab')} aria-controls={domId(fileKey(file.id), 'panel')}
             tabIndex={file.id === fileId ? 0 : -1}
             className={tabTrigger}
@@ -533,7 +536,7 @@ function WorkspacePane({ project, ws, visible }: { project: Project; ws?: Worksp
             <TruncatedText className="truncate">{file.name}</TruncatedText>
             {isDirty(file) ? <Badge variant="outline" aria-label="Unsaved changes">Unsaved</Badge> : null}
           </Button>
-          <Button variant="muted" size="icon-sm" data-close-tab aria-label={`Close ${file.path}`} onClick={(event) => requestFileClose(file, event.currentTarget)} disabled={file.saving} tabIndex={file.id === fileId ? 0 : -1}
+          <Button variant="muted" size="icon-sm" data-close-tab aria-label={`Close ${pathLabel(file.path)}`} onClick={(event) => requestFileClose(file, event.currentTarget)} disabled={file.saving} tabIndex={file.id === fileId ? 0 : -1}
             className={tabClose}>
             <X />
           </Button>
@@ -547,15 +550,15 @@ function WorkspacePane({ project, ws, visible }: { project: Project; ws?: Worksp
         <div key={key} {...tabReorder.row(reorderKey(key))} className={cn(tabFrame, tabReorder.indicator, selected && selectedTabFrame)}>
           <Button variant={selected ? 'ghost' : 'muted'} size="xs" ref={selected ? activeFileTab : undefined}
             {...tabReorder.item(reorderKey(key))}
-            role="tab" aria-selected={selected} title={diff.commit ? `${diff.path} (${diff.commit.id})` : diff.path}
-            aria-label={`Changes: ${diff.path}${diff.commit ? ` (${diff.commit.shortId})` : ''}`}
+            role="tab" aria-selected={selected} title={diff.commit ? `${pathLabel(diff.path)} (${diff.commit.id})` : pathLabel(diff.path)}
+            aria-label={`Changes: ${pathLabel(diff.path)}${diff.commit ? ` (${diff.commit.shortId})` : ''}`}
             id={domId(key, 'tab')} aria-controls={domId(key, 'panel')}
             tabIndex={selected ? 0 : -1} className={tabTrigger}
             onClick={() => useFileStore.getState().activate(project.id, diff.id)}>
             <FileDiff data-icon="inline-start" />
             <TruncatedText className="truncate">{diff.name}{diff.commit ? ` · ${diff.commit.shortId}` : ''}</TruncatedText>
           </Button>
-          <Button variant="muted" size="icon-sm" data-close-tab aria-label={`Close changes for ${diff.path}`}
+          <Button variant="muted" size="icon-sm" data-close-tab aria-label={`Close changes for ${pathLabel(diff.path)}`}
             onClick={() => closeDiff(diff.id)} tabIndex={selected ? 0 : -1} className={tabClose}>
             <X />
           </Button>
@@ -635,6 +638,7 @@ function WorkspacePane({ project, ws, visible }: { project: Project; ws?: Worksp
         <RightPanelToggle buttonRef={rightPanelRef} />
       </header>
 
+      {ws?.dir_kind === 'worktree' && <WorktreePostscriptStatus workspaceId={ws.id} />}
       {ws && tabs.map((session) => (
         <SessionTabPanel key={session.id} session={session} ws={ws}
           id={domId(sessionKey(session.id), 'panel')} tabId={domId(sessionKey(session.id), 'tab')}

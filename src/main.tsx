@@ -1,7 +1,15 @@
 import React from 'react';
+import { homeDir } from '@tauri-apps/api/path';
+import { HomeDirectory } from './lib/homePath';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './styles/globals.css';
+
+function HomeDirectoryProvider({ directory, children }: { directory: Promise<string | undefined>; children: React.ReactNode }) {
+  const [home, setHome] = React.useState<string>();
+  React.useEffect(() => { void directory.then(setHome); }, [directory]);
+  return <HomeDirectory.Provider value={home}>{children}</HomeDirectory.Provider>;
+}
 
 async function boot() {
   // Dev in a browser only (no Tauri): add ?mock to preview the UI with sample data.
@@ -25,10 +33,11 @@ async function boot() {
   applyCodeFontSize(codeFontSize);
   await applyZoom(zoom); // later changes: useZoomEffect in AppShell
   const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 2000, refetchOnWindowFocus: true, retry: 1 } } });
+  const directory = homeDir().catch(() => undefined);
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        <App />
+        <HomeDirectoryProvider directory={directory}><App /></HomeDirectoryProvider>
       </QueryClientProvider>
     </React.StrictMode>,
   );

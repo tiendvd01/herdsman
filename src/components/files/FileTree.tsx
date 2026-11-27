@@ -2,7 +2,7 @@ import { fileRow, gitStatusMarker, gitStatusPresentation, selectedFileRow } from
 import { materialFileIcon } from './materialFileIcons';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
 import { AlertCircle, ChevronRight, Folder, Search, X } from 'lucide-react';
@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { TruncatedText } from '@/components/ui/truncated-text';
 import { api, errMsg, type ProjectFileEntry } from '@/lib/api';
+import { HomeDirectory } from '@/lib/homePath';
 import { qk } from '@/lib/queries';
 import type { Project } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -28,7 +29,11 @@ export function FileTree({ project }: { project: Project }) {
   const [searchText, setSearchText] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const searchInput = useRef<HTMLInputElement>(null);
-  const input = searchText.trimStart();
+  const home = useContext(HomeDirectory);
+  const entered = searchText.trimStart();
+  const input = home?.startsWith('/') && entered.startsWith('~/')
+    ? home.replace(/\/+$/, '') + entered.slice(1)
+    : entered;
   const absolute = input.startsWith('/');
   const query = absolute ? input : input.trimEnd();
   const searching = query !== '';

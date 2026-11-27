@@ -1,3 +1,4 @@
+import { usePathLabel } from '@/lib/homePath';
 import { TruncatedText } from '@/components/ui/truncated-text';
 // Allow/Deny card (FR-021): diff for Edit/Write, the full command for Bash. Never expires on its own (FR-023).
 import { useMemo, useState } from 'react';
@@ -22,7 +23,8 @@ export function PermissionCard({ sessionId, req, agentName = 'Agent' }: { sessio
   const [busy, setBusy] = useState<'allow' | 'deny' | null>(null);
   const diff = useMemo(() => toolDiff(req.tool, req.input), [req.tool, req.input]);
   const command = typeof req.input.command === 'string' ? req.input.command : null;
-  const where = diff?.file || req.cwd;
+  const pathLabel = usePathLabel();
+  const where = pathLabel(diff?.file || req.cwd || '');
 
   async function decide(decision: 'allow' | 'deny') {
     setBusy(decision);

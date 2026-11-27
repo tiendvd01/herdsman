@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
+import { ToolCard } from '@/components/conversation/ToolCard';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { Markdown } from '@/components/conversation/Markdown';
 import { api } from '@/lib/api';
 import { useFileStore } from '@/stores/useFileStore';
@@ -52,7 +54,8 @@ it('opens the resolved tab, keeps its draft and preserves selection after failur
   const [tab] = useFileStore.getState().tabs;
   expect(useFileStore.getState().active.project).toBe(tab.id);
   files.edit(tab.id, 'draft');
-  await files.openSessionFile('session', '/workspace/src/file.ts', () => true);
+  await files.openSessionFile('session', '/workspace/src/file.ts', () => true, { line: 4, column: 2 });
+  expect(useFileStore.getState().tabs[0].position).toEqual({ line: 4, column: 2 });
   expect(useFileStore.getState().tabs.map(({ draft }) => draft)).toEqual(['draft']);
 
   const state = useFileStore.getState();
@@ -61,4 +64,64 @@ it('opens the resolved tab, keeps its draft and preserves selection after failur
   read.mockRejectedValueOnce(new Error('The file could not be found.'));
   await expect(files.openSessionFile('session', 'src/missing.ts', () => true)).rejects.toThrow('could not be found');
   expect(useFileStore.getState()).toBe(state);
+});
+
+it('resolves locations and inline filenames while checking only the file path', async () => {
+  const open = vi.fn();
+  const exists = vi.spyOn(api, 'sessionFileExists').mockResolvedValue(true);
+  render(<QueryClientProvider client={new QueryClient()}>
+    <Markdown text={'See src/main.ts:12:5, `main.ts:3` and `README.md`.'} sessionId="session" openFile={open} />
+  </QueryClientProvider>);
+  for (const label of ['src/main.ts:12:5', 'main.ts:3', 'README.md']) {
+    fireEvent.click(await screen.findByRole('link', { name: label }));
+  }
+  expect(open.mock.calls).toEqual([
+    ['src/main.ts', { line: 12, column: 5 }],
+    ['main.ts', { line: 3, column: undefined }],
+    ['README.md'],
+  ]);
+  expect(exists).toHaveBeenCalledWith('session', 'src/main.ts');
+});
+
+it.each([
+  ['Grep', 'src/a file.ts:12:match', 'src/a file.ts:12', ['src/a file.ts', { line: 12 }]],
+  ['Glob', 'src/a, file.ts', 'src/a, file.ts', ['src/a, file.ts']],
+  ['Bash', 'error at src/main.ts:12:5: unexpected token', 'src/main.ts:12:5', ['src/main.ts', { line: 12, column: 5 }]],
+] as const)('links completed %s results', async (tool, content, label, call) => {
+  const open = vi.fn();
+  vi.spyOn(api, 'sessionFileExists').mockResolvedValue(true);
+  render(<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+    <ToolCard sessionId="session" openFile={open} item={{
+      kind: 'tool', key: 'tool', tool_use_id: 'tool', ts: 1, steps: 0, tool, input: {},
+      result: { content, is_error: tool === 'Bash' },
+    }} />
+  </TooltipProvider></QueryClientProvider>);
+  fireEvent.click(screen.getByRole('button'));
+  fireEvent.click(await screen.findByRole('link', { name: label }));
+  expect(open.mock.calls).toEqual([call]);
+});
+
+it('opens each diff target and skips a deleted target even when its name exists', async () => {
+  const open = vi.fn();
+  const exists = vi.spyOn(api, 'sessionFileExists').mockResolvedValue(true);
+  render(<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+    <ToolCard sessionId="session" openFile={open} item={{
+      kind: 'tool', key: 'tool', tool_use_id: 'tool', ts: 1, steps: 0, tool: 'Edit',
+      input: {
+        file_path: 'src/first.ts, src/a, file.ts, src/old.ts, src/deleted.ts',
+        unified_diff: [
+          '--- src/first.ts', '@@ -0,0 +1 @@', '+first',
+          '--- src/a, file.ts', '+second',
+          '--- a/src/old.ts', '+++ b/src/new.ts', '@@ -1 +1 @@', '-old', '+new',
+          '--- a/src/deleted.ts', '+++ /dev/null', '@@ -1 +0,0 @@', '-deleted',
+        ].join('\n'),
+      },
+    }} />
+  </TooltipProvider></QueryClientProvider>);
+  for (const path of ['src/a, file.ts', 'src/new.ts']) {
+    fireEvent.click(await screen.findByRole('link', { name: path }));
+  }
+  expect(open.mock.calls).toEqual([['src/a, file.ts'], ['src/new.ts']]);
+  expect(exists).not.toHaveBeenCalledWith('session', 'src/deleted.ts');
+  expect(screen.getByText('src/deleted.ts')).toBeTruthy();
 });

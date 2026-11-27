@@ -19,6 +19,26 @@ import type {
   Workspace,
 } from './types';
 
+export type ProjectCodegraphAction = 'init' | 'refresh' | 'exclude';
+
+export interface ProjectCodegraphStatus {
+  toolAvailable: boolean;
+  indexed: boolean;
+  ignored: boolean;
+  tracked: boolean;
+  running: boolean;
+  runtimeError: string | null;
+  runError: string | null;
+  stats: { fileCount: number | null; nodeCount: number | null; lastIndexed: string | null } | null;
+}
+
+export interface WorktreePostscriptRun {
+  status: 'running' | 'succeeded' | 'failed' | 'interrupted';
+  stdout: string;
+  stderr: string;
+  error: string | null;
+}
+
 export interface ProjectSkillId {
   source_id: string;
   directory: string;
@@ -191,6 +211,13 @@ export const api = {
 
   workspaceList: (projectId?: string, includeArchived = false) =>
     invoke<Workspace[]>('workspace_list', { projectId, includeArchived }),
+  projectCodegraphStatus: (projectId: string) =>
+    invoke<ProjectCodegraphStatus>('project_codegraph_status', { projectId }),
+  projectCodegraphRun: (projectId: string, action: ProjectCodegraphAction) =>
+    invoke<void>('project_codegraph_run', { projectId, action }),
+  projectPostscriptGet: (projectId: string) => invoke<string | null>('project_postscript_get', { projectId }),
+  projectPostscriptSet: (projectId: string, command: string) => invoke<void>('project_postscript_set', { projectId, command }),
+  workspacePostscriptGet: (workspaceId: string) => invoke<WorktreePostscriptRun | null>('workspace_postscript_get', { workspaceId }),
   workspaceCreate: (args: {
     projectId: string;
     name?: string;

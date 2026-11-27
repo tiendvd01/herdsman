@@ -1,3 +1,4 @@
+import { usePathLabel } from '@/lib/homePath';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -10,6 +11,7 @@ import { Switch } from '@/components/ui/switch';
 import { api, errMsg, type ProjectSkillChange } from '@/lib/api';
 
 export function ProjectSkillsSection({ projectId }: { projectId: string }) {
+  const pathLabel = usePathLabel();
   const queryClient = useQueryClient();
   const queryKey = ['project-skills', projectId] as const;
   const catalog = useQuery({ queryKey, queryFn: () => api.projectSkillCatalog(projectId) });
@@ -60,7 +62,7 @@ export function ProjectSkillsSection({ projectId }: { projectId: string }) {
                 <div className="flex min-w-0 flex-col gap-1">
                   <span className="break-words text-sm font-medium">{skill.name}</span>
                   {skill.description && <span className="text-xs text-muted-foreground">{skill.description}</span>}
-                  <span className="break-all text-xs text-muted-foreground">{skill.path}</span>
+                  <span className="break-all text-xs text-muted-foreground">{pathLabel(skill.path)}</span>
                   {skill.reason && <span className="text-xs text-muted-foreground">{skill.reason}</span>}
                 </div>
                 {skill.native ? <Badge variant="outline">{skill.global ? 'Claude global' : 'Claude project'} · Read only</Badge> : (
@@ -91,7 +93,7 @@ export function ProjectSkillsSection({ projectId }: { projectId: string }) {
               <div key={source.id} className="flex items-center justify-between gap-3 py-1">
                 <div className="min-w-0 break-all text-xs text-muted-foreground">
                   {source.id === 'shared' && <span className="mr-2 font-medium text-foreground">Shared library</span>}
-                  {source.path} {!source.available && <Badge variant="outline">Unavailable</Badge>}
+                  {pathLabel(source.path)} {!source.available && <Badge variant="outline">Unavailable</Badge>}
                 </div>
                 {source.id !== 'shared' && <Button variant="outline" size="sm" disabled={change.isPending} onClick={() => {
                   const confirmed = catalog.data.enabled.filter((skill) => skill.source_id === source.id).map((skill) => skill.directory);
@@ -109,7 +111,7 @@ export function ProjectSkillsSection({ projectId }: { projectId: string }) {
         open={!!remove}
         onOpenChange={(open) => { if (!open) setRemove(undefined); }}
         title="Remove skill source?"
-        description={remove?.names.length ? `This turns off these skills for future sessions: ${remove.names.join(', ')}.` : remove?.path}
+        description={remove?.names.length ? `This turns off these skills for future sessions: ${remove.names.join(', ')}.` : pathLabel(remove?.path ?? '')}
         confirmLabel="Remove source"
         destructive
         onConfirm={() => {

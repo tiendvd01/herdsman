@@ -59,6 +59,7 @@ let mockSeq = 1000;
 
 export function installDevMock() {
   const fileContents = new Map<string, string>();
+  const postscripts = new Map<string, string>();
   const sampleFile = (path: string) => path === 'README.md' ? '# Herdsman\n\nA workspace for coding agents.\n' : 'export const workspace = "Herdsman";\n';
   mockWindows('main');
   mockIPC(
@@ -111,6 +112,13 @@ export function installDevMock() {
           return [];
         case 'workspace_terminal_create':
           throw new Error('Terminal requires the desktop app.');
+        case 'project_postscript_get':
+          return postscripts.get(a.projectId) || null;
+        case 'project_postscript_set':
+          postscripts.set(a.projectId, a.command.trim() ? a.command : '');
+          return;
+        case 'workspace_postscript_get':
+          return null;
         case 'workspace_list':
           return WS.filter((w) => (!a.projectId || w.project_id === a.projectId) && (a.includeArchived || !w.archived_at)).map((w) => ({ ...w }));
         case 'workspace_rename': {

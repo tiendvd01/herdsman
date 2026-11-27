@@ -1,10 +1,11 @@
+import { EditorView } from '@codemirror/view';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FileEditor } from '@/components/files/FileEditor';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { api } from '@/lib/api';
-import type { FileTab } from '@/stores/useFileStore';
+import { useFileStore, type FileTab } from '@/stores/useFileStore';
 
 const file: FileTab = {
   id: 'readme',
@@ -78,4 +79,24 @@ describe('Markdown file preview', () => {
     expect(download).toHaveBeenCalledWith(file.projectId, '/tmp/empty.markdown', '');
     await waitFor(() => expect(button.disabled).toBe(false));
   });
+});
+
+it('moves the existing editor selection to a referenced location and clamps it to the draft', () => {
+  const tab = { ...file, path: 'notes.txt', draft: 'first\nsecond' };
+  const tabs = useFileStore.getState().tabs;
+  useFileStore.setState({ tabs: [tab] });
+  try {
+    const client = new QueryClient();
+    const panel = (file: FileTab) => <QueryClientProvider client={client}>
+      <TooltipProvider><FileEditor file={file} /></TooltipProvider>
+    </QueryClientProvider>;
+    const { rerender } = render(panel({ ...tab, position: { line: 2, column: 3 } }));
+    const editor = EditorView.findFromDOM(screen.getByLabelText('File contents'))!;
+    expect(editor.state.selection.main.anchor).toBe('first\nse'.length);
+    rerender(panel({ ...tab, position: { line: 200, column: 50 } }));
+    expect(EditorView.findFromDOM(screen.getByLabelText('File contents'))).toBe(editor);
+    expect(editor.state.selection.main.anchor).toBe(tab.draft.length);
+  } finally {
+    useFileStore.setState({ tabs });
+  }
 });

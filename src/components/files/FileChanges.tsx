@@ -1,3 +1,4 @@
+import { usePathLabel } from '@/lib/homePath';
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { FileDiff } from 'lucide-react';
@@ -36,6 +37,7 @@ function parsePatch(patch: string): DiffLine[] {
 }
 
 export function FileChanges({ tab }: { tab: DiffTab }) {
+  const pathLabel = usePathLabel();
   const { data, isPending, isError, error } = useQuery({
     queryKey: tab.commit ? ['commit-diff', tab.workspaceId, tab.commit.id, tab.path] : ['diff', tab.workspaceId, tab.path],
     queryFn: () => tab.commit
@@ -46,10 +48,10 @@ export function FileChanges({ tab }: { tab: DiffTab }) {
   const directory = tab.path.slice(0, tab.path.lastIndexOf('/') + 1);
   return (
     <section aria-label="File changes" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className={filePanelHeader} title={tab.path}>
+      <header className={filePanelHeader} title={pathLabel(tab.path)}>
         <FileDiff className="size-4 shrink-0 text-muted-foreground" />
         <h2 className="min-w-0 text-xs font-medium"><TruncatedText className="block truncate">{tab.name}</TruncatedText></h2>
-        {directory ? <TruncatedText className="min-w-0 truncate text-xs text-muted-foreground">{directory}</TruncatedText> : null}
+        {directory ? <TruncatedText className="min-w-0 truncate text-xs text-muted-foreground">{pathLabel(directory)}</TruncatedText> : null}
         {tab.commit && <code className="shrink-0 text-xs text-muted-foreground" title={tab.commit.id}>{tab.commit.shortId}</code>}
         <span className="flex-1" />
         {lines.length > 0 && !isError ? <DiffStat {...diffStats(lines)} /> : null}

@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { api, errMsg, type ProjectFileDocument } from '@/lib/api';
 import type { Project } from '@/lib/types';
 
+export type FilePosition = { line: number; column?: number };
+
 export interface FileTab {
   id: string;
   openedId?: string;
@@ -12,6 +14,7 @@ export interface FileTab {
   draft?: string;
   loadError?: string;
   saving?: boolean;
+  position?: FilePosition;
 }
 
 export interface DiffTab {
@@ -33,7 +36,7 @@ interface FileState {
   closeDiff: (id: string) => void;
   active: Record<string, string | undefined>;
   open: (project: Project, path: string, name: string) => Promise<void>;
-  openSessionFile: (sessionId: string, path: string, isCurrent: () => boolean) => Promise<void>;
+  openSessionFile: (sessionId: string, path: string, isCurrent: () => boolean, position?: FilePosition) => Promise<void>;
   activate: (projectId: string, id?: string) => void;
   edit: (id: string, draft: string) => void;
   save: (id: string) => Promise<void>;
@@ -86,17 +89,19 @@ export const useFileStore = create<FileState>((set, get) => {
         settle({ loadError: errMsg(error) });
       }
     },
-    openSessionFile: async (sessionId, reference, isCurrent) => {
+    openSessionFile: async (sessionId, reference, isCurrent, position) => {
       const { projectId, path, document } = await api.sessionFileRead(sessionId, reference);
       if (!isCurrent()) return;
       const id = JSON.stringify([projectId, path]);
       set((state) => {
         const active = { ...state.active, [projectId]: id };
         const existing = state.tabs.find((file) => file.id === id);
-        if (existing?.document) return { active };
+        if (existing?.document) {
+          return position ? { active, tabs: state.tabs.map((file) => file === existing ? { ...file, position } : file) } : { active };
+        }
         const tab = {
           id, openedId: existing?.openedId ?? crypto.randomUUID(), projectId, path,
-          name: path.slice(path.lastIndexOf('/') + 1), document, draft: document.text,
+          name: path.slice(path.lastIndexOf('/') + 1), document, draft: document.text, position,
         };
         const tabs = existing
           ? state.tabs.map((file) => file === existing ? tab : file)

@@ -1,15 +1,25 @@
-import type { ReactNode } from 'react';
+import { usePathLabel } from '@/lib/homePath';
+import { cloneElement, isValidElement, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import type { FilePosition } from '@/stores/useFileStore';
 
-type OpenFile = (path: string) => void;
+export type OpenFile = (path: string, position?: FilePosition) => void;
 
-export function FileLink({ sessionId, path, open, children }: {
+export function fileReference(reference: string) {
+  const match = /^(.+?):([1-9]\d*)(?::([1-9]\d*))?$/.exec(reference);
+  return match ? { path: match[1], position: { line: Number(match[2]), column: match[3] ? Number(match[3]) : undefined } }
+    : { path: reference };
+}
+
+export function FileLink({ sessionId, path, position, open, children }: {
   sessionId: string;
   path: string;
+  position?: FilePosition;
   open: OpenFile;
   children: ReactNode;
 }) {
+  const pathLabel = usePathLabel();
   const { data: exists } = useQuery({
     queryKey: ['session-file-exists', sessionId, path],
     queryFn: () => api.sessionFileExists(sessionId, path),
@@ -17,9 +27,12 @@ export function FileLink({ sessionId, path, open, children }: {
     staleTime: 5_000,
   });
   if (exists !== true) return <>{children}</>;
+  const label = isValidElement<{ children?: ReactNode }>(children) && children.type === 'code' && children.props.children === path
+    ? cloneElement(children, {}, pathLabel(path))
+    : children === path ? pathLabel(path) : children;
   return (
-    <button type="button" role="link" className="cursor-pointer text-left text-primary underline underline-offset-2 focus-visible:outline-ring" onClick={() => open(path)}>
-      {children}
+    <button type="button" role="link" className="cursor-pointer text-left text-primary underline underline-offset-2 focus-visible:outline-ring" onClick={() => position ? open(path, position) : open(path)}>
+      {label}
     </button>
   );
 }
@@ -37,10 +50,31 @@ const pathToken = /^(?:\.{1,2}\/|\/)?(?:[\p{L}\p{N}_@.+~-]+\/)+[\p{L}\p{N}_@.+~-
 
 export function fileParts(text: string) {
   return text.split(/([\s"'“”‘’`()[\]{}<>,;!?]+)/u).flatMap((token) => {
-    const candidate = token.replace(/\.+$/, '');
-    return pathToken.test(candidate)
+    const candidate = token.replace(/[.:]+$/, '');
+    const { path, position } = fileReference(candidate);
+    return (pathToken.test(path) || (position && /^[\w.-]+\.[\w-]+$/.test(path)))
       ? [{ text: candidate, path: candidate }, { text: token.slice(candidate.length) }]
       : [{ text: token }];
+  });
+}
+
+export function ToolOutputLinks({ text, tool, sessionId, open }: {
+  text: string;
+  tool: string;
+  sessionId: string;
+  open: OpenFile;
+}) {
+  return text.split('\n').map((line, index) => {
+    const match = tool === 'Grep' ? /^([^:]+:[1-9]\d*)(?=:|$)/.exec(line) : null;
+    const reference = match?.[1] ?? (tool === 'Glob' && /^[^:*?{}[\]]*[^/:*?{}[\]\s]$/.test(line) ? line : undefined);
+    const parts = reference
+      ? [{ text: reference, path: reference }, { text: line.slice(reference.length) }]
+      : fileParts(line);
+    return (
+      <span key={index}>{index ? '\n' : ''}{parts.map(({ text, path }, part) => path
+        ? <FileLink key={part} sessionId={sessionId} {...fileReference(path)} open={open}>{text}</FileLink>
+        : text)}</span>
+    );
   });
 }
 
@@ -66,7 +100,7 @@ function linkNode(node: MarkdownNode): MarkdownNode[] {
     if (node.properties?.className?.some((name) => name.includes('math'))) return [node];
     if (node.children.length === 1 && child?.type === 'text') {
       const path = child.value;
-      if (!/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(path) && /^(?:\.{1,2}\/|\/|[^/]+\/|[^/]+\.[^/]+$)/.test(path)) {
+      if (!/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(fileReference(path).path) && /^(?:\.{1,2}\/|\/|[^/]+\/|[^/]+\.[^/]+$)/.test(path)) {
         return [fileAnchor(path, [node])];
       }
     }

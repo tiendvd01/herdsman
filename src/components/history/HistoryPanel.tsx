@@ -1,3 +1,4 @@
+import { usePathLabel } from '@/lib/homePath';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { History } from 'lucide-react';
@@ -52,6 +53,7 @@ export function HistoryPanel({ workspaceId, selectedSessionId, active }: {
   selectedSessionId?: string;
   active: boolean;
 }) {
+  const pathLabel = usePathLabel();
   const qc = useQueryClient();
   const [input, setInput] = useState('');
   const [query, setQuery] = useState('');
@@ -144,7 +146,7 @@ export function HistoryPanel({ workspaceId, selectedSessionId, active }: {
                 : stored ? `${ENGINE_NAME[stored.session.engine]} · Herdsman` : 'Claude Code CLI';
               const context = !scopedId && (stored
                 ? [stored.project_name, stored.workspace.name ?? 'Untitled workspace'].join(' › ')
-                : [claude?.project_name, claude?.workspace_name ?? claude?.cwd].filter(Boolean).join(' › ') || 'Unknown folder');
+                : [claude?.project_name, claude?.workspace_name ?? pathLabel(claude?.cwd ?? '')].filter(Boolean).join(' › ') || 'Unknown folder');
               const snippet = stored?.snippet?.replace(/\[\[(.*?)\]\]/g, '$1') || claude?.snippet;
               const current = !!stored && stored.session.id === selectedSessionId;
               return (

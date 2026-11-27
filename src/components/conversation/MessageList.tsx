@@ -11,7 +11,7 @@ import { useFileStore } from '@/stores/useFileStore';
 import type { ChatAttachment } from '@/lib/types';
 import { ImagePreview, ImageThumbnail, UnavailableImage, type ImageSelection } from './ImagePreview';
 import { Markdown } from './Markdown';
-import { FileLink, fileParts } from './fileLinks';
+import { FileLink, fileParts, fileReference, type OpenFile } from './fileLinks';
 import { ToolCard } from './ToolCard';
 
 export const COLUMN = 'mx-auto w-full max-w-[768px] px-6';
@@ -24,10 +24,10 @@ export function MessageList({ sessionId, working, agentName }: { sessionId: stri
   const [selection, setSelection] = useState<ImageSelection | null>(null);
   const fileRequest = useRef(0);
   useEffect(() => () => { fileRequest.current += 1; }, [sessionId]);
-  const openFile = useCallback((path: string) => {
+  const openFile = useCallback<OpenFile>((path, position) => {
     const request = ++fileRequest.current;
     const isCurrent = () => request === fileRequest.current;
-    void useFileStore.getState().openSessionFile(sessionId, path, isCurrent).catch((error) => {
+    void useFileStore.getState().openSessionFile(sessionId, path, isCurrent, position).catch((error) => {
       if (isCurrent()) toast(`Could not open file: ${errMsg(error)}`, 'error');
     });
   }, [sessionId]);
@@ -110,7 +110,7 @@ const Row = memo(function Row({ sessionId, index, onSelect, openFile }: {
   sessionId: string;
   index: number;
   onSelect: (image: ImageSelection) => void;
-  openFile: (path: string) => void;
+  openFile: OpenFile;
 }) {
   const item = useSessionStore((s) => s.sessions[sessionId]?.items[index]);
   const prevKind = useSessionStore((s) => (index > 0 ? s.sessions[sessionId]?.items[index - 1]?.kind : undefined));
@@ -125,7 +125,11 @@ const Row = memo(function Row({ sessionId, index, onSelect, openFile }: {
   );
 });
 
-function SessionToolCard({ item, sessionId }: { item: Extract<Item, { kind: 'tool' }>; sessionId: string }) {
+function SessionToolCard({ item, sessionId, openFile }: {
+  item: Extract<Item, { kind: 'tool' }>;
+  sessionId: string;
+  openFile: OpenFile;
+}) {
   const disconnected = useSessionStore((s) => {
     const session = s.sessions[sessionId];
     return !!(session?.closed || session?.error);
@@ -152,14 +156,14 @@ function SessionToolCard({ item, sessionId }: { item: Extract<Item, { kind: 'too
   ) : eligible && error && item.result && !blocked ? (
     <span className="mr-2 shrink-0 text-xs text-muted-foreground">Output unavailable</span>
   ) : null;
-  return <ToolCard item={item} disconnected={disconnected} action={action} />;
+  return <ToolCard item={item} sessionId={sessionId} disconnected={disconnected} action={action} openFile={openFile} />;
 }
 
 function ItemView({ item, sessionId, onSelect, openFile }: {
   item: Item;
   sessionId: string;
   onSelect: (image: ImageSelection) => void;
-  openFile: (path: string) => void;
+  openFile: OpenFile;
 }) {
   switch (item.kind) {
     case 'user':
@@ -185,7 +189,7 @@ function ItemView({ item, sessionId, onSelect, openFile }: {
               </div>
             ) : null}
             {fileParts(item.text).map(({ text, path }, i) => path
-              ? <FileLink sessionId={sessionId} key={i} path={path} open={openFile}>{text}</FileLink>
+              ? <FileLink sessionId={sessionId} key={i} {...fileReference(path)} open={openFile}>{text}</FileLink>
               : text)}
           </div>
         </div>
@@ -208,7 +212,7 @@ function ItemView({ item, sessionId, onSelect, openFile }: {
     case 'tool':
       return (
         <div className="pt-4">
-          <SessionToolCard item={item} sessionId={sessionId} />
+          <SessionToolCard item={item} sessionId={sessionId} openFile={openFile} />
         </div>
       );
     case 'turn_end': {
@@ -254,7 +258,7 @@ function StreamRow({ sessionId, show, agentName, openFile }: {
   sessionId: string;
   show: boolean;
   agentName: string;
-  openFile: (path: string) => void;
+  openFile: OpenFile;
 }) {
   const text = useSessionStore((s) => s.sessions[sessionId]?.streaming?.text);
   const lastKind = useSessionStore((s) => {

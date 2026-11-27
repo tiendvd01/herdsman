@@ -1,4 +1,5 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { usePathLabel } from '@/lib/homePath';
+import { useEffect, useState } from 'react';
 import { highlightPatch } from './highlightPatch';
 import { TruncatedText } from '@/components/ui/truncated-text';
 import { cn } from '@/lib/utils';
@@ -21,6 +22,7 @@ export function Diff({ file, lines, maxHeight = 360, bare, original }: {
   file?: string; lines: DiffLine[]; maxHeight?: number; bare?: boolean;
   original?: string;
 }) {
+  const pathLabel = usePathLabel();
   const { add, del } = diffStats(lines);
   const [highlight, setHighlight] = useState<{
     lines: DiffLine[];
@@ -42,7 +44,7 @@ export function Diff({ file, lines, maxHeight = 360, bare, original }: {
     <div className={cn('overflow-hidden', !bare && 'rounded-md border border-border')} data-testid="diff">
       {file && !bare ? (
         <div className="flex items-center justify-between gap-2 border-b border-border bg-surface px-3 py-1.5 font-mono text-xs text-muted-foreground">
-          <TruncatedText className="truncate">{file}</TruncatedText>
+          <TruncatedText className="truncate">{pathLabel(file)}</TruncatedText>
           <DiffStat add={add} del={del} />
         </div>
       ) : null}
@@ -51,18 +53,14 @@ export function Diff({ file, lines, maxHeight = 360, bare, original }: {
           <div
             key={i}
             className={cn(
-              'min-w-max px-3 whitespace-pre',
-              l.kind === 'add' && 'bg-diff-add text-diff-add-fg',
-              l.kind === 'del' && 'bg-diff-del text-diff-del-fg',
-              l.kind === 'ctx' && 'text-muted-foreground',
+              'min-w-max px-3 whitespace-pre text-foreground',
+              l.kind === 'add' && 'bg-diff-add',
+              l.kind === 'del' && 'bg-diff-del',
             )}
           >
-            <span className="inline-block w-[1.5ch] select-none">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
+            <span className={cn('inline-block w-[1.5ch] select-none', l.kind === 'add' && 'text-diff-add-fg', l.kind === 'del' && 'text-diff-del-fg')}>{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
             {tokens?.get(i)?.map((token, position) => (
-              <span key={position} className="text-(--patch-light) dark:text-(--patch-dark)" style={{
-                '--patch-light': token.variants.light.color,
-                '--patch-dark': token.variants.dark.color,
-              } as CSSProperties}>{token.content}</span>
+              <span key={position} className={token.classes || undefined}>{token.text}</span>
             )) ?? (l.text || ' ')}
           </div>
         ))}

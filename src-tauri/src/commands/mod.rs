@@ -18,4 +18,4 @@ use crate::state::AppState;
 use std::sync::Arc;
 use tauri::State;
 
-type St<'a> = State<'a, Arc<AppState>>;
+pub(crate) type St<'a> = State<'a, Arc<AppState>>;

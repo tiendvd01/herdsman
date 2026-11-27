@@ -48,13 +48,13 @@ describe('Rich Conversation code', () => {
     const { container, rerender } = render(<Markdown text={text} streaming />);
     expect(container.querySelector('pre.text-content-code')?.textContent).toBe('  int value = 1;');
     rerender(<Markdown text={text} />);
-    await waitFor(() => expect(container.querySelector('pre.shiki code .line span')?.getAttribute('style')).toContain('color'));
-    expect(container.querySelector('pre.shiki code')?.textContent).toBe('  int value = 1;');
+    await waitFor(() => expect(container.querySelector('pre code .syntax-number')?.textContent).toBe('1'));
+    expect(container.querySelector('pre code')?.textContent).toBe('  int value = 1;');
     rerender(<Markdown text={'Inline `value`\n\n```\n  untagged\n```\n\n```unknown-language\n  unknown\n```'} />);
     expect(container.querySelector('p > code')?.textContent).toBe('value');
     expect([...container.querySelectorAll('pre.text-content-code')].map((pre) => pre.textContent))
       .toEqual(['  untagged', '  unknown']);
-    expect(container.querySelector('.shiki')).toBeNull();
+    expect(container.querySelector('pre code')).toBeNull();
   });
 
   it('highlights supported files in a multi-file tool diff and preserves other lines', async () => {
@@ -68,7 +68,7 @@ describe('Rich Conversation code', () => {
     const pre = screen.getByTestId('diff').querySelector('pre.text-content-code');
     expect(pre).not.toBeNull();
     await waitFor(() => {
-      const coloredRows = [...pre!.children].filter((row) => row.querySelector('[style*="--patch-light"][style*="--patch-dark"]'));
+      const coloredRows = [...pre!.children].filter((row) => row.querySelector('.syntax-keyword'));
       expect(coloredRows.map((row) => row.textContent)).toEqual([
         ' const kept = true;', '−  const old = 1;', '+  const next = 2;',
       ]);

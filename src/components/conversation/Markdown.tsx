@@ -8,7 +8,7 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { CodeBlock } from './CodeBlock';
 import { Mermaid } from './Mermaid';
 import { Chart } from './Chart';
-import { FileLink, markdownFilePath, rehypeFileLinks } from './fileLinks';
+import { FileLink, fileReference, type OpenFile, markdownFilePath, rehypeFileLinks } from './fileLinks';
 
 const schema = {
   ...defaultSchema,
@@ -18,12 +18,12 @@ const schema = {
   },
 };
 
-function makeComponents(streaming: boolean, sessionId?: string, openFile?: (path: string) => void): Components {
+function makeComponents(streaming: boolean, sessionId?: string, openFile?: OpenFile): Components {
   return {
     a: ({ href, children }) => {
       const path = openFile && markdownFilePath(href);
       return path && sessionId && openFile ? (
-        <FileLink sessionId={sessionId} path={path} open={openFile}>{children}</FileLink>
+        <FileLink sessionId={sessionId} {...fileReference(path)} open={openFile}>{children}</FileLink>
       ) : (
         <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>
       );
@@ -53,7 +53,7 @@ export const Markdown = memo(function Markdown({ text, streaming = false, sessio
   text: string;
   streaming?: boolean;
   sessionId?: string;
-  openFile?: (path: string) => void;
+  openFile?: OpenFile;
 }) {
   const components = useMemo(() => makeComponents(streaming, sessionId, openFile), [streaming, sessionId, openFile]);
   return (

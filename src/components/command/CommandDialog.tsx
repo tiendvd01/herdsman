@@ -1,3 +1,4 @@
+import { usePathLabel } from '@/lib/homePath';
 import { TruncatedText } from '@/components/ui/truncated-text';
 // ⌘K: scoped conversation search and application navigation.
 import { useEffect, useId, useRef, useState } from 'react';
@@ -105,6 +106,7 @@ export function CommandDialog() {
 }
 
 function CommandBody({ close }: { close: () => void }) {
+  const pathLabel = usePathLabel();
   const bindings = useShortcutBindings();
   const hotkey = (id: ShortcutId) => shortcutLabel(effectiveShortcut(id, bindings));
   const qc = useQueryClient();
@@ -230,7 +232,7 @@ function CommandBody({ close }: { close: () => void }) {
 
   if (shows('Projects')) {
     for (const p of projects) {
-      if (!matches(p.name, p.path)) continue;
+      if (!matches(p.name, p.path, pathLabel(p.path))) continue;
       entries.push({
         key: 'p-' + p.id,
         group: 'Projects',
@@ -240,7 +242,7 @@ function CommandBody({ close }: { close: () => void }) {
           if (p.id !== projectId) ui.selectWorkspace(p.id, availableWorkspaces.find((w) => w.project_id === p.id)?.id ?? null);
         },
         node: <><Folders className="size-4 shrink-0 text-muted-foreground" />
-          <ResultText title={p.name} detail={p.path} /></>,
+          <ResultText title={p.name} detail={pathLabel(p.path)} /></>,
       });
     }
   }
@@ -282,7 +284,7 @@ function CommandBody({ close }: { close: () => void }) {
         else { ui.setScreen('projects'); void openClaudeConversation(qc, hit); }
       },
       node: <ResultText title={hit.title ?? 'Conversation'}
-        detail={[hit.project_name, hit.workspace_name ?? hit.cwd, hit.snippet].filter(Boolean).join(' · ')} />,
+        detail={[hit.project_name, hit.workspace_name ?? pathLabel(hit.cwd ?? ''), hit.snippet].filter(Boolean).join(' · ')} />,
     });
   }
 

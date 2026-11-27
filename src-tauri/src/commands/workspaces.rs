@@ -186,6 +186,12 @@ pub async fn workspace_create(
         return Err(e);
     }
     let session = store::session_get(&st.db.lock(), &session.id)?;
+    if dir_kind == "worktree" {
+        let _lifecycle = crate::workspace_terminal::LIFECYCLE.lock().await;
+        if let Err(error) = crate::worktree_postscript::start(st.inner().clone(), &ws) {
+            eprintln!("Could not reserve worktree postscript: {error}");
+        }
+    }
     Ok(CreatedWorkspace { workspace: ws, session })
 }
 
@@ -211,6 +217,9 @@ pub async fn workspace_dirty_check(st: St<'_>, id: String) -> AppResult<DirtyInf
 }
 
 async fn remove_worktree(st: &AppState, ws: &Workspace, confirm_dirty: bool) -> AppResult<()> {
+    if crate::worktree_postscript::is_running(&st.db.lock(), &ws.id)? {
+        return Err(AppError::new("postscript_running", "Wait for Worktree Postscript to finish before removing the checkout."));
+    }
     let files = git::dirty_files(Path::new(&ws.work_dir)).await.unwrap_or_default();
     if !files.is_empty() && !confirm_dirty {
         return Err(AppError::new("dirty_confirm_required", format!("The worktree has {} uncommitted file(s)", files.len())));

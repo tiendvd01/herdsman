@@ -323,8 +323,7 @@ it('highlights the old and new code inside Git diff rows while retaining row col
   fireEvent.click(screen.getByRole('button', { name: /src\/main.ts.*Modified/ }));
   for (const [keyword, rowColor] of [['let', 'bg-diff-del'], ['const', 'bg-diff-add']]) {
     const token = await screen.findByText(keyword, { exact: true });
-    expect(token.style.getPropertyValue('--patch-light')).toMatch(/^#/);
-    expect(token.style.getPropertyValue('--patch-dark')).toMatch(/^#/);
+    expect(token.classList.contains('syntax-keyword')).toBe(true);
     expect(token.parentElement?.classList.contains(rowColor)).toBe(true);
   }
 });

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { FileTree } from '@/components/files/FileTree';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { api, type ProjectFileEntry } from '@/lib/api';
+import { HomeDirectory } from '@/lib/homePath';
 import { useFileStore } from '@/stores/useFileStore';
 
 vi.mock('@/lib/api', () => ({
@@ -39,11 +40,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderFiles() {
+function renderFiles(home?: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const panel = (current = project) => (
     <QueryClientProvider client={client}>
-      <TooltipProvider><FileTree key={current.id} project={current} /></TooltipProvider>
+      <HomeDirectory.Provider value={home}>
+        <TooltipProvider><FileTree key={current.id} project={current} /></TooltipProvider>
+      </HomeDirectory.Provider>
     </QueryClientProvider>
   );
   const view = render(panel());
@@ -169,5 +172,17 @@ it('uses the pasted directory for results and filters within it as the path chan
   expect(await screen.findByRole('treeitem', { name: nested.path })).toBeTruthy();
   expect(screen.queryByRole('treeitem', { name: direct.path })).toBeNull();
   expect(api.absoluteFilesSearch).toHaveBeenLastCalledWith(`${folder}/report`);
+  expect(api.projectFilesSearch).not.toHaveBeenCalled();
+});
+
+it('expands a home-relative path to a hidden directory before searching and opening', async () => {
+  const path = '/home/dev user/.claude/test.md';
+  vi.mocked(api.absoluteFilesSearch).mockResolvedValue([file(path)]);
+  vi.mocked(api.absoluteFileRead).mockResolvedValue({ text: 'Example', writable: false });
+  const { input } = renderFiles('/home/dev user/');
+  fireEvent.change(input, { target: { value: '~/.claude/test.md' } });
+  fireEvent.click(await screen.findByRole('treeitem', { name: path }));
+  await waitFor(() => expect(api.absoluteFileRead).toHaveBeenCalledWith(path));
+  expect(api.absoluteFilesSearch).toHaveBeenCalledWith(path);
   expect(api.projectFilesSearch).not.toHaveBeenCalled();
 });

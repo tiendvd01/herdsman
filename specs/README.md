@@ -17,6 +17,9 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [070 · Tạo session từ workspace trống](projects-workspaces/070-create-session-empty-workspace/spec.md)
 - [071 · Sửa cấp skill và quản lý MCP theo project](projects-workspaces/071-project-skills-mcps/spec.md)
 - [072 · Bật tắt mọi MCP server theo project](projects-workspaces/072-project-mcp-toggles/spec.md)
+- [084 · Worktree Postscript](projects-workspaces/084-worktree-postscript/spec.md)
+- [087 · Chỉnh Worktree Postscript bằng CodeMirror](projects-workspaces/087-edit-postscript-codemirror/spec.md)
+- [088 · Khởi tạo CodeGraph theo project](projects-workspaces/088-init-codegraph/spec.md)
 
 ## Phiên agent, trạng thái và thông báo
 
@@ -32,6 +35,9 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [030 · Hội thoại và soạn tin](conversation/030-conversation-composer/spec.md)
 - [044 · Mở tệp từ Rich Conversation](conversation/044-rich-conversation-file-links/spec.md)
 - [078 · Hiện toàn bộ lệnh shell](conversation/078-show-shell-command/spec.md)
+- [081 · Mở tệp từ thẻ Read và Write](conversation/081-open-tool-files/spec.md)
+
+- [083 · Mở thêm tệp từ Rich Conversation](conversation/083-expand-file-links/spec.md)
 
 ## Lịch sử, tìm session và Command Palette
 
@@ -59,6 +65,12 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [074 · Đánh dấu tất cả thông báo PR là chưa đọc](files-git/074-mark-notifications-unread/spec.md)
 - [075 · Phân biệt loại thông báo PR](files-git/075-classify-pr-notifications/spec.md)
 
+- [082 · Mở đường dẫn thư mục ẩn](files-git/082-access-hidden-paths/spec.md)
+
+- [085 · Đồng bộ bố cục Pull Requests](files-git/085-align-pull-request-layout/spec.md)
+
+- [086 · Mở chi tiết PR từ thông báo](files-git/086-open-notification-pr/spec.md)
+
 ## Giao diện, khả năng tiếp cận và phím tắt
 
 - [033 · Giao diện, bố cục và khả năng tiếp cận](appearance-shortcuts/033-app-shell-appearance/spec.md)
@@ -68,6 +80,7 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [057 · Quản lý phím tắt](appearance-shortcuts/057-manage-keyboard-shortcuts/spec.md)
 - [061 · Theme Git-Ignored Text](appearance-shortcuts/061-theme-git-ignored-text/spec.md)
 - [065 · Sidebar danh sách project cho Pull Requests và Skills](appearance-shortcuts/065-add-project-sidebar/spec.md)
+- [080 · Rút gọn đường dẫn thư mục cá nhân](appearance-shortcuts/080-shorten-home-paths/spec.md)
 
 ## Terminal và cửa sổ output
 
@@ -77,6 +90,7 @@ Khi chạy script tạo feature trực tiếp, truyền `--module <module>` vào
 - [051 · Xem output shell của Claude khi lệnh đang chạy](terminal-output/051-live-claude-shell-output/spec.md)
 - [053 · Cửa sổ nổi xem output của tiến trình hc](terminal-output/053-floating-hc-output/spec.md)
 - [076 · Status bar và terminal nổi](terminal-output/076-statusbar-floating-terminal/spec.md)
+- [079 · Hạn mức 7 ngày trên thanh trạng thái](terminal-output/079-statusbar-weekly-usage/spec.md)
 
 ## Tài liệu chung
 

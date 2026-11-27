@@ -1,6 +1,5 @@
-import type { ThemedTokenWithVariants } from 'shiki';
 import type { DiffLine } from './lineDiff';
-import { loadCodeLanguage } from '@/lib/highlightCode';
+import { highlightLines, languageForFile, type CodeToken } from '@/lib/highlightCode';
 
 export async function highlightPatch(lines: DiffLine[], path: string, original = path) {
   const hunks = new Map<number, number[]>();
@@ -10,22 +9,18 @@ export async function highlightPatch(lines: DiffLine[], path: string, original =
     rows.push(index);
     hunks.set(line.hunk, rows);
   }
-  const result = new Map<number, ThemedTokenWithVariants[]>();
+  const result = new Map<number, CodeToken[]>();
   if (!hunks.size) return result;
 
   async function highlightSide(file: string, excluded: DiffLine['kind']) {
     for (const rows of hunks.values()) {
       const path = lines[rows[0]].path ?? file;
-      const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
-      const lang = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : name;
-      const { h, id } = await loadCodeLanguage(lang);
-      if (id === 'text') continue;
       const indices = rows.filter((index) => lines[index].kind !== excluded);
       if (!indices.length) continue;
+      const support = await languageForFile(path);
+      if (!support) continue;
       const code = indices.map((index) => lines[index].text).join('\n');
-      const tokens = h.codeToTokensWithThemes(code, {
-        lang: id, themes: { light: 'github-light', dark: 'github-dark' },
-      });
+      const tokens = highlightLines(code, support);
       for (const [position, index] of indices.entries()) {
         if (excluded === 'add' && result.has(index)) continue;
         result.set(index, tokens[position] ?? []);

@@ -61,7 +61,6 @@
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "shiki": "^4.6.0",
     "tailwind-merge": "^3.7.0",
     "vega": "^6.4.0",
     "vega-embed": "^7.3.0",

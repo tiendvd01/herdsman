@@ -1,3 +1,4 @@
+import { ModuleHeader } from './ModuleHeader';
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -110,9 +111,7 @@ export function AppShell() {
           {screen === 'settings' && <SettingsView />}
           {skillsVisible && (
             <section aria-labelledby="skills-title" className="flex min-h-0 flex-1 flex-col">
-              <header className="flex h-14 shrink-0 items-center border-b border-border px-4">
-                <h1 id="skills-title" className="text-sm font-semibold">Skills</h1>
-              </header>
+              <ModuleHeader id="skills-title" title="Skills" />
               <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
                 {skillsProjectId ? (
                   <ProjectSkillsSection key={skillsProjectId} projectId={skillsProjectId} />
@@ -124,9 +123,7 @@ export function AppShell() {
           )}
           {mcpVisible && (
             <section aria-labelledby="mcp-title" className="flex min-h-0 flex-1 flex-col">
-              <header className="flex h-14 shrink-0 items-center border-b border-border px-4">
-                <h1 id="mcp-title" className="text-sm font-semibold">MCP</h1>
-              </header>
+              <ModuleHeader id="mcp-title" title="MCP" />
               <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
                 {skillsProjectId ? (
                   <ProjectMcpSection key={skillsProjectId} projectId={skillsProjectId} />

@@ -1,11 +1,13 @@
 pub mod agent;
 pub mod commands;
 mod project_files;
+mod project_codegraph;
 mod project_skills;
 mod mcp;
 pub mod secrets;
 mod editor_lsp;
 mod workspace_terminal;
+mod worktree_postscript;
 mod hc_output;
 pub mod error;
 pub mod git;
@@ -209,6 +211,7 @@ pub fn run() {
             let data_dir = std::env::var("HERDSMAN_DATA_DIR").map(PathBuf::from).unwrap_or(app.path().app_data_dir()?);
             std::fs::create_dir_all(data_dir.join("sock"))?;
             let db = store::open(&data_dir.join("herdsman.db")).map_err(|e| e.message)?;
+            worktree_postscript::interrupt_unfinished(&db).map_err(|e| e.message)?;
             let st = Arc::new(AppState {
                 emitter: {
                     let h = handle.clone();
@@ -242,6 +245,7 @@ pub fn run() {
             Ok(())
         })
         .manage(workspace_terminal::Viewers::default())
+        .manage(project_codegraph::Codegraph::default())
         .manage(editor_lsp::EditorLsp::default())
         .manage(pull_requests::PullRequests::default())
         .invoke_handler(tauri::generate_handler![
@@ -281,6 +285,11 @@ pub fn run() {
             commands::workspaces::project_delete,
             commands::workspaces::workspace_list,
             commands::workspaces::workspace_create,
+            project_codegraph::project_codegraph_status,
+            project_codegraph::project_codegraph_run,
+            worktree_postscript::project_postscript_get,
+            worktree_postscript::project_postscript_set,
+            worktree_postscript::workspace_postscript_get,
             commands::workspaces::workspace_rename,
             commands::workspaces::workspace_dirty_check,
             commands::workspaces::workspace_archive,

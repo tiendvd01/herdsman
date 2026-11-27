@@ -1,3 +1,4 @@
+import { usePathLabel } from '@/lib/homePath';
 import { SidebarLayout } from './SidebarLayout';
 import { TruncatedText } from '@/components/ui/truncated-text';
 // Left sidebar: app header, ⌘K search, projects → workspaces, hc status (BR 3.1, FR-001–003, FR-019).
@@ -16,6 +17,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tooltip } from '@/components/ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { CreateWorkspaceDialog } from '@/components/workspace/CreateWorkspaceDialog';
+import { ProjectCodegraphDialog } from '@/components/project/ProjectCodegraphDialog';
+import { WorktreePostscriptDialog } from '@/components/project/WorktreePostscriptDialog';
 import { RenameDialog } from '@/components/project/RenameDialog';
 import { DeleteProjectDialog } from '@/components/project/DeleteProjectDialog';
 import { AddProjectDialog } from '@/components/project/AddProjectDialog';
@@ -151,6 +154,7 @@ function ProjectNode({ project, reorder, switcher, pulls }: {
   switcher?: ReactNode;
   pulls?: ProjectPulls;
 }) {
+  const pathLabel = usePathLabel();
   const collapsed = useUiStore((s) => !!s.collapsed[project.id]);
   const toggle = useUiStore((s) => s.toggleCollapsed);
   const selectedProject = useUiStore((s) => s.projectId === project.id);
@@ -162,6 +166,8 @@ function ProjectNode({ project, reorder, switcher, pulls }: {
   const workspaceOrder = useNavigationOrder(`workspaces:${project.id}`, workspaces.map((w) => w.id), 'vertical', workspacesLoaded);
   const workspacesById = new Map(workspaces.map((w) => [w.id, w]));
   const [renaming, setRenaming] = useState(false);
+  const [editingPostscript, setEditingPostscript] = useState(false);
+  const [showCodegraph, setShowCodegraph] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const qc = useQueryClient();
   const repository = !project.missing && (!pulls?.error || pulls.stale) ? pulls?.repository : undefined;
@@ -212,10 +218,12 @@ function ProjectNode({ project, reorder, switcher, pulls }: {
           </DropdownMenuTrigger>
           <DropdownMenuContent>
             <DropdownMenuItem disabled className="font-mono text-[11px]">
-              {project.path}
+              {pathLabel(project.path)}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem>
+            <DropdownMenuItem disabled={project.missing} onSelect={() => setShowCodegraph(true)}>CodeGraph Index</DropdownMenuItem>
+            <DropdownMenuItem disabled={project.missing} onSelect={() => setEditingPostscript(true)}>Worktree Postscript</DropdownMenuItem>
             <DropdownMenuItem destructive onSelect={() => setDeleting(true)}>
               Remove from Herdsman
             </DropdownMenuItem>
@@ -308,6 +316,8 @@ function ProjectNode({ project, reorder, switcher, pulls }: {
           qc.invalidateQueries({ queryKey: qk.projects });
         }}
       />
+      {showCodegraph && <ProjectCodegraphDialog project={project} onClose={() => setShowCodegraph(false)} />}
+      {editingPostscript && <WorktreePostscriptDialog projectId={project.id} onClose={() => setEditingPostscript(false)} />}
       <DeleteProjectDialog project={project} open={deleting} onOpenChange={setDeleting} />
     </div>
   );

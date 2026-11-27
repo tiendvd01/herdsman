@@ -1,28 +1,27 @@
-// Code highlighting with Shiki (languages loaded lazily); Shiki builds the HTML from escaped text.
 import { useEffect, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/components/ui/toast';
-import { loadCodeLanguage } from '@/lib/highlightCode';
+import { highlightLines, languageForCode, type CodeToken } from '@/lib/highlightCode';
 
-const cache = new Map<string, string>();
+const cache = new Map<string, CodeToken[][]>();
 
 async function render(code: string, lang: string) {
   const key = `${lang}\0${code}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const { h, id } = await loadCodeLanguage(lang);
-  if (id === 'text') return;
-  const html = h.codeToHtml(code, { lang: id, themes: { light: 'github-light', dark: 'github-dark' }, defaultColor: 'light' });
-  cache.set(key, html);
-  return html;
+  const support = await languageForCode(lang);
+  if (!support) return;
+  const lines = highlightLines(code, support);
+  cache.set(key, lines);
+  return lines;
 }
 
 export function CodeBlock({ code, lang, plain }: { code: string; lang?: string; plain?: boolean }) {
-  const [highlight, setHighlight] = useState<{ code: string; lang: string; html: string }>();
-  const html = lang && !plain
-    ? cache.get(`${lang}\0${code}`) ?? (highlight?.code === code && highlight.lang === lang ? highlight.html : undefined)
+  const [highlight, setHighlight] = useState<{ code: string; lang: string; lines: CodeToken[][] }>();
+  const lines = lang && !plain
+    ? cache.get(`${lang}\0${code}`) ?? (highlight?.code === code && highlight.lang === lang ? highlight.lines : undefined)
     : undefined;
   const [copyState, setCopyState] = useState<'idle' | 'pending' | 'copied'>('idle');
   useEffect(() => {
@@ -46,7 +45,7 @@ export function CodeBlock({ code, lang, plain }: { code: string; lang?: string; 
     if (plain || !lang) return;
     let alive = true;
     render(code, lang)
-      .then((html) => alive && html && setHighlight({ code, lang, html }))
+      .then((lines) => alive && lines && setHighlight({ code, lang, lines }))
       .catch(() => {});
     return () => {
       alive = false;
@@ -63,11 +62,15 @@ export function CodeBlock({ code, lang, plain }: { code: string; lang?: string; 
           <span aria-live="polite">{copyState === 'pending' ? 'Copying…' : copyState === 'copied' ? 'Copied' : 'Copy'}</span>
         </Button>
       </div>
-      {html ? (
-        <div className="overflow-x-auto p-3 text-content-code leading-[1.7] [&_pre]:m-0 [&_:is(pre,code)]:font-mono" dangerouslySetInnerHTML={{ __html: html }} />
-      ) : (
-        <pre className="m-0 overflow-x-auto p-3 font-mono text-content-code leading-[1.7]">{code}</pre>
-      )}
+      <pre className="m-0 overflow-x-auto p-3 font-mono text-content-code leading-[1.7] text-foreground">
+        {lines ? (
+          <code>{lines.map((row, index) => (
+            <span key={index}>{index > 0 ? '\n' : ''}{row.map((token, position) => (
+              <span key={position} className={token.classes || undefined}>{token.text}</span>
+            ))}</span>
+          ))}</code>
+        ) : code}
+      </pre>
     </div>
   );
 }

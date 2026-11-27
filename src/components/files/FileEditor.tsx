@@ -1,8 +1,9 @@
+import { usePathLabel } from '@/lib/homePath';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useEffect, useRef, useState } from 'react';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { HighlightStyle, LanguageDescription, syntaxHighlighting } from '@codemirror/language';
-import { tags } from '@lezer/highlight';
+import { syntaxHighlighting } from '@codemirror/language';
+import { codeHighlightStyle, languageForFile } from '@/lib/highlightCode';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
 import { AlertCircle, Download, FileText, Save } from 'lucide-react';
@@ -18,44 +19,13 @@ import { isDirty, useFileStore, type FileTab } from '@/stores/useFileStore';
 import { useQueryClient } from '@tanstack/react-query';
 import { editorHover } from './editorHover';
 
-const fileHighlightStyle = HighlightStyle.define([
-  { tag: [tags.keyword, tags.operatorKeyword], color: 'var(--st-working)' },
-  { tag: [tags.atom, tags.bool, tags.number], color: 'var(--warn-fg)' },
-  { tag: [tags.string, tags.regexp], color: 'var(--diff-add-fg)' },
-  { tag: [tags.typeName, tags.className, tags.function(tags.variableName)], color: 'var(--st-working)' },
-  { tag: tags.comment, color: 'var(--muted-foreground)', fontStyle: 'italic' },
-  { tag: tags.heading, color: 'var(--foreground)', fontWeight: 'bold' },
-  { tag: tags.link, textDecoration: 'underline' },
-]);
-
-async function languageFor(path: string) {
-  const extension = path.split('.').pop()?.toLowerCase();
-  switch (extension) {
-    case 'js':
-    case 'jsx':
-    case 'ts':
-    case 'tsx': {
-      const { javascript } = await import('@codemirror/lang-javascript');
-      return javascript({ typescript: extension.startsWith('ts'), jsx: extension.endsWith('x') });
-    }
-    case 'json': return (await import('@codemirror/lang-json')).json();
-    case 'md':
-    case 'markdown': return (await import('@codemirror/lang-markdown')).markdown();
-    case 'rs': return (await import('@codemirror/lang-rust')).rust();
-    default: {
-      const { languages } = await import('@codemirror/language-data');
-      const filename = path.split(/[\\/]/).pop() ?? path;
-      const language = LanguageDescription.matchFilename(languages, filename);
-      return language ? language.load() : [];
-    }
-  }
-}
-
 export function FileEditor({ file, workspaceId }: { file: FileTab; workspaceId?: string }) {
+  const pathLabel = usePathLabel();
   const [preview, setPreview] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [hoverStatus, setHoverStatus] = useState<string | null>(null);
   const host = useRef<HTMLDivElement>(null);
+  const editor = useRef<EditorView | null>(null);
   const qc = useQueryClient();
   const save = useRef<() => void>(() => {});
   save.current = () => {
@@ -99,7 +69,7 @@ export function FileEditor({ file, workspaceId }: { file: FileTab; workspaceId?:
         EditorView.editable.of(writable),
         EditorView.contentAttributes.of({ 'aria-label': 'File contents', spellcheck: 'false' }),
         lineNumbers(), highlightActiveLine(), highlightActiveLineGutter(),
-        history(), language.of([]), syntaxHighlighting(fileHighlightStyle), hover?.extensions ?? [],
+        history(), language.of([]), syntaxHighlighting(codeHighlightStyle), hover?.extensions ?? [],
         keymap.of([{ key: 'Mod-s', run: () => { if (writable) save.current(); return true; } }, ...defaultKeymap, ...historyKeymap]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) useFileStore.getState().edit(file.id, update.state.sliceDoc());
@@ -117,22 +87,33 @@ export function FileEditor({ file, workspaceId }: { file: FileTab; workspaceId?:
       ],
     });
     const view = new EditorView({ parent: host.current, state });
+    editor.current = view;
     let disposed = false;
-    void languageFor(file.path).then((support) => {
-      if (!disposed) view.dispatch({ effects: language.reconfigure(support) });
+    void languageForFile(file.path).then((support) => {
+      if (!disposed) view.dispatch({ effects: language.reconfigure(support ?? []) });
     }).catch(() => {});
     return () => {
       disposed = true;
       hover?.dispose();
+      editor.current = null;
       view.destroy();
     };
   }, [file.id, file.path, file.projectId, workspaceId, ready, writable]);
+
+  useEffect(() => {
+    const view = editor.current;
+    if (!view || !file.position) return;
+    setPreview(false);
+    const line = view.state.doc.line(Math.min(file.position.line, view.state.doc.lines));
+    const anchor = Math.min(line.to, line.from + (file.position.column ?? 1) - 1);
+    view.dispatch({ selection: { anchor }, effects: EditorView.scrollIntoView(anchor, { y: 'center' }) });
+  }, [file.id, file.position, ready, writable, workspaceId]);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={file.name}>
       <div className="flex min-h-11 shrink-0 items-center gap-2 border-b border-border bg-surface px-3 text-xs">
         <FileText className="size-4 shrink-0 text-muted-foreground" />
-        <TruncatedText className="min-w-0 flex-1 truncate text-muted-foreground">{file.path}</TruncatedText>
+        <TruncatedText className="min-w-0 flex-1 truncate text-muted-foreground">{pathLabel(file.path)}</TruncatedText>
         {hoverStatus && <Badge variant="outline" role="status" title={hoverStatus}>
           {hoverStatus === 'Starting type hover…' ? hoverStatus : 'Type hover unavailable'}
         </Badge>}

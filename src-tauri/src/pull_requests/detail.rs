@@ -28,10 +28,22 @@ impl<T> From<AppResult<T>> for Part<T> {
 pub struct Detail {
     head_sha: String,
     body: String,
+    summary: Option<Summary>,
     checks: Part<CheckSnapshot>,
     workflows: Part<Vec<Value>>,
     reviews: Part<Vec<Value>>,
     threads: Part<Vec<Value>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Summary {
+    title: String,
+    state: &'static str,
+    is_draft: bool,
+    base_ref_name: Option<String>,
+    head_ref_name: Option<String>,
+    updated_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -273,7 +285,22 @@ async fn read_detail(gh: &GitHubCli, repo: &str, number: u64, account: &str) -> 
         };
         (Err(changed()), Err(changed()))
     };
+    let summary = latest["title"].as_str().map(|title| Summary {
+        title: title.to_owned(),
+        state: if latest["merged"].as_bool() == Some(true) {
+            "merged"
+        } else if latest["state"].as_str() == Some("closed") {
+            "closed"
+        } else {
+            "open"
+        },
+        is_draft: latest["draft"].as_bool().unwrap_or_default(),
+        base_ref_name: latest["base"]["ref"].as_str().map(str::to_owned),
+        head_ref_name: latest["head"]["ref"].as_str().map(str::to_owned),
+        updated_at: latest["updated_at"].as_str().map(str::to_owned),
+    });
     Ok(Detail {
+        summary,
         head_sha: latest_head.to_owned(),
         body: latest["body"].as_str().unwrap_or_default().to_owned(),
         checks: checks.into(),
@@ -349,7 +376,10 @@ esac
         let write = |file: &str, data: Value| fs::write(root.join(file), data.to_string()).unwrap();
         write(
             "pull",
-            json!({"head":{"sha":HEAD},"body":"# PR description"}),
+            json!({
+                "head": {"sha": HEAD, "ref": "feature"}, "base": {"ref": "main"},
+                "body": "# PR description", "title": "Merged PR", "state": "closed", "merged": true
+            }),
         );
         write(
             "checks",
@@ -394,6 +424,9 @@ esac
         };
         let detail = json!(read_detail(&gh, "me/repo", 4, "dev").await.unwrap());
         assert_eq!(detail["headSha"], HEAD);
+        assert_eq!(detail["summary"]["title"], "Merged PR");
+        assert_eq!(detail["summary"]["state"], "merged");
+        assert_eq!(detail["summary"]["headRefName"], "feature");
         assert_eq!(detail["checks"]["data"]["items"][0]["context"], "Lint");
         assert_eq!(detail["workflows"]["data"].as_array().unwrap().len(), 1);
         assert_eq!(detail["workflows"]["data"][0]["run_attempt"], 2);

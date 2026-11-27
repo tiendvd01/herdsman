@@ -26,16 +26,30 @@ export function lineDiff(before: string, after: string): DiffLine[] {
 }
 
 /** Diff dựng từ input của tool sửa file; null nếu tool không sửa file. */
-export function toolDiff(tool: string, input: Record<string, unknown>): { file: string; lines: DiffLine[] } | null {
+export function toolDiff(tool: string, input: Record<string, unknown>): { file: string; lines: DiffLine[]; targets?: { path: string; deleted: boolean }[] } | null {
   const file = String(input.file_path ?? input.path ?? '');
   if (tool === 'Edit' && typeof input.unified_diff === 'string') {
     const rows = input.unified_diff.split('\n');
+    const targets: { path: string; deleted: boolean }[] = [];
     let path: string | undefined;
     let hunk = 0;
     const lines = rows.map((line, index): DiffLine => {
       const next = rows[index + 1];
-      if (line.startsWith('--- ') && (next?.startsWith('@@') || next?.startsWith('+++ ') || index === 0)) {
-        path = line.slice(4);
+      const headerPath = line.startsWith('--- ') ? line.slice(4) : undefined;
+      // Codex history can contain a file header followed directly by changed lines.
+      const codexHeader = headerPath && typeof input.file_path === 'string' &&
+        (', ' + input.file_path + ', ').includes(', ' + headerPath + ', ');
+      if (headerPath && (next?.startsWith('@@') || next?.startsWith('+++ ') || index === 0 || codexHeader)) {
+        const before = headerPath;
+        const after = next?.startsWith('+++ ') ? next.slice(4) : before;
+        const deleted = after === '/dev/null';
+        const gitPair = (before.startsWith('a/') || before === '/dev/null') &&
+          (after.startsWith('b/') || deleted);
+        path = deleted ? before : after;
+        if (gitPair) path = path.slice(2);
+        if (path !== '/dev/null' && !targets.some((target) => target.path === path && target.deleted === deleted)) {
+          targets.push({ path, deleted });
+        }
         hunk = index + 1;
         return { kind: 'ctx', text: line };
       }
@@ -44,7 +58,6 @@ export function toolDiff(tool: string, input: Record<string, unknown>): { file: 
         return { kind: 'ctx', text: line };
       }
       if (line.startsWith('+++ ') && rows[index - 1]?.startsWith('--- ')) {
-        if (line !== '+++ /dev/null') path = line.slice(4);
         return { kind: 'ctx', text: line };
       }
       if (line.startsWith('+')) return { kind: 'add', text: line.slice(1), hunk, path };
@@ -52,7 +65,7 @@ export function toolDiff(tool: string, input: Record<string, unknown>): { file: 
       if (line.startsWith(' ')) return { kind: 'ctx', text: line.slice(1), hunk, path };
       return { kind: 'ctx', text: line };
     });
-    return { file, lines };
+    return { file, lines, targets };
   }
   if (tool === 'Edit' && typeof input.old_string === 'string') return { file, lines: lineDiff(input.old_string, String(input.new_string ?? '')).map((line) => ({ ...line, hunk: 0 })) };
   if (tool === 'Write' && typeof input.content === 'string') return { file, lines: input.content.split('\n').map((t) => ({ kind: 'add', text: t, hunk: 0 })) };

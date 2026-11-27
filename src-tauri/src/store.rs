@@ -16,6 +16,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0007_removed_projects.sql"),
     include_str!("../migrations/0008_mcp_servers.sql"),
     include_str!("../migrations/0009_mcp_native_disabled.sql"),
+    include_str!("../migrations/0010_worktree_postscript.sql"),
 ];
 
 pub fn now_ms() -> i64 {

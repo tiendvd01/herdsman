@@ -1,3 +1,4 @@
+import { ModuleHeader } from './ModuleHeader';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -74,7 +75,7 @@ const views = [
   { key: 'notifications', label: 'Notifications', countVariant: 'warn' },
 ] as const;
 type ContentView = typeof views[number]['key'];
-type Target = { projectId: string; repository: string; number: number; account: string };
+type Target = { projectId: string; repository: string; number: number; account: string; notificationTitle?: string };
 
 function rowId(projectId: string, repository: string, number: number) {
   return `pull-request-${projectId}-${repository}-${number}`;
@@ -151,12 +152,15 @@ export function usePullRequests() {
   const projectLists = visibleProjects.map((project) => ({ ...project, current: data?.projects[project.id] }));
   const current = target && target.account === data?.account
     ? projectLists.find(({ id }) => id === target.projectId)?.current : undefined;
-  const pull = target && current && current.repository === target.repository && (!current.error || current.stale)
-    ? current.pulls.find((item) => item.number === target.number) : undefined;
-  const detail = target && pull ? { ...target, pull, error: current?.error } : undefined;
+  const validTarget = target && current?.repository === target.repository && (!current.error || current.stale)
+    && !data?.error ? target : undefined;
+  const pull = validTarget && current?.pulls.find((item) => item.number === validTarget.number);
+  const detail = validTarget && (pull || validTarget.notificationTitle !== undefined)
+    ? { ...validTarget, pull, error: current?.error } : undefined;
+  const hasDetail = detail !== undefined;
   useEffect(() => {
-    if (target && !pull) setTarget(undefined);
-  }, [target, pull]);
+    if (target && !hasDetail) setTarget(undefined);
+  }, [target, hasDetail]);
 
   const notifications = (data?.notifications ?? []).flatMap((item) => {
     const eligible = item.projects.filter((candidate) => projects.some((project) => project.id === candidate.id));
@@ -222,9 +226,7 @@ export function usePullRequests() {
     setChoice(undefined);
     setProjectFilter(id);
     const account = data.account;
-    const destinationData = data.projects[id];
-    const tracked = destinationData?.repository === item.repository && destinationData.pulls.some((pr) => pr.number === item.event.number);
-    setTarget(tracked ? { projectId: id, repository: item.repository, number: item.event.number, account } : undefined);
+    setTarget({ projectId: id, repository: item.repository, number: item.event.number, account, notificationTitle: item.event.title });
     try {
       await invoke('pull_requests_read', { account, repository: item.repository, eventKey: item.event.key });
       await client.cancelQueries({ queryKey: accountQueryKey, exact: true });
@@ -238,12 +240,6 @@ export function usePullRequests() {
               : notification),
         };
       });
-      const latest = client.getQueryData<Snapshot>(accountQueryKey);
-      if (!tracked && latest?.account === account && latest.projects[id]?.repository === item.repository
-        && (!latest.projects[id].error || latest.projects[id].stale)
-        && useUiStore.getState().githubAccount === githubAccount) {
-        await openOriginal(item.repository, item.event.number);
-      }
     } catch (error) {
       toast(errMsg(error), 'error');
     }
@@ -354,30 +350,14 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
   }, [choice]);
 
   return (
-    <section aria-label="Pull Requests" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-linear-to-r from-st-working/10 to-surface px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-st-working/15 text-git-rename-fg"><GitPullRequest aria-hidden="true" className="size-4" /></span>
-          <div className="min-w-0">
-            <h1 className="text-base leading-tight font-semibold">Pull Requests</h1>
-            <p className="wrap-anywhere text-xs text-muted-foreground">
-              {tracker.projectId === allProjects ? 'All projects' : projectLists[0]?.name}
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="xs" disabled={tracker.loading || !desktop} onClick={tracker.refresh}>
-            <RefreshCw aria-hidden="true" className={tracker.loading ? 'motion-safe:animate-spin' : undefined} />
-            {tracker.loading ? 'Refreshing…' : 'Refresh'}
-          </Button>
-        </div>
-      </header>
+    <section aria-labelledby="pull-requests-title" className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <ModuleHeader id="pull-requests-title" title="Pull Requests" />
 
       <Tabs value={view} onValueChange={(value) => tracker.selectView(value as ContentView)} className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="shrink-0 border-b border-border bg-surface px-4">
-          <TabsList aria-label="Pull request views" className="h-auto max-w-full flex-wrap justify-start gap-1 rounded-none bg-transparent p-0">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-6 pt-4">
+          <TabsList aria-label="Pull request views" className="h-auto max-w-full flex-wrap justify-start">
             {views.map(({ key, label, countVariant }) => (
-              <TabsTrigger key={key} value={key} className="h-10 rounded-none border-0 border-b-2 border-transparent px-3 aria-selected:border-st-working aria-selected:bg-st-working/10 aria-selected:text-git-rename-fg">
+              <TabsTrigger key={key} value={key}>
                 {label}
                 {counts[key] !== undefined && (
                   <Badge variant={counts[key] ? countVariant : 'muted'} className="h-auto rounded-full px-1 tabular-nums">{counts[key]}</Badge>
@@ -385,10 +365,14 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
               </TabsTrigger>
             ))}
           </TabsList>
+          <Button variant="outline" size="sm" disabled={tracker.loading || !desktop} onClick={tracker.refresh}>
+            <RefreshCw aria-hidden="true" data-icon="inline-start" className={tracker.loading ? 'motion-safe:animate-spin' : undefined} />
+            {tracker.loading ? 'Refreshing…' : 'Refresh'}
+          </Button>
         </div>
 
         {detail && (
-          <div className="shrink-0 border-b border-border bg-surface px-4 py-2">
+          <div className="shrink-0 px-6 pt-2">
             <Button variant="ghost" size="sm" onClick={() => {
               resume.current ??= { top: 0, row: '', view, project: tracker.projectId };
               tracker.closeDetail();
@@ -399,7 +383,7 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
           </div>
         )}
 
-        <TabsContent ref={scroll} value={view} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        <TabsContent ref={scroll} value={view} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
           {tracker.error && (
             <Alert variant={tracker.stale ? 'default' : 'destructive'} className="mb-4">
               <AlertDescription>{messageFor(tracker.error, tracker.stale)}</AlertDescription>
@@ -416,12 +400,14 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
                 account={detail.account}
                 summaryUpdatedAt={tracker.summaryUpdatedAt}
                 pull={detail.pull}
+                number={detail.number}
+                notificationTitle={detail.notificationTitle}
                 repository={detail.repository}
                 onOpen={() => void openOriginal(detail.repository, detail.number)}
               />
             </>
           ) : (
-            <div className="mx-auto flex max-w-5xl flex-col gap-4">
+            <div className="flex min-w-0 flex-col gap-4">
               <h2 ref={listTitle} tabIndex={-1} className="sr-only">{views.find(({ key }) => key === view)?.label} list</h2>
               {tracker.projectQuery.isError && (
                 <Alert variant="destructive"><AlertDescription>Could not load projects.</AlertDescription></Alert>
@@ -444,18 +430,18 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
                     {current?.error && <Alert variant={current.stale ? 'default' : 'destructive'}><AlertDescription>{messageFor(current.error, current.stale)}</AlertDescription></Alert>}
                     {!current && <p role="status" className="text-sm text-muted-foreground">Loading pull requests…</p>}
                     {repository && current && (!current.error || current.stale) && (
-                      <div className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-surface">
+                      <div className="flex min-w-0 flex-col divide-y divide-border">
                         {roles.filter((role) => view === 'overview' || view === role.key).map((role) => {
                           const pulls = current.pulls.filter((pr) => pr.role === role.key);
                           return (
-                            <section key={role.key} aria-label={role.label} className="flex min-w-0 flex-col border-b border-border last:border-b-0">
-                              <h4 className="border-b border-border bg-st-working/5 px-3 py-2 text-xs font-semibold text-muted-foreground">{role.label}</h4>
-                              {pulls.length === 0 && <p className="px-3 py-3 text-xs text-muted-foreground">{role.empty}</p>}
+                            <section key={role.key} aria-label={role.label} className="flex min-w-0 flex-col py-2">
+                              <h4 className="py-2 text-xs font-medium text-muted-foreground">{role.label}</h4>
+                              {pulls.length === 0 && <p className="py-3 text-xs text-muted-foreground">{role.empty}</p>}
                               {pulls.map((pr) => {
                                 const idForRow = rowId(id, repository, pr.number);
                                 return (
                                   <button type="button" key={pr.number} id={idForRow}
-                                    className="group grid min-w-0 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 border-b border-border px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-st-working/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                                    className="group grid min-w-0 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 border-b border-border py-3 text-left transition-colors last:border-b-0 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                                     onClick={() => {
                                       resume.current = { top: scroll.current?.scrollTop ?? 0, row: idForRow, view, project: tracker.projectId };
                                       tracker.openDetail(id, repository, pr.number);
@@ -514,11 +500,11 @@ export function PullRequestsView({ tracker }: { tracker: Tracker }) {
                     </Empty>
                   )}
                   {notifications.length > 0 && (
-                    <ul className="min-w-0 divide-y divide-border rounded-lg border border-border bg-surface">
+                    <ul className="min-w-0 grid gap-2">
                       {notifications.map((item) => (
-                        <li key={`${item.repository}:${item.event.key}`} className="min-w-0 p-1">
+                        <li key={`${item.repository}:${item.event.key}`} className="min-w-0 rounded-lg border border-border bg-surface">
                           <Button variant={item.event.read ? 'ghost' : 'secondary'} size="sm"
-                            className="grid h-auto w-full min-w-0 grid-cols-[0.375rem_minmax(0,1fr)_auto] items-start gap-2 whitespace-normal py-2 text-left"
+                            className="grid h-auto w-full min-w-0 cursor-pointer grid-cols-[0.375rem_minmax(0,1fr)_auto] items-start gap-2 whitespace-normal py-3 text-left focus-visible:ring-inset"
                             onClick={() => {
                               resume.current = undefined;
                               void tracker.showNotification(item);

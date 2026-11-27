@@ -21,6 +21,14 @@ type Thread = { id: string; path?: string; line?: number | null; originalLine?: 
 type Activity = {
   headSha: string;
   body: string;
+  summary?: {
+    title: string;
+    state: 'open' | 'closed' | 'merged';
+    isDraft: boolean;
+    baseRefName?: string | null;
+    headRefName?: string | null;
+    updatedAt?: string | null;
+  } | null;
   checks: Part<{ state: string | null; items: CheckRun[] }>;
   workflows: Part<Workflow[]>;
   reviews: Part<Review[]>;

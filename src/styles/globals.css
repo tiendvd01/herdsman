@@ -217,18 +217,12 @@
 .prose-hs hr {
   border-top: 1px solid var(--border);
 }
-.text-content-code .shiki,
-.shiki code {
-  font-size: inherit;
-}
-.shiki,
-.shiki span {
-  background-color: transparent !important;
-}
-.dark .shiki,
-.dark .shiki span {
-  color: var(--shiki-dark) !important;
-}
+.syntax-keyword { color: var(--st-working); }
+.syntax-number { color: var(--warn-fg); }
+.syntax-string { color: var(--diff-add-fg); }
+.syntax-comment { color: var(--muted-foreground); font-style: italic; }
+.syntax-heading { color: var(--foreground); font-weight: bold; }
+.syntax-link { text-decoration: underline; }
 
 /* Keep the resize cursor consistent during a splitter drag and block text selection. */
 body.resizing {
