@@ -1,5 +1,6 @@
 use crate::{
     commands::St,
+    environment::Environment,
     error::{AppError, AppResult},
     hc::{which_in_login_shell, Hc, Terminal},
     state::AppState,
@@ -237,9 +238,16 @@ fn checkout_label(root: &Path) -> &str {
     root.to_str().expect("project paths originate as UTF-8")
 }
 
-async fn latest_run(hc: &Hc, root: &Path) -> AppResult<Option<Terminal>> {
+fn run_label(environment: Environment) -> (&'static str, &'static str) {
+    match environment {
+        Environment::Production => RUN_LABEL,
+        Environment::Development => (RUN_LABEL.0, "codegraph-development"),
+    }
+}
+
+async fn latest_run(hc: &Hc, root: &Path, environment: Environment) -> AppResult<Option<Terminal>> {
     Ok(hc
-        .list(&[RUN_LABEL, (CHECKOUT_LABEL, checkout_label(root))], true)
+        .list(&[run_label(environment), (CHECKOUT_LABEL, checkout_label(root))], true)
         .await?
         .into_iter()
         .max_by_key(|run| (run.state == "live", run.created_ms)))
@@ -254,7 +262,7 @@ pub(crate) async fn project_codegraph_status(
     let tool = find_tool().await;
     let indexed = index_exists(&root).await?;
     let runtime = match st.hc() {
-        Ok(hc) => latest_run(hc, &root).await.map(|run| (hc, run)),
+        Ok(hc) => latest_run(hc, &root, st.environment).await.map(|run| (hc, run)),
         Err(error) => Err(error),
     };
     let mut status = IndexStatus {
@@ -317,7 +325,7 @@ pub(crate) async fn project_codegraph_run(
         return ensure_excluded(&root).await;
     }
     let hc = st.hc()?;
-    let latest = latest_run(hc, &root).await?;
+    let latest = latest_run(hc, &root, st.environment).await?;
     if latest.as_ref().is_some_and(|run| run.state == "live") {
         return Ok(());
     }
@@ -359,11 +367,14 @@ pub(crate) async fn project_codegraph_run(
         }
         Action::Exclude => unreachable!(),
     }
+    let (app_label, app_value) = st.environment.hc_label();
+    let (task_label, task_value) = run_label(st.environment);
     hc.run(
         &argv,
         checkout_label(&root),
         &[
-            (RUN_LABEL.0, RUN_LABEL.1.into()),
+            (app_label, app_value.into()),
+            (task_label, task_value.into()),
             (CHECKOUT_LABEL, checkout_label(&root).into()),
         ],
     )
@@ -469,7 +480,7 @@ printf '%s\n' '{"terminals":[{"address":"t1","state":"finished","exit_code":0,"c
             .await
             .unwrap();
         let hc = Hc { bin: executable };
-        let run = latest_run(&hc, &root).await.unwrap().unwrap();
+        let run = latest_run(&hc, &root, Environment::Production).await.unwrap().unwrap();
         assert_eq!(run.address, "t2");
         assert_eq!(run.state, "live");
     }

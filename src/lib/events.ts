@@ -26,7 +26,10 @@ let notifyReady: Promise<boolean> | null = null;
 async function notify(title: string, body: string, sound?: string) {
   notifyReady ??= (async () => (await isPermissionGranted()) || (await requestPermission()) === 'granted')()
     .finally(() => { notifyReady = null; });
-  if (await notifyReady) sendNotification({ title, body, ...(sound ? { sound } : {}) });
+  if (await notifyReady) {
+    const displayTitle = import.meta.env.DEV ? `Herdsman Development — ${title}` : title;
+    sendNotification({ title: displayTitle, body, ...(sound ? { sound } : {}) });
+  }
 }
 
 export function useBackendEvents() {

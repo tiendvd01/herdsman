@@ -66,6 +66,11 @@ export function StatusBar({ workspaceId, projectId }: {
     <footer aria-label="App status" className="shrink-0 border-t border-border bg-surface text-xs text-muted-foreground">
       <div className="flex h-8 items-center justify-between gap-3 px-3">
         <div className="flex items-center gap-2">
+          {data?.environment && (
+            <span className="border-r border-border pr-2 text-foreground">
+              {data.environment === 'development' ? 'Development' : 'Production'}
+            </span>
+          )}
           <span aria-live="polite" className="inline-flex items-center gap-2">
             <span aria-hidden="true" className={cn('size-1.5 rounded-full',
               isError || (data && !connected) ? 'bg-st-error' : connected ? 'bg-st-done' : 'bg-muted-foreground')} />

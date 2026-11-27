@@ -81,6 +81,7 @@ export interface ClaudeHit {
 }
 
 export interface AppInfo {
+  environment: 'development' | 'production';
   hc_connected: boolean;
   hc_version: string | null;
   hc_path: string | null;

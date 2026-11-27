@@ -1,5 +1,6 @@
 use super::{sessions::check_engine, St};
 use crate::agent;
+use crate::environment::Environment;
 use crate::error::{AppError, AppResult};
 use crate::git;
 use crate::state::AppState;
@@ -16,8 +17,14 @@ pub async fn import_startup_worktrees(st: &AppState) -> AppResult<()> {
             continue;
         }
         let result = match git::linked_worktrees(repo).await {
-            Ok(worktrees) if !worktrees.is_empty() => store::import_worktrees(&mut st.db.lock(), &project.id, worktrees),
-            Ok(_) => Ok(()),
+            Ok(mut worktrees) => {
+                worktrees.retain(|(path, _)| can_manage_worktree(st, path));
+                if worktrees.is_empty() {
+                    Ok(())
+                } else {
+                    store::import_worktrees(&mut st.db.lock(), &project.id, worktrees)
+                }
+            }
             Err(error) => Err(error),
         };
         if let Err(error) = result {
@@ -64,8 +71,8 @@ pub async fn project_delete(st: St<'_>, id: String, confirm: bool) -> AppResult<
 
 async fn kill_live_terminals(st: &AppState, label: &str, id: &str) -> AppResult<()> {
     if let Some(hc) = &st.hc {
-        let terminals = hc.list(&[("herdsman.app", "1"), (label, id)], false).await?;
-        for terminal in terminals {
+        let terminals = hc.list(&[st.environment.hc_label(), (label, id)], false).await?;
+        for terminal in terminals.into_iter().filter(|term| st.environment.owns(term)) {
             if let Err(error) = hc.kill(&terminal.address).await {
                 if hc.get(&terminal.address).await?.state == "live" {
                     return Err(error);
@@ -95,6 +102,28 @@ pub enum DirChoice {
 pub struct CreatedWorkspace {
     pub(super) workspace: Workspace,
     pub(super) session: Session,
+}
+
+fn worktree_path(st: &AppState, repo: &Path, name: &str) -> std::path::PathBuf {
+    let root = st.data_dir.join("worktrees");
+    match st.environment {
+        Environment::Production => git::worktree_path(repo, name, &root),
+        Environment::Development => root.join(name),
+    }
+}
+
+fn can_manage_worktree(st: &AppState, path: &Path) -> bool {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    match st.environment {
+        Environment::Production => ![path, &canonical].iter().any(|path| path.ancestors().any(|ancestor| {
+            ancestor.ends_with("app.herdsman.dev/worktrees")
+        })),
+        Environment::Development => {
+            let root = st.data_dir.join("worktrees");
+            let root = root.canonicalize().unwrap_or(root);
+            canonical.starts_with(root)
+        }
+    }
 }
 
 #[tauri::command]
@@ -141,16 +170,21 @@ pub async fn workspace_create(
                 .filter(|b| !b.is_empty())
                 .unwrap_or_else(|| {
                     let base_name = name.as_deref().map(git::slug).filter(|s| !s.is_empty());
-                    format!("herdsman/{}", base_name.unwrap_or_else(|| ws_id[ws_id.len() - 6..].to_string()))
+                    let prefix = match st.environment {
+                        Environment::Production => "herdsman",
+                        Environment::Development => "herdsman-dev",
+                    };
+                    format!("{prefix}/{}", base_name.unwrap_or_else(|| ws_id[ws_id.len() - 6..].to_string()))
                 });
             let slug = git::slug(&branch);
-            let path = git::worktree_path(repo, &slug, &st.data_dir.join("worktrees"));
+            let name = if st.environment == Environment::Development { format!("{slug}-{ws_id}") } else { slug };
+            let path = worktree_path(&st, repo, &name);
             git::worktree_add(repo, &path, &branch, &base_branch).await?;
             ("worktree", path.to_string_lossy().to_string(), Some(branch), Some(base_branch))
         }
         DirChoice::ExistingWorktree { branch } => {
             let folder = format!("{}-{ws_id}", git::slug(&branch));
-            let path = git::worktree_path(repo, &folder, &st.data_dir.join("worktrees"));
+            let path = worktree_path(&st, repo, &folder);
             git::worktree_add_existing(repo, &path, &branch).await?;
             ("worktree", path.to_string_lossy().to_string(), Some(branch), None)
         }
@@ -209,7 +243,7 @@ pub struct DirtyInfo {
 #[tauri::command]
 pub async fn workspace_dirty_check(st: St<'_>, id: String) -> AppResult<DirtyInfo> {
     let ws = store::workspace_get(&st.db.lock(), &id)?;
-    if ws.dir_kind != "worktree" || ws.worktree_removed {
+    if ws.dir_kind != "worktree" || ws.worktree_removed || !can_manage_worktree(&st, Path::new(&ws.work_dir)) {
         return Ok(DirtyInfo { dirty: false, files: vec![] });
     }
     let files = git::dirty_files(Path::new(&ws.work_dir)).await?;
@@ -236,7 +270,9 @@ async fn stop_workspace_sessions(st: &AppState, ws_id: &str) {
             if s.status != "done" {
                 let _ = agent::command(st, &s.id, json!({"cmd": "shutdown"})).await;
                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                let _ = hc.kill(t).await;
+                if let Ok(terminal) = st.session_terminal(&s.id, t).await {
+                    let _ = hc.kill(&terminal.address).await;
+                }
             }
         }
     }
@@ -251,7 +287,7 @@ pub async fn workspace_archive(st: St<'_>, id: String, remove_worktree_dir: bool
         return Ok(ws);
     }
     let mut removed = None;
-    if remove_worktree_dir && ws.dir_kind == "worktree" && !ws.worktree_removed {
+    if remove_worktree_dir && ws.dir_kind == "worktree" && !ws.worktree_removed && can_manage_worktree(&st, Path::new(&ws.work_dir)) {
         remove_worktree(&st, &ws, confirm_dirty.unwrap_or(false)).await?;
         removed = Some(true);
     }
@@ -280,7 +316,7 @@ pub async fn workspace_delete(st: St<'_>, id: String, remove_worktree_dir: bool,
     if ws.deleted_at.is_some() {
         return Ok(());
     }
-    let removed = remove_worktree_dir && ws.dir_kind == "worktree" && !ws.worktree_removed;
+    let removed = remove_worktree_dir && ws.dir_kind == "worktree" && !ws.worktree_removed && can_manage_worktree(&st, Path::new(&ws.work_dir));
     if removed {
         remove_worktree(&st, &ws, confirm_dirty.unwrap_or(false)).await?;
     }
@@ -290,7 +326,9 @@ pub async fn workspace_delete(st: St<'_>, id: String, remove_worktree_dir: bool,
     let sessions = store::session_list(&st.db.lock(), &id)?;
     for s in &sessions {
         if let (Some(t), Some(hc)) = (&s.hc_terminal, &st.hc) {
-            let _ = hc.rm(t).await;
+            if let Ok(terminal) = st.session_terminal(&s.id, t).await {
+                let _ = hc.rm(&terminal.address).await;
+            }
         }
     }
     let state = st.inner().clone();
@@ -329,4 +367,53 @@ pub async fn git_branches(st: St<'_>, project_id: String) -> AppResult<BranchInf
     let (branches, checked_out) = git::branches_with_checkouts(dir).await?;
     let default_branch = git::default_branch(dir, &branches).await;
     Ok(BranchInfo { is_repo: true, branches, checked_out, default_branch, current: git::current_branch(dir).await })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn profiles_discover_and_manage_only_their_own_checkouts() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("shared");
+        std::fs::create_dir(&repo).unwrap();
+        for args in [
+            &["init", "-b", "main"][..],
+            &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "Initial"],
+        ] {
+            assert!(std::process::Command::new("git").current_dir(&repo).args(args).status().unwrap().success());
+        }
+        let state = |environment, dir: &str| {
+            let mut st = AppState::new(
+                Box::new(|_, _| {}),
+                store::open_memory().unwrap(),
+                root.path().join(dir),
+                None,
+                None,
+                Default::default(),
+            );
+            st.environment = environment;
+            let project = store::project_add(&st.db.lock(), "shared", repo.to_str().unwrap()).unwrap();
+            (st, project)
+        };
+        let (production, prod_project) = state(Environment::Production, "app.herdsman");
+        let (development, dev_project) = state(Environment::Development, "app.herdsman.dev");
+        let prod_path = worktree_path(&production, &repo, "prod");
+        let dev_path = worktree_path(&development, &repo, "dev");
+        git::worktree_add(&repo, &prod_path, "prod", "main").await.unwrap();
+        git::worktree_add(&repo, &dev_path, "dev", "main").await.unwrap();
+
+        for (st, project, own, other) in [
+            (&production, prod_project, prod_path.as_path(), dev_path.as_path()),
+            (&development, dev_project, dev_path.as_path(), prod_path.as_path()),
+        ] {
+            import_startup_worktrees(st).await.unwrap();
+            let workspaces = store::workspace_list(&st.db.lock(), Some(&project.id), true).unwrap();
+            assert_eq!(workspaces.len(), 1);
+            assert_eq!(Path::new(&workspaces[0].work_dir), own.canonicalize().unwrap());
+            assert!(can_manage_worktree(st, own));
+            assert!(!can_manage_worktree(st, other));
+        }
+    }
 }

@@ -1,6 +1,7 @@
 //! Client cho hc (herdr-core) qua CLI `hc … --json` (contracts/hc-integration.md).
 //! Mọi tiến trình agent/task chạy trong terminal của hc, không phải tiến trình con của app.
 use crate::error::{AppError, AppResult};
+use crate::environment::Environment;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -172,6 +173,26 @@ impl Hc {
     pub async fn get(&self, t: &str) -> AppResult<Terminal> {
         let v = self.call(&["get".into(), t.into()]).await?;
         Ok(serde_json::from_value(v)?)
+    }
+
+    pub(crate) async fn terminal_environment(&self, terminal: &Terminal) -> AppResult<Option<Environment>> {
+        let label = Environment::Production.hc_label().0;
+        let mut current = terminal.clone();
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            if !visited.insert(current.address.clone()) {
+                return Err(AppError::new("terminal_parent", "Invalid terminal ancestry."));
+            }
+            if let Some(value) = current.label(label) {
+                return match value {
+                    "1" => Ok(Some(Environment::Production)),
+                    "development" => Ok(Some(Environment::Development)),
+                    _ => Err(AppError::new("terminal_environment", "Unknown terminal environment.")),
+                };
+            }
+            let Some(parent) = &current.parent else { return Ok(None) };
+            current = self.get(parent).await?;
+        }
     }
 
     pub async fn kill(&self, t: &str) -> AppResult<()> {

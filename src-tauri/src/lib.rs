@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod commands;
+pub mod environment;
 mod project_files;
 mod project_codegraph;
 mod project_skills;
@@ -142,7 +143,10 @@ fn request_notification_permission() {
     use objc2_foundation::NSError;
     use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
 
-    // An unbundled tauri dev binary has no notification identity of its own.
+    // In dev, the notification plugin uses the macOS Terminal identity.
+    if tauri::is_dev() {
+        return;
+    }
     let Ok(executable) = std::env::current_exe() else { return };
     if executable.ancestors().nth(3).and_then(|p| p.extension())
         != Some(std::ffi::OsStr::new("app"))
@@ -201,17 +205,30 @@ fn exit_after_file_review(app: tauri::AppHandle) {
 }
 
 pub fn run() {
+    let environment = environment::Environment::current();
+    let context = tauri::generate_context!();
+    if let Err(error) = environment.validate_identifier(&context.config().identifier) {
+        eprintln!("Herdsman {}: {error}", environment.name());
+        std::process::exit(1);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(target_os = "macos")]
             set_dock_icon();
             let handle = app.handle().clone();
-            let data_dir = std::env::var("HERDSMAN_DATA_DIR").map(PathBuf::from).unwrap_or(app.path().app_data_dir()?);
-            std::fs::create_dir_all(data_dir.join("sock"))?;
-            let db = store::open(&data_dir.join("herdsman.db")).map_err(|e| e.message)?;
-            worktree_postscript::interrupt_unfinished(&db).map_err(|e| e.message)?;
+            let startup_error = |error: &dyn std::fmt::Display| format!("Herdsman {}: {error}", environment.name());
+            let base = app.path().data_dir().map_err(|e| startup_error(&e))?;
+            let data_dir = environment.open_data_dir(
+                &base,
+                std::env::var_os("HERDSMAN_DATA_DIR").map(PathBuf::from),
+            ).map_err(|e| startup_error(&e))?;
+            let db = store::open(&data_dir.join("herdsman.db")).map_err(|e| startup_error(&e))?;
+            worktree_postscript::interrupt_unfinished(&db).map_err(|e| startup_error(&e))?;
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_title(&format!("Herdsman {}", environment.name()))?;
+            }
             let st = Arc::new(AppState {
                 emitter: {
                     let h = handle.clone();
@@ -220,6 +237,7 @@ pub fn run() {
                     })
                 },
                 db: Mutex::new(db),
+                environment,
                 hc: hc::find_hc().map(|bin| hc::Hc { bin }),
                 node: find_node(),
                 sidecar: sidecar_entry(&handle),
@@ -228,7 +246,7 @@ pub fn run() {
                 terminals: Mutex::new(HashMap::new()),
                 hc_connected: AtomicBool::new(false),
                 hc_version: Mutex::new(None),
-                secrets: Arc::new(secrets::Keychain),
+                secrets: Arc::new(secrets::Keychain(environment.keychain_service())),
             });
             if let Err(error) = tauri::async_runtime::block_on(commands::workspaces::import_startup_worktrees(&st)) {
                 eprintln!("Could not import worktrees: {error}");
@@ -348,7 +366,7 @@ pub fn run() {
             exit_after_file_review,
             set_shortcut_accelerators,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to start Herdsman")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {

@@ -129,8 +129,9 @@ async fn spawn_with_skills(st: &AppState, s: &Session, ws: &Workspace, warnings:
             argv.extend(["--project-skills-warning".into(), warnings.join("\n")]);
         }
     }
+    let (app_label, app_value) = st.environment.hc_label();
     let labels = [
-        ("herdsman.app", "1".to_string()),
+        (app_label, app_value.into()),
         ("herdsman.kind", "session".to_string()),
         ("herdsman.project", ws.project_id.clone()),
         ("herdsman.workspace", ws.id.clone()),
@@ -151,6 +152,7 @@ async fn spawn_with_skills(st: &AppState, s: &Session, ws: &Workspace, warnings:
 }
 
 async fn connect(st: &AppState, sid: &str, attempts: u32) -> AppResult<UnixStream> {
+    store::session_get(&st.db.lock(), sid)?;
     let path = st.sock_path(sid);
     let mut last = String::new();
     for _ in 0..attempts {
@@ -585,6 +587,9 @@ pub(crate) fn completed_turn(log: &Path) -> Option<(u64, i64)> {
 }
 
 fn reconcile(st: &AppState, t: &Terminal) {
+    if !st.environment.owns(t) {
+        return;
+    }
     match t.label("herdsman.kind") {
         Some("session") => {
             let Some(sid) = t.label("herdsman.session") else { return };
@@ -655,9 +660,10 @@ pub async fn watch_hc(st: Arc<AppState>) {
     loop {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, Option<String>, Value)>();
         let hc2 = hc.clone();
+        let label = st.environment.hc_label();
         let follower = tokio::spawn(async move {
             let _ = hc2
-                .follow_events(("herdsman.app", "1"), |ty, term, params| {
+                .follow_events(label, |ty, term, params| {
                     let _ = tx.send((ty.to_string(), term.map(|s| s.to_string()), params.clone()));
                 })
                 .await;
@@ -667,7 +673,9 @@ pub async fn watch_hc(st: Arc<AppState>) {
                 st.hc_connected.store(true, Ordering::SeqCst);
                 st.emit("hc:connection", json!({"connected": true, "version": *st.hc_version.lock()}));
                 let terms: Vec<Terminal> = serde_json::from_value(params.get("terminals").cloned().unwrap_or(json!([]))).unwrap_or_default();
-                let map: HashMap<String, Terminal> = terms.into_iter().map(|t| (t.address.clone(), t)).collect();
+                let map: HashMap<String, Terminal> = terms.into_iter()
+                    .filter(|t| st.environment.owns(t))
+                    .map(|t| (t.address.clone(), t)).collect();
                 for t in map.values() {
                     reconcile(&st, t);
                 }
@@ -682,7 +690,8 @@ pub async fn watch_hc(st: Arc<AppState>) {
             let Some(addr) = term else { continue };
             if ty == "removed" {
                 let removed = st.terminals.lock().remove(&addr);
-                if let Some(t) = removed.filter(|t| t.label("herdsman.kind") == Some("terminal")) {
+                let Some(t) = removed else { continue };
+                if t.label("herdsman.kind") == Some("terminal") {
                     st.emit("terminals:changed", json!({"workspace_id": t.label("herdsman.workspace")}));
                 }
                 st.emit("agents:changed", json!({"terminal": addr}));
@@ -692,6 +701,10 @@ pub async fn watch_hc(st: Arc<AppState>) {
                 continue;
             }
             if let Ok(t) = hc.get(&addr).await {
+                if !st.environment.owns(&t) {
+                    st.terminals.lock().remove(&addr);
+                    continue;
+                }
                 st.terminals.lock().insert(addr.clone(), t.clone());
                 if t.label("herdsman.kind") == Some("terminal") && matches!(ty.as_str(), "created" | "finished" | "lost" | "restarted" | "labels") {
                     st.emit("terminals:changed", json!({"workspace_id": t.label("herdsman.workspace")}));

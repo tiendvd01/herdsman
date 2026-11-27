@@ -2,6 +2,7 @@
 //! T018 (contract hc), T065 (tiêu chí BR #3: duyệt quyền Edit), T073 (tiêu chí BR #1: tắt app rồi mở lại).
 //! Bỏ qua khi không có hc/node (CI không có hc).
 use herdsman_lib::{agent, commands, hc, state::AppState, store};
+use herdsman_lib::environment::Environment;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -51,6 +52,55 @@ async fn wait_for(data_dir: &PathBuf, sid: &str, pred: impl Fn(&Value) -> bool, 
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("không thấy event mong đợi trong {secs}s");
+}
+
+#[tokio::test]
+async fn concurrent_profiles_keep_pending_permissions_separate_across_dev_restart() {
+    let temp = tempfile::Builder::new().prefix("hpf-").tempdir_in("/tmp").unwrap();
+    let profile = |name: &str| temp.path().join(name);
+    let start = |name, environment| {
+        let dir = profile(name);
+        let mut env = make_state(&dir, store::open(&dir.join("herdsman.db")).unwrap())?;
+        Arc::get_mut(&mut env.st).unwrap().environment = environment;
+        Some(env)
+    };
+    let Some(prod) = start("prod", Environment::Production) else { return };
+    let Some(dev) = start("dev", Environment::Development) else { return };
+    let new_session = |st: &AppState| {
+        let db = st.db.lock();
+        let project = store::project_add(&db, "shared", temp.path().to_str().unwrap()).unwrap();
+        let ws = store::workspace_insert(&db, &store::new_id(), &project.id, None, "project", &project.path, None, None).unwrap();
+        let session = store::session_insert(&db, &ws.id, "echo", "ask", Some("Test session")).unwrap();
+        (ws, session)
+    };
+    let (prod_ws, prod_session) = new_session(&prod.st);
+    let (dev_ws, dev_session) = new_session(&dev.st);
+    let prod_terminal = agent::spawn_sidecar(&prod.st, &prod_session, &prod_ws).await.unwrap();
+    let dev_terminal = agent::spawn_sidecar(&dev.st, &dev_session, &dev_ws).await.unwrap();
+    let hc = prod.st.hc().unwrap();
+    assert_eq!(hc.get(&prod_terminal.address).await.unwrap().label("herdsman.app"), Some("1"));
+    assert_eq!(hc.get(&dev_terminal.address).await.unwrap().label("herdsman.app"), Some("development"));
+    let prompt = json!({"cmd": "prompt", "text": "edit README"});
+    agent::command(&prod.st, &prod_session.id, prompt.clone()).await.unwrap();
+    agent::command(&dev.st, &dev_session.id, prompt).await.unwrap();
+    let production_request = wait_for(&prod.data_dir, &prod_session.id, |e| e["type"] == "permission_request", 10).await;
+    let development_request = wait_for(&dev.data_dir, &dev_session.id, |e| e["type"] == "permission_request", 10).await;
+
+    drop(dev);
+    let dev = start("dev", Environment::Development).unwrap();
+    let hc = dev.st.hc().unwrap();
+    let response = |request: &Value| json!({"cmd": "permission_response", "id": request["id"], "decision": "allow"});
+    assert!(agent::command(&dev.st, &prod_session.id, response(&production_request)).await.is_err());
+    agent::command(&dev.st, &dev_session.id, response(&development_request)).await.unwrap();
+    wait_for(&dev.data_dir, &dev_session.id, |e| e["type"] == "turn_end", 10).await;
+    assert!(hc.get(&prod_terminal.address).await.unwrap().status.is_some_and(|status| status.state == "blocked"));
+    assert!(!read_log(&prod.data_dir, &prod_session.id).iter().any(|event| event["type"] == "permission_resolved"));
+    agent::command(&prod.st, &prod_session.id, response(&production_request)).await.unwrap();
+    wait_for(&prod.data_dir, &prod_session.id, |e| e["type"] == "turn_end", 10).await;
+    for terminal in [dev_terminal, prod_terminal] {
+        hc.kill(&terminal.address).await.unwrap();
+        hc.rm(&terminal.address).await.unwrap();
+    }
 }
 
 #[tokio::test]

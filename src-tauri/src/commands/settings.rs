@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 
 #[derive(Serialize)]
 pub struct AppInfo {
+    environment: crate::environment::Environment,
     hc_connected: bool,
     hc_version: Option<String>,
     hc_path: Option<String>,
@@ -17,6 +18,7 @@ pub struct AppInfo {
 #[tauri::command]
 pub fn app_info(st: St<'_>) -> AppInfo {
     AppInfo {
+        environment: st.environment,
         hc_connected: st.hc_connected.load(Ordering::SeqCst),
         hc_version: st.hc_version.lock().clone(),
         hc_path: st.hc.as_ref().map(|h| h.bin.to_string_lossy().into()),

@@ -27,12 +27,14 @@ When you start a session, the React frontend sends a Tauri command to the Rust b
 
 Install Git, Node.js 24, pnpm, Rust, and Xcode Command Line Tools. You can install the command line tools with `xcode-select --install`.
 
-From the repository root, install the dependencies and launch Herdsman:
+From the repository root, install the dependencies and launch Herdsman Development:
 
 ```sh
 pnpm install
 pnpm tauri dev
 ```
+
+You can run this command from a workspace terminal in the installed app. Development and Production use separate app data, credentials and managed terminals. Both can open the same repository. Use a separate worktree when you also want to keep source edits separate.
 
 For Claude sessions, configure your Claude account in Herdsman. For Codex sessions during development, install the Codex CLI, make sure `codex` is on your `PATH`, and run `codex login`.
 

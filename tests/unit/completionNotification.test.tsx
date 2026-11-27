@@ -39,12 +39,25 @@ function status(id: string, state: string, completion?: { seq: number; ts: numbe
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('DEV', false);
   useUiStore.setState({ completionNotifications: true, completionSound: true, statuses: {} });
   granted.mockResolvedValue(true);
   request.mockResolvedValue('denied');
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+it('identifies development notifications', async () => {
+  vi.stubEnv('DEV', true);
+  mountEvents();
+  act(() => status('development', 'idle', { seq: 1, ts: Date.now(), title: 'Build project' }));
+  await waitFor(() => expect(send).toHaveBeenCalledWith({
+    title: 'Herdsman Development — Agent finished', body: 'Build project', sound: 'Tink',
+  }));
+});
 
 it('notifies once per successful turn with sound across focus and sessions', async () => {
   const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);

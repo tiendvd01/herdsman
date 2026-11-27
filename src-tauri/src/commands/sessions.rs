@@ -182,10 +182,9 @@ pub async fn session_set_permission_mode(st: St<'_>, id: String, mode: String, c
             return Err(AppError::new("agent_busy", "Wait for the Codex turn to finish before updating permissions."));
         }
         let terminal = session.hc_terminal.ok_or(error)?;
-        let hc = st.hc()?;
         agent::command(&st, &id, json!({"cmd": "shutdown"})).await?;
         for _ in 0..25 {
-            if !hc.get(&terminal).await.is_ok_and(|term| term.state == "live") {
+            if !st.session_terminal(&id, &terminal).await.is_ok_and(|term| term.state == "live") {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(80)).await;
@@ -253,11 +252,11 @@ pub async fn session_resume(st: St<'_>, id: String) -> AppResult<Session> {
     }
     let hc = st.hc()?;
     if let Some(t) = &s.hc_terminal {
-        if let Ok(term) = hc.get(t).await {
+        if let Ok(term) = st.session_terminal(&s.id, t).await {
             if term.state == "live" {
                 return Ok(s);
             }
-            let _ = hc.rm(t).await;
+            let _ = hc.rm(&term.address).await;
         }
     }
     store::session_set_terminal(&st.db.lock(), &id, None)?;
@@ -288,13 +287,18 @@ pub async fn close_session(st: &AppState, id: &str) -> AppResult<()> {
     }
     let discard = s.title.is_none();
     if let (Some(t), Some(hc)) = (&s.hc_terminal, &st.hc) {
+        let terminal = st.session_terminal(&id, t).await.ok();
         if s.status != "done" && s.status != "error" {
             let _ = agent::command(st, &id, json!({"cmd": "shutdown"})).await;
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            let _ = hc.kill(t).await;
+            if let Some(terminal) = &terminal {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                let _ = hc.kill(&terminal.address).await;
+            }
         }
         if discard {
-            let _ = hc.rm(t).await;
+            if let Some(terminal) = terminal {
+                let _ = hc.rm(&terminal.address).await;
+            }
         }
     }
     if discard {
@@ -310,7 +314,8 @@ pub async fn session_kill(st: St<'_>, id: String) -> AppResult<()> {
     let s = store::session_get(&st.db.lock(), &id)?;
     if agent::command(&st, &id, json!({"cmd": "shutdown"})).await.is_err() {
         if let (Some(t), Some(hc)) = (&s.hc_terminal, &st.hc) {
-            hc.kill(t).await?;
+            let terminal = st.session_terminal(&id, t).await?;
+            hc.kill(&terminal.address).await?;
         }
     }
     Ok(())

@@ -1,5 +1,5 @@
 use super::St;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::hc::Terminal;
 use crate::store;
 use serde::Serialize;
@@ -7,7 +7,12 @@ use std::path::Path;
 
 #[tauri::command]
 pub async fn terminal_read(st: St<'_>, terminal: String, lines: Option<u32>) -> AppResult<String> {
-    st.hc()?.read(&terminal, lines.unwrap_or(2000)).await
+    let hc = st.hc()?;
+    let terminal = hc.get(&terminal).await?;
+    if hc.terminal_environment(&terminal).await? != Some(st.environment) {
+        return Err(AppError::new("terminal_not_found", "Terminal not found in this environment."));
+    }
+    hc.read(&terminal.address, lines.unwrap_or(2000)).await
 }
 
 #[derive(Serialize)]
@@ -50,6 +55,10 @@ pub fn build_tree(addr: &str, all: &[Terminal], depth: u8) -> Option<AgentNode> 
 pub async fn agent_tree(st: St<'_>, session_id: String) -> AppResult<Option<AgentNode>> {
     let s = store::session_get(&st.db.lock(), &session_id)?;
     let Some(root) = s.hc_terminal else { return Ok(None) };
-    let all = st.hc()?.list(&[], true).await?;
+    let mut all = st.hc()?.list(&[], true).await?;
+    if !all.iter().any(|term| term.address == root && st.environment.owns(term)) {
+        return Ok(None);
+    }
+    all.retain(|term| term.label(st.environment.hc_label().0).is_none() || st.environment.owns(term));
     Ok(build_tree(&root, &all, 0))
 }

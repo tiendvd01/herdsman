@@ -19,7 +19,7 @@ vi.mock('@/components/terminal/WorkspaceTerminal', () => ({
 it('toggles the numbered terminal tabs, switches shells and creates a new shell in context', async () => {
   const appInfo = vi.spyOn(api, 'appInfo').mockImplementation(() => new Promise(() => {}));
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  const info = { hc_connected: true, hc_path: '/bin/hc', node_path: '/bin/node' };
+  const info = { environment: 'development', hc_connected: true, hc_path: '/bin/hc', node_path: '/bin/node' };
   let terminals = [{ address: 't1', state: 'live' }];
   const stop = vi.spyOn(api, 'floatingTerminalStop').mockImplementation(async (address) => {
     terminals = terminals.filter((terminal) => terminal.address !== address);
@@ -54,6 +54,7 @@ it('toggles the numbered terminal tabs, switches shells and creates a new shell 
   expect(await screen.findByText('hc is not connected.')).toBeTruthy();
   act(() => { client.setQueryData(qk.appInfo, info); });
   expect(await screen.findByText('hc connected')).toBeTruthy();
+  expect(await screen.findByText('Development')).toBeTruthy();
   fireEvent.click(within(panel).getByRole('button', { name: 'New terminal' }));
   expect(await screen.findByText('Connected to t2')).toBeTruthy();
   expect(create).toHaveBeenLastCalledWith('workspace', 'project');
@@ -72,6 +73,8 @@ it('toggles the numbered terminal tabs, switches shells and creates a new shell 
   expect(screen.queryByRole('region', { name: 'Floating terminal' })).toBeNull();
   expect(stop).toHaveBeenCalledTimes(1);
   expect(create).toHaveBeenCalledTimes(2);
+  act(() => { client.setQueryData(qk.appInfo, { ...info, environment: 'production' }); });
+  expect(await screen.findByText('Production')).toBeTruthy();
   stop.mockRestore();
   list.mockRestore();
   create.mockRestore();

@@ -3,15 +3,13 @@ use crate::error::{AppError, AppResult};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 
-const SERVICE: &str = "app.herdsman.mcp";
-
 pub trait SecretStore: Send + Sync {
     fn get(&self, account: &str) -> AppResult<Option<String>>;
     fn set(&self, account: &str, value: &str) -> AppResult<()>;
     fn delete(&self, account: &str) -> AppResult<()>;
 }
 
-pub struct Keychain;
+pub struct Keychain(pub(crate) &'static str);
 
 fn keychain_error(_: keyring::Error) -> AppError {
     AppError::new("keychain", "Could not access the Keychain")
@@ -19,7 +17,7 @@ fn keychain_error(_: keyring::Error) -> AppError {
 
 impl SecretStore for Keychain {
     fn get(&self, account: &str) -> AppResult<Option<String>> {
-        match keyring::Entry::new(SERVICE, account).and_then(|entry| entry.get_password()) {
+        match keyring::Entry::new(self.0, account).and_then(|entry| entry.get_password()) {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(keychain_error(error)),
@@ -27,13 +25,13 @@ impl SecretStore for Keychain {
     }
 
     fn set(&self, account: &str, value: &str) -> AppResult<()> {
-        keyring::Entry::new(SERVICE, account)
+        keyring::Entry::new(self.0, account)
             .and_then(|entry| entry.set_password(value))
             .map_err(keychain_error)
     }
 
     fn delete(&self, account: &str) -> AppResult<()> {
-        match keyring::Entry::new(SERVICE, account).and_then(|entry| entry.delete_credential()) {
+        match keyring::Entry::new(self.0, account).and_then(|entry| entry.delete_credential()) {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(keychain_error(error)),
         }

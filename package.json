@@ -10,7 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "build:installer": "tauri build --bundles dmg",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/tauri.mjs",
     "test": "vitest run",
     "pretest": "node scripts/gen-theme-css.mjs",
     "typecheck": "tsc --noEmit",

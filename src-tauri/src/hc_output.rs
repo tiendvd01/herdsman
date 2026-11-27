@@ -235,7 +235,7 @@ async fn resolve(st: &AppState, session_id: &str, tool_id: &str) -> AppResult<Te
         return Err(unavailable());
     }
     let hc = st.hc()?;
-    match &invocation.target {
+    let terminal = match &invocation.target {
         Some(Target::Existing(target)) => {
             if !invocation.running && invocation.end.is_none() {
                 return Err(unavailable());
@@ -258,25 +258,29 @@ async fn resolve(st: &AppState, session_id: &str, tool_id: &str) -> AppResult<Te
             }
             if let Some(address) = &invocation.launched_address {
                 let term = hc.get(address).await?;
-                return match_terminal(&invocation, &term)
+                match_terminal(&invocation, &term)
                     .then_some(term)
-                    .ok_or_else(unavailable);
-            }
-            if *background {
+                    .ok_or_else(unavailable)
+            } else if *background {
                 return Err(unavailable());
+            } else {
+                let candidates = hc.list(&[], true).await?;
+                let mut matches = candidates
+                    .into_iter()
+                    .filter(|t| match_terminal(&invocation, t));
+                let terminal = matches.next().ok_or_else(unavailable)?;
+                if matches.next().is_some() {
+                    return Err(unavailable());
+                }
+                Ok(terminal)
             }
-            let candidates = hc.list(&[], true).await?;
-            let mut matches = candidates
-                .into_iter()
-                .filter(|t| match_terminal(&invocation, t));
-            let terminal = matches.next().ok_or_else(unavailable)?;
-            if matches.next().is_some() {
-                return Err(unavailable());
-            }
-            Ok(terminal)
         }
         None => Err(unavailable()),
+    }?;
+    if hc.terminal_environment(&terminal).await?.is_some_and(|owner| owner != st.environment) {
+        return Err(unavailable());
     }
+    Ok(terminal)
 }
 
 fn window_label(term: &Terminal) -> String {
@@ -322,7 +326,7 @@ pub(crate) async fn hc_output_open(
     }
     let title = term.name.as_deref().unwrap_or(&term.address);
     WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html?hc-output".into()))
-        .title(format!("{title} — Terminal Output"))
+        .title(format!("{title} — Terminal Output ({})", st.environment.name()))
         .inner_size(780.0, 460.0)
         .min_inner_size(420.0, 240.0)
         .decorations(true)
@@ -357,7 +361,7 @@ pub(crate) async fn hc_output_read(st: St<'_>, window: WebviewWindow) -> AppResu
     let hc = st.hc()?;
     let check = |term: &Terminal| term.address == address && term.created_ms == Some(created);
     let terminal = hc.get(address).await?;
-    if !check(&terminal) {
+    if !check(&terminal) || hc.terminal_environment(&terminal).await?.is_some_and(|owner| owner != st.environment) {
         return Err(unavailable());
     }
     let (text, complete) = hc.read_output(address, 1500).await?;

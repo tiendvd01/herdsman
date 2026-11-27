@@ -71,7 +71,7 @@ export function installDevMock() {
         case 'theme_files':
           return [];
         case 'app_info':
-          return { hc_connected: true, hc_version: 'hc 0.1.21', hc_path: '/usr/local/bin/hc', node_path: '/usr/local/bin/node', data_dir: '~' };
+          return { environment: 'development', hc_connected: true, hc_version: 'hc 0.1.21', hc_path: '/usr/local/bin/hc', node_path: '/usr/local/bin/node', data_dir: '~' };
         case 'project_list':
           return [{ ...P }, { ...P2 }];
         case 'github_accounts':
